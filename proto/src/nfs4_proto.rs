@@ -114,6 +114,13 @@ pub enum NfsStat4 {
     Nfs4errFileOpen = 10046,          /* open file blocks op.     */
     Nfs4errAdminRevoked = 10047,      /* lock-Owner state revoked */
     Nfs4errCbPathDown = 10048,        /* callback path down       */
+    // NFSv4.1 error codes (RFC 5661)
+    Nfs4errBadSession = 10052,        /* session not found        */
+    Nfs4errBadSlot = 10053,           /* slot_id out of range     */
+    Nfs4errSeqMisordered = 10058,     /* sequence op misordered   */
+    Nfs4errSeqFalseRetry = 10059,     /* false retry on slot      */
+    Nfs4errConnNotBoundToSession = 10063, /* conn not bound to ses */
+    Nfs4errOpNotInSession = 10071,    /* op requires session      */
 }
 
 pub struct FileAttrFlags {}
@@ -1439,6 +1446,264 @@ pub struct ReleaseLockowner4res {
     pub status: NfsStat4,
 }
 
+/*
+ * NFSv4.1 types (RFC 5661)
+ */
+
+/// Client owner for EXCHANGE_ID.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ClientOwner4 {
+    #[serde(with = "serde_xdr::opaque_data::fixed_length")]
+    pub co_verifier: [u8; NFS4_VERIFIER_SIZE],
+    #[serde(with = "serde_bytes")]
+    pub co_ownerid: Vec<u8>,
+}
+
+/// Server owner returned by EXCHANGE_ID.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ServerOwner4 {
+    pub so_minor_id: u64,
+    #[serde(with = "serde_bytes")]
+    pub so_major_id: Vec<u8>,
+}
+
+/// Implementation identifier (optional in EXCHANGE_ID).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct NfsImplId4 {
+    pub nii_domain: String,
+    pub nii_name: String,
+    pub nii_date: Nfstime4,
+}
+
+/// State protection — only SP4_NONE supported.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[repr(u32)]
+pub enum StateProtect4a {
+    SpNone = 0,
+}
+
+/// State protection response — only SP4_NONE supported.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[repr(u32)]
+pub enum StateProtect4r {
+    SpNone = 0,
+}
+
+/// Channel attributes for CREATE_SESSION.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ChannelAttrs4 {
+    pub ca_headerpadsize: u32,
+    pub ca_maxrequestsize: u32,
+    pub ca_maxresponsesize: u32,
+    pub ca_maxresponsesize_cached: u32,
+    pub ca_maxoperations: u32,
+    pub ca_maxrequests: u32,
+    pub ca_rdma_ird: Vec<u32>,
+}
+
+/// AUTH_SYS parameters for callback security.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct AuthsysParms4 {
+    pub stamp: u32,
+    pub machinename: String,
+    pub uid: u32,
+    pub gid: u32,
+    pub gids: Vec<u32>,
+}
+
+/// Callback security parameters for CREATE_SESSION.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[repr(u32)]
+pub enum CallbackSecParms4 {
+    AuthNone = 0,
+    AuthSys(AuthsysParms4) = 1,
+}
+
+/// Channel direction from client (BIND_CONN_TO_SESSION).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[repr(u32)]
+pub enum ChannelDirFromClient4 {
+    Fore = 1,
+    Back = 2,
+    ForeOrBoth = 3,
+}
+
+/// Channel direction from server (BIND_CONN_TO_SESSION response).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[repr(u32)]
+pub enum ChannelDirFromServer4 {
+    Fore = 1,
+    Back = 2,
+    Both = 3,
+}
+
+/*
+ * NFSv4.1 operations (RFC 5661)
+ */
+
+/* BIND_CONN_TO_SESSION (op 41) */
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct BindConnToSession4args {
+    #[serde(with = "serde_xdr::opaque_data::fixed_length")]
+    pub bctsa_sessid: [u8; 16],
+    pub bctsa_dir: ChannelDirFromClient4,
+    pub bctsa_use_conn_in_rdma_mode: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct BindConnToSession4resok {
+    #[serde(with = "serde_xdr::opaque_data::fixed_length")]
+    pub bctsr_sessid: [u8; 16],
+    pub bctsr_dir: ChannelDirFromServer4,
+    pub bctsr_use_conn_in_rdma_mode: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum BindConnToSession4res {
+    Resok4(BindConnToSession4resok),
+}
+
+/* EXCHANGE_ID (op 42) */
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ExchangeId4args {
+    pub eia_clientowner: ClientOwner4,
+    pub eia_flags: u32,
+    pub eia_state_protect: StateProtect4a,
+    pub eia_client_impl_id: Vec<NfsImplId4>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ExchangeId4resok {
+    pub eir_clientid: u64,
+    pub eir_sequenceid: u32,
+    pub eir_flags: u32,
+    pub eir_state_protect: StateProtect4r,
+    pub eir_server_owner: ServerOwner4,
+    #[serde(with = "serde_bytes")]
+    pub eir_server_scope: Vec<u8>,
+    pub eir_server_impl_id: Vec<NfsImplId4>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum ExchangeId4res {
+    Resok4(ExchangeId4resok),
+}
+
+/* CREATE_SESSION (op 43) */
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct CreateSession4args {
+    pub csa_clientid: u64,
+    pub csa_sequence: u32,
+    pub csa_flags: u32,
+    pub csa_fore_chan_attrs: ChannelAttrs4,
+    pub csa_back_chan_attrs: ChannelAttrs4,
+    pub csa_cb_program: u32,
+    pub csa_sec_parms: Vec<CallbackSecParms4>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct CreateSession4resok {
+    #[serde(with = "serde_xdr::opaque_data::fixed_length")]
+    pub csr_sessionid: [u8; 16],
+    pub csr_sequenceid: u32,
+    pub csr_flags: u32,
+    pub csr_fore_chan_attrs: ChannelAttrs4,
+    pub csr_back_chan_attrs: ChannelAttrs4,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum CreateSession4res {
+    Resok4(CreateSession4resok),
+}
+
+/* DESTROY_SESSION (op 44) */
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct DestroySession4args {
+    #[serde(with = "serde_xdr::opaque_data::fixed_length")]
+    pub dsa_sessionid: [u8; 16],
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct DestroySession4res {
+    pub dsr_status: NfsStat4,
+}
+
+/* FREE_STATEID (op 45) — stub for deserialization safety */
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct FreeStateid4args {
+    pub fsa_stateid: Stateid4,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct FreeStateid4res {
+    pub fsr_status: NfsStat4,
+}
+
+/* SEQUENCE (op 53) */
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Sequence4args {
+    #[serde(with = "serde_xdr::opaque_data::fixed_length")]
+    pub sa_sessionid: [u8; 16],
+    pub sa_sequenceid: u32,
+    pub sa_slotid: u32,
+    pub sa_highest_slotid: u32,
+    pub sa_cachethis: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Sequence4resok {
+    #[serde(with = "serde_xdr::opaque_data::fixed_length")]
+    pub sr_sessionid: [u8; 16],
+    pub sr_sequenceid: u32,
+    pub sr_slotid: u32,
+    pub sr_highest_slotid: u32,
+    pub sr_target_highest_slotid: u32,
+    pub sr_status_flags: u32,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum Sequence4res {
+    Resok4(Sequence4resok),
+}
+
+/* TEST_STATEID (op 55) — stub for deserialization safety */
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct TestStateid4args {
+    pub ts_stateids: Vec<Stateid4>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct TestStateid4resok {
+    pub tsr_status_codes: Vec<u32>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum TestStateid4res {
+    Resok4(TestStateid4resok),
+}
+
+/* DESTROY_CLIENTID (op 57) */
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct DestroyClientId4args {
+    pub dca_clientid: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct DestroyClientId4res {
+    pub dcr_status: NfsStat4,
+}
+
+/* RECLAIM_COMPLETE (op 58) */
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ReclaimComplete4args {
+    pub rca_one_fs: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ReclaimComplete4res {
+    pub rcr_status: NfsStat4,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Illegal4res {
     status: NfsStat4,
@@ -1488,6 +1753,16 @@ pub enum NfsOpNum4 {
     OpVerify = 37,
     OpWrite = 38,
     OpReleaseLockowner = 39,
+    // NFSv4.1
+    OpBindConnToSession = 41,
+    OpExchangeId = 42,
+    OpCreateSession = 43,
+    OpDestroySession = 44,
+    OpFreeStateid = 45,
+    OpSequence = 53,
+    OpTestStateid = 55,
+    OpDestroyClientid = 57,
+    OpReclaimComplete = 58,
     OpIllegal = 10044,
 }
 
@@ -1574,6 +1849,16 @@ pub enum NfsArgOp {
     Opverify(Verify4args) = 37,
     Opwrite(Write4args) = 38,
     OpreleaseLockOwner(ReleaseLockowner4args) = 39,
+    // NFSv4.1 operations (RFC 5661)
+    OpbindConnToSession(BindConnToSession4args) = 41,
+    OpexchangeId(ExchangeId4args) = 42,
+    OpcreateSession(CreateSession4args) = 43,
+    OpdestroySession(DestroySession4args) = 44,
+    OpfreeStateid(FreeStateid4args) = 45,
+    Opsequence(Sequence4args) = 53,
+    OptestStateid(TestStateid4args) = 55,
+    OpdestroyClientid(DestroyClientId4args) = 57,
+    OpreclaimComplete(ReclaimComplete4args) = 58,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1622,6 +1907,16 @@ pub enum NfsResOp4 {
     Opverify(Verify4res) = 37,
     Opwrite(Write4res) = 38,
     OpreleaseLockOwner(ReleaseLockowner4res) = 39,
+    // NFSv4.1 operations (RFC 5661)
+    OpbindConnToSession(BindConnToSession4res) = 41,
+    OpexchangeId(ExchangeId4res) = 42,
+    OpcreateSession(CreateSession4res) = 43,
+    OpdestroySession(DestroySession4res) = 44,
+    OpfreeStateid(FreeStateid4res) = 45,
+    Opsequence(Sequence4res) = 53,
+    OptestStateid(TestStateid4res) = 55,
+    OpdestroyClientid(DestroyClientId4res) = 57,
+    OpreclaimComplete(ReclaimComplete4res) = 58,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
