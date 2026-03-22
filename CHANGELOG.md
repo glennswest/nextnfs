@@ -23,3 +23,7 @@
 - **perf:** COMMIT now calls fsync() for real durability guarantees
 - **perf:** READ uses actual file size from seek(End) instead of cached attr
 - **perf:** READ buffer allocation capped to remaining file bytes
+- **feat:** Switch to stormdbase container image (logging, SSH, restart on failure, web dashboard)
+- **feat:** stormd.toml process supervisor config with TCP liveness probe on port 2049
+- **feat:** Separate Containerfiles for x86_64 and aarch64 (pre-built binary, no in-container Rust)
+- **feat:** Container pushed to registry.gt.lo:5000/nextnfs:0.1.0

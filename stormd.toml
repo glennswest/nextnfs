@@ -1,0 +1,30 @@
+[general]
+name = "nextnfs"
+log_dir = "/var/stormd/logs"
+
+[api]
+bind = "0.0.0.0:9080"
+
+[ssh]
+enabled = true
+bind = "0.0.0.0:22"
+password = "nextnfs"
+
+[stormlog.terminal]
+rows = 50
+cols = 120
+
+[[process]]
+name = "nfs"
+command = "/usr/bin/nextnfs"
+args = ["--export", "/export", "--listen", "0.0.0.0:2049"]
+env = { RUST_LOG = "info" }
+on_failure = "restart"
+on_exit = "restart"
+restart_delay_secs = 2
+
+[process.liveness]
+type = "tcp"
+port = 2049
+interval_secs = 10
+initial_delay_secs = 5

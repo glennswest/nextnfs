@@ -1,8 +1,8 @@
-REGISTRY ?= ghcr.io/glennswest
+REGISTRY ?= registry.gt.lo:5000
 IMAGE    ?= $(REGISTRY)/nextnfs
 VERSION  ?= 0.1.0
 
-.PHONY: build build-x86 build-arm64 container push clean
+.PHONY: build build-x86 build-arm64 container-x86 container-arm64 push clean
 
 # Build for current platform (debug)
 build:
@@ -11,24 +11,27 @@ build:
 # Build static x86_64 binary
 build-x86:
 	cargo build --release --target x86_64-unknown-linux-musl
-	strip target/x86_64-unknown-linux-musl/release/nextnfs
+	x86_64-linux-musl-strip target/x86_64-unknown-linux-musl/release/nextnfs
 	@ls -lh target/x86_64-unknown-linux-musl/release/nextnfs
 
 # Build static aarch64 binary (for MikroTik Rose)
 build-arm64:
 	cargo build --release --target aarch64-unknown-linux-musl
-	strip target/aarch64-unknown-linux-musl/release/nextnfs
+	aarch64-linux-musl-strip target/aarch64-unknown-linux-musl/release/nextnfs
 	@ls -lh target/aarch64-unknown-linux-musl/release/nextnfs
 
-# Build container image (current platform)
-container:
-	podman build -t $(IMAGE):$(VERSION) .
-	podman tag $(IMAGE):$(VERSION) $(IMAGE):latest
+# Build x86_64 container (for Fedora CoreOS)
+container-x86: build-x86
+	podman build --format docker --tls-verify=false -f Containerfile.x86_64 -t $(IMAGE):$(VERSION) -t $(IMAGE):latest .
+
+# Build aarch64 container (for MikroTik Rose)
+container-arm64: build-arm64
+	podman build --format docker --tls-verify=false -f Containerfile -t $(IMAGE):$(VERSION) -t $(IMAGE):latest .
 
 # Push container image
 push:
-	podman push $(IMAGE):$(VERSION)
-	podman push $(IMAGE):latest
+	podman push --tls-verify=false $(IMAGE):$(VERSION)
+	podman push --tls-verify=false $(IMAGE):latest
 
 clean:
 	cargo clean
