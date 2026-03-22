@@ -8,6 +8,7 @@ use nextnfs_proto::rpc_proto::{AcceptBody, AcceptedReply, OpaqueAuth, ReplyBody}
 use nextnfs_proto::XDRProtoCodec;
 use futures::SinkExt;
 use server::clientmanager::ClientManagerHandle;
+use server::export_manager::{ExportManagerHandle, ExportInfo};
 use server::filemanager::FileManagerHandle;
 use socket2::{SockRef, TcpKeepalive};
 use tokio::net::TcpListener;
@@ -20,17 +21,23 @@ pub use vfs::VfsPath;
 use crate::server::request::NfsRequest;
 use crate::server::{NFSService, NfsProtoImpl};
 
+/// Re-export for the binary crate.
+pub use server::export_manager;
+
 pub struct NFSServer {
     bind: String,
-    root: VfsPath,
-    export_root: PathBuf,
+    export_manager: ExportManagerHandle,
     service_0: Option<server::nfs40::NFS40Server>,
     boot_time: u64,
 }
 
 impl NFSServer {
-    pub fn builder(root: VfsPath, export_root: PathBuf) -> ServerBuilder {
-        ServerBuilder::new(root, export_root)
+    pub fn builder() -> ServerBuilder {
+        ServerBuilder::new()
+    }
+
+    pub fn export_manager(&self) -> &ExportManagerHandle {
+        &self.export_manager
     }
 
     pub async fn start_async(&self) {
@@ -57,11 +64,23 @@ impl NFSServer {
         sock.listen(1024).expect("failed to listen");
 
         let listener = TcpListener::from_std(sock.into()).expect("failed to convert to tokio");
-        info!(%self.bind, export_root = %self.export_root.display(), "nextnfs NFSv4 server listening");
+        info!(%self.bind, "nextnfs NFSv4 server listening");
 
         let client_manager_handle = ClientManagerHandle::new();
-        let file_manager_handle =
-            FileManagerHandle::new(self.root.clone(), None, self.export_root.clone());
+        let export_manager = self.export_manager.clone();
+
+        // Pre-resolve default file manager (first export) for the accept loop
+        let default_fm = {
+            let exports = export_manager.list_exports().await;
+            if let Some(first) = exports.first() {
+                export_manager
+                    .get_export_by_id(first.export_id)
+                    .await
+                    .map(|(_, fm)| fm)
+            } else {
+                None
+            }
+        };
 
         loop {
             match listener.accept().await {
@@ -78,7 +97,8 @@ impl NFSServer {
 
                     info!(%addr, "NFS client connected");
                     let cm = client_manager_handle.clone();
-                    let fm = file_manager_handle.clone();
+                    let em = export_manager.clone();
+                    let dfm = default_fm.clone();
                     let boot_time = self.boot_time;
                     let service_0 = self.service_0.clone();
 
@@ -95,7 +115,8 @@ impl NFSServer {
                                     let request = NfsRequest::new(
                                         addr.to_string(),
                                         cm.clone(),
-                                        fm.clone(),
+                                        em.clone(),
+                                        dfm.clone(),
                                         boot_time,
                                         Some(&mut filehandle_cache),
                                     );
@@ -150,16 +171,14 @@ impl NFSServer {
 
 pub struct ServerBuilder {
     bind: String,
-    root: VfsPath,
-    export_root: PathBuf,
+    export_manager: Option<ExportManagerHandle>,
 }
 
 impl ServerBuilder {
-    pub fn new(root: VfsPath, export_root: PathBuf) -> Self {
+    pub fn new() -> Self {
         ServerBuilder {
             bind: "0.0.0.0:2049".to_string(),
-            root,
-            export_root,
+            export_manager: None,
         }
     }
 
@@ -168,12 +187,19 @@ impl ServerBuilder {
         self
     }
 
+    pub fn export_manager(&mut self, em: ExportManagerHandle) -> &mut Self {
+        self.export_manager = Some(em);
+        self
+    }
+
     pub fn build(&self) -> NFSServer {
         let boot_time = std::time::UNIX_EPOCH.elapsed().unwrap().as_secs();
         NFSServer {
             bind: self.bind.clone(),
-            root: self.root.clone(),
-            export_root: self.export_root.clone(),
+            export_manager: self
+                .export_manager
+                .clone()
+                .expect("export_manager must be set before build()"),
             service_0: Some(server::nfs40::NFS40Server::new()),
             boot_time,
         }
