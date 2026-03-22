@@ -1,4 +1,5 @@
 pub mod clientmanager;
+pub mod export_manager;
 pub mod filemanager;
 pub mod nfs40;
 pub mod nfs41;
