@@ -1704,6 +1704,99 @@ pub struct ReclaimComplete4res {
     pub rcr_status: NfsStat4,
 }
 
+/*
+ * NFSv4.2 types (RFC 7862)
+ */
+
+/// Data/hole type for SEEK.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[repr(u32)]
+pub enum DataContent4 {
+    Data = 0,
+    Hole = 1,
+}
+
+/// Network location for inter-server COPY source.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[repr(u32)]
+pub enum Netloc4 {
+    Name(String) = 1,
+    Url(String) = 2,
+}
+
+/// Write response from COPY.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct WriteResponse4 {
+    pub wr_callback_id: Vec<Stateid4>,
+    pub wr_count: u64,
+    pub wr_committed: StableHow4,
+    #[serde(with = "serde_xdr::opaque_data::fixed_length")]
+    pub wr_writeverf: [u8; 8],
+}
+
+/// Copy requirements for COPY response.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct CopyRequirements4 {
+    pub cr_consecutive: bool,
+    pub cr_synchronous: bool,
+}
+
+/* ALLOCATE (op 59) */
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Allocate4args {
+    pub aa_stateid: Stateid4,
+    pub aa_offset: u64,
+    pub aa_length: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Allocate4res {
+    pub ar_status: NfsStat4,
+}
+
+/* COPY (op 60) */
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Copy4args {
+    pub ca_src_stateid: Stateid4,
+    pub ca_dst_stateid: Stateid4,
+    pub ca_src_offset: u64,
+    pub ca_dst_offset: u64,
+    pub ca_count: u64,
+    pub ca_consecutive: bool,
+    pub ca_synchronous: bool,
+    pub ca_source_server: Vec<Netloc4>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Copy4resok {
+    pub cr_response: WriteResponse4,
+    pub cr_requirements: CopyRequirements4,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum Copy4res {
+    Resok4(Copy4resok),
+}
+
+/* SEEK (op 69) */
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Seek4args {
+    pub sa_stateid: Stateid4,
+    pub sa_offset: u64,
+    pub sa_what: DataContent4,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct SeekRes4 {
+    pub sr_eof: bool,
+    pub sr_offset: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum Seek4res {
+    Resok4(SeekRes4),
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Illegal4res {
     status: NfsStat4,
@@ -1763,6 +1856,10 @@ pub enum NfsOpNum4 {
     OpTestStateid = 55,
     OpDestroyClientid = 57,
     OpReclaimComplete = 58,
+    // NFSv4.2
+    OpAllocate = 59,
+    OpCopy = 60,
+    OpSeek = 69,
     OpIllegal = 10044,
 }
 
@@ -1859,6 +1956,10 @@ pub enum NfsArgOp {
     OptestStateid(TestStateid4args) = 55,
     OpdestroyClientid(DestroyClientId4args) = 57,
     OpreclaimComplete(ReclaimComplete4args) = 58,
+    // NFSv4.2 operations (RFC 7862)
+    Opallocate(Allocate4args) = 59,
+    Opcopy(Copy4args) = 60,
+    Opseek(Seek4args) = 69,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1917,6 +2018,10 @@ pub enum NfsResOp4 {
     OptestStateid(TestStateid4res) = 55,
     OpdestroyClientid(DestroyClientId4res) = 57,
     OpreclaimComplete(ReclaimComplete4res) = 58,
+    // NFSv4.2 operations (RFC 7862)
+    Opallocate(Allocate4res) = 59,
+    Opcopy(Copy4res) = 60,
+    Opseek(Seek4res) = 69,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
