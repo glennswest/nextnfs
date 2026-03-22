@@ -1,0 +1,27 @@
+# Build
+target/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets
+.env
+.env.*
+*.pem
+*.key
+secrets/
+credentials/
+
+# Logs and temp
+*.log
+tmp/
+temp/

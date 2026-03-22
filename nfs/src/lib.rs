@@ -1,0 +1,181 @@
+pub mod server;
+
+use std::collections::HashMap;
+use std::net::SocketAddr;
+use std::path::PathBuf;
+
+use nextnfs_proto::rpc_proto::{AcceptBody, AcceptedReply, OpaqueAuth, ReplyBody};
+use nextnfs_proto::XDRProtoCodec;
+use futures::SinkExt;
+use server::clientmanager::ClientManagerHandle;
+use server::filemanager::FileManagerHandle;
+use socket2::{SockRef, TcpKeepalive};
+use tokio::net::TcpListener;
+use tokio_stream::StreamExt;
+use tokio_util::codec::Framed;
+use tracing::{error, info, span, trace, Level};
+pub use vfs;
+pub use vfs::VfsPath;
+
+use crate::server::request::NfsRequest;
+use crate::server::{NFSService, NfsProtoImpl};
+
+pub struct NFSServer {
+    bind: String,
+    root: VfsPath,
+    export_root: PathBuf,
+    service_0: Option<server::nfs40::NFS40Server>,
+    boot_time: u64,
+}
+
+impl NFSServer {
+    pub fn builder(root: VfsPath, export_root: PathBuf) -> ServerBuilder {
+        ServerBuilder::new(root, export_root)
+    }
+
+    pub async fn start_async(&self) {
+        self.serve().await;
+    }
+
+    async fn serve(&self) {
+        let sock = socket2::Socket::new(
+            socket2::Domain::IPV4,
+            socket2::Type::STREAM,
+            Some(socket2::Protocol::TCP),
+        )
+        .expect("failed to create socket");
+
+        sock.set_reuse_address(true).unwrap();
+        sock.set_nonblocking(true).unwrap();
+
+        // Large socket buffers for high throughput
+        let _ = sock.set_send_buffer_size(4 * 1024 * 1024);
+        let _ = sock.set_recv_buffer_size(4 * 1024 * 1024);
+
+        let addr: SocketAddr = self.bind.parse().expect("invalid bind address");
+        sock.bind(&addr.into()).expect("failed to bind");
+        sock.listen(1024).expect("failed to listen");
+
+        let listener = TcpListener::from_std(sock.into()).expect("failed to convert to tokio");
+        info!(%self.bind, export_root = %self.export_root.display(), "nextnfs NFSv4 server listening");
+
+        let client_manager_handle = ClientManagerHandle::new();
+        let file_manager_handle =
+            FileManagerHandle::new(self.root.clone(), None, self.export_root.clone());
+
+        loop {
+            match listener.accept().await {
+                Ok((stream, addr)) => {
+                    // TCP tuning for performance
+                    let sock_ref = SockRef::from(&stream);
+                    let _ = sock_ref.set_nodelay(true);
+                    let _ = sock_ref.set_send_buffer_size(4 * 1024 * 1024);
+                    let _ = sock_ref.set_recv_buffer_size(4 * 1024 * 1024);
+                    let keepalive = TcpKeepalive::new()
+                        .with_time(std::time::Duration::from_secs(60))
+                        .with_interval(std::time::Duration::from_secs(15));
+                    let _ = sock_ref.set_tcp_keepalive(&keepalive);
+
+                    info!(%addr, "NFS client connected");
+                    let cm = client_manager_handle.clone();
+                    let fm = file_manager_handle.clone();
+                    let boot_time = self.boot_time;
+                    let service_0 = self.service_0.clone();
+
+                    tokio::spawn(async move {
+                        let span = span!(Level::DEBUG, "nfs_client", %addr);
+                        let _enter = span.enter();
+                        let mut nfs_transport = Framed::new(stream, XDRProtoCodec::new());
+                        let mut filehandle_cache = HashMap::new();
+
+                        loop {
+                            let msg = nfs_transport.next().await;
+                            match msg {
+                                Some(Ok(msg)) => {
+                                    let request = NfsRequest::new(
+                                        addr.to_string(),
+                                        cm.clone(),
+                                        fm.clone(),
+                                        boot_time,
+                                        Some(&mut filehandle_cache),
+                                    );
+                                    let nfs_protocol = service_0.as_ref().unwrap();
+                                    let service = NFSService::new(nfs_protocol.clone());
+
+                                    let resp = service.call(msg, request).await;
+                                    match nfs_transport.send(resp).await {
+                                        Ok(_) => {
+                                            trace!("response sent");
+                                        }
+                                        Err(e) => {
+                                            error!("couldn't send response: {:?}", e);
+                                            break;
+                                        }
+                                    }
+                                }
+                                Some(Err(e)) => {
+                                    error!("couldn't get message: {:?}", e);
+                                    let resp = Box::new(nextnfs_proto::rpc_proto::RpcReplyMsg {
+                                        xid: 0,
+                                        body: nextnfs_proto::rpc_proto::MsgType::Reply(
+                                            ReplyBody::MsgAccepted(AcceptedReply {
+                                                verf: OpaqueAuth::AuthNull(Vec::<u8>::new()),
+                                                reply_data: AcceptBody::GarbageArgs,
+                                            }),
+                                        ),
+                                    });
+                                    match nfs_transport.send(resp).await {
+                                        Ok(_) => {
+                                            trace!("response sent");
+                                        }
+                                        Err(e) => {
+                                            error!("couldn't send response: {:?}", e);
+                                            break;
+                                        }
+                                    }
+                                }
+                                None => {
+                                    info!(%addr, "NFS client disconnected");
+                                    break;
+                                }
+                            }
+                        }
+                    });
+                }
+                Err(e) => error!("couldn't get client: {:?}", e),
+            }
+        }
+    }
+}
+
+pub struct ServerBuilder {
+    bind: String,
+    root: VfsPath,
+    export_root: PathBuf,
+}
+
+impl ServerBuilder {
+    pub fn new(root: VfsPath, export_root: PathBuf) -> Self {
+        ServerBuilder {
+            bind: "0.0.0.0:2049".to_string(),
+            root,
+            export_root,
+        }
+    }
+
+    pub fn bind(&mut self, bind: &str) -> &mut Self {
+        self.bind = bind.to_string();
+        self
+    }
+
+    pub fn build(&self) -> NFSServer {
+        let boot_time = std::time::UNIX_EPOCH.elapsed().unwrap().as_secs();
+        NFSServer {
+            bind: self.bind.clone(),
+            root: self.root.clone(),
+            export_root: self.export_root.clone(),
+            service_0: Some(server::nfs40::NFS40Server::new()),
+            boot_time,
+        }
+    }
+}

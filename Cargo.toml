@@ -1,0 +1,37 @@
+[workspace]
+members = [
+    "proto",
+    "nfs",
+    ".",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Glenn West"]
+license = "MIT"
+rust-version = "1.75"
+
+[package]
+name = "nextnfs"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "nextnfs"
+path = "src/main.rs"
+
+[dependencies]
+nextnfs-server = { path = "nfs" }
+nextnfs-proto = { path = "proto" }
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
+tokio = { version = "1", features = ["full", "tracing"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+vfs = "0.12.0"

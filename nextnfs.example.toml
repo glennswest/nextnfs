@@ -1,0 +1,6 @@
+[server]
+listen = "0.0.0.0:2049"
+
+[export]
+path = "/export"
+read_only = false
