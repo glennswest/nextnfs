@@ -1,6 +1,6 @@
 use nextnfs_proto::nfs4_proto::{
-    Attrlist4, DirList4, Entry4, Fattr4, FileAttr, FileAttrValue, Fsid4, NfsFh4, NfsFtype4,
-    NfsResOp4, NfsStat4, Nfstime4,
+    Attrlist4, Entry4, Fattr4, FileAttr, FileAttrValue, Fsid4, NfsFh4, NfsFtype4, NfsStat4,
+    Nfstime4,
 };
 
 use crate::server::export_manager::ExportManagerHandle;

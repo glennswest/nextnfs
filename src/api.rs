@@ -1,5 +1,4 @@
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use axum::{
     extract::{Path, State},
@@ -51,11 +50,6 @@ struct StatsResponse {
     total_bytes_written: u64,
     total_ops: u64,
     exports: Vec<ExportResponse>,
-}
-
-#[derive(Serialize)]
-struct ErrorResponse {
-    error: String,
 }
 
 pub fn router(state: ApiState) -> Router {

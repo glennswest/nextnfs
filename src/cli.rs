@@ -1,5 +1,3 @@
-use serde::Deserialize;
-
 /// CLI client for the nextnfs REST API.
 pub async fn export_list(api_url: &str) {
     let url = format!("{}/api/v1/exports", api_url);

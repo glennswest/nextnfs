@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use tokio::sync::{mpsc, oneshot};
-use tracing::{debug, error, info};
+use tracing::info;
 use vfs::{AltrootFS, PhysicalFS, VfsPath};
 
 use super::filemanager::FileManagerHandle;

@@ -2,14 +2,12 @@ pub mod server;
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::path::PathBuf;
 
 use nextnfs_proto::rpc_proto::{AcceptBody, AcceptedReply, OpaqueAuth, ReplyBody};
 use nextnfs_proto::XDRProtoCodec;
 use futures::SinkExt;
 use server::clientmanager::ClientManagerHandle;
-use server::export_manager::{ExportManagerHandle, ExportInfo};
-use server::filemanager::FileManagerHandle;
+use server::export_manager::ExportManagerHandle;
 use socket2::{SockRef, TcpKeepalive};
 use tokio::net::TcpListener;
 use tokio_stream::StreamExt;
