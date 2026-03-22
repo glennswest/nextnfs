@@ -16,3 +16,6 @@
 - **feat:** NFSv4 byte-range locking (LOCK, LOCKT, LOCKU, RELEASE_LOCKOWNER)
 - **feat:** LINK operation for hard links
 - **feat:** Lock conflict detection with proper range overlap and read/write semantics
+- **feat:** Multi-arch Containerfile (x86_64-musl + aarch64-musl scratch container)
+- **feat:** Makefile with build-x86, build-arm64, container, push targets
+- **feat:** Build script (build.sh) for podman container builds
