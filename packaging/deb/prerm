@@ -1,0 +1,3 @@
+#!/bin/bash
+set -e
+systemctl stop nextnfs.service || true

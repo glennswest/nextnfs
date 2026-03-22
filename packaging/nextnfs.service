@@ -1,0 +1,14 @@
+[Unit]
+Description=NextNFS - NFSv4.0 Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/nextnfs serve --config /etc/nextnfs/nextnfs.toml
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### 2026-03-22
+- **feat:** RPM packaging for Fedora/RHEL (nextnfs.spec + build-rpm.sh)
+- **feat:** DEB packaging for Debian/Ubuntu (control files + build-deb.sh)
+- **feat:** systemd service file (packaging/nextnfs.service)
+- **feat:** Makefile targets for rpm-x86, rpm-arm64, deb-x86, deb-arm64
+- **fix:** VERSION in Makefile and build.sh updated from 0.1.0 to 0.2.0
+- **docs:** README updated with RPM/DEB install instructions and build targets
+
 ## [v0.2.0] — 2026-03-22
 
 ### Added

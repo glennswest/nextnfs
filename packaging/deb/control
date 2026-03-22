@@ -1,0 +1,10 @@
+Package: nextnfs
+Version: VERSION
+Architecture: ARCH
+Maintainer: Glenn West
+Description: High-performance NFSv4.0 server
+ NextNFS is a high-performance standalone NFSv4.0 server over a real
+ filesystem. Static musl binary — no shared library dependencies.
+Section: net
+Priority: optional
+Homepage: https://github.com/glennswest/nextnfs

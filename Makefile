@@ -1,8 +1,8 @@
 REGISTRY ?= registry.gt.lo:5000
 IMAGE    ?= $(REGISTRY)/nextnfs
-VERSION  ?= 0.1.0
+VERSION  ?= 0.2.0
 
-.PHONY: build build-x86 build-arm64 container-x86 container-arm64 push clean
+.PHONY: build build-x86 build-arm64 container-x86 container-arm64 push rpm-x86 rpm-arm64 deb-x86 deb-arm64 clean
 
 # Build for current platform (debug)
 build:
@@ -33,5 +33,20 @@ push:
 	podman push --tls-verify=false $(IMAGE):$(VERSION)
 	podman push --tls-verify=false $(IMAGE):latest
 
+# Build RPM package (Fedora/RHEL)
+rpm-x86: build-x86
+	./packaging/build-rpm.sh x86_64
+
+rpm-arm64: build-arm64
+	./packaging/build-rpm.sh aarch64
+
+# Build DEB package (Debian/Ubuntu)
+deb-x86: build-x86
+	./packaging/build-deb.sh amd64
+
+deb-arm64: build-arm64
+	./packaging/build-deb.sh arm64
+
 clean:
 	cargo clean
+	rm -rf dist/

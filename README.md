@@ -40,6 +40,26 @@ Container includes [stormd](https://github.com/glennswest/stormd) for process su
 | 9080 | stormd web dashboard + REST API |
 | 22   | SSH shell (password: `nextnfs`) |
 
+### RPM (Fedora/RHEL)
+
+```bash
+sudo rpm -i nextnfs-0.2.0-1.x86_64.rpm
+# Installs to /usr/bin/nextnfs, config at /etc/nextnfs/nextnfs.toml
+# Enables and starts nextnfs.service automatically
+
+sudo systemctl status nextnfs
+```
+
+### DEB (Debian/Ubuntu)
+
+```bash
+sudo dpkg -i nextnfs_0.2.0_amd64.deb
+# Installs to /usr/bin/nextnfs, config at /etc/nextnfs/nextnfs.toml
+# Enables and starts nextnfs.service automatically
+
+sudo systemctl status nextnfs
+```
+
 ### Binary
 
 ```bash
@@ -143,6 +163,14 @@ make container-arm64
 
 # Push to registry
 make push
+
+# Build RPM (Fedora/RHEL)
+make rpm-x86       # x86_64
+make rpm-arm64     # aarch64
+
+# Build DEB (Debian/Ubuntu)
+make deb-x86       # amd64
+make deb-arm64     # arm64
 ```
 
 ## Architecture
