@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+### 2026-03-22
+- **feat:** Multi-export support — serve multiple filesystem paths as separate NFS exports
+- **feat:** ExportManager actor with per-export FileManagerHandle, stats, and dynamic add/remove
+- **feat:** NFSv4 pseudo-filesystem root — exports appear as top-level directories
+- **feat:** Pseudo-root PUTROOTFH, LOOKUP, READDIR, GETATTR for multi-export namespace
+- **feat:** Export-aware request routing — PUTFH extracts export_id from fh[1]
+- **feat:** REST API (axum) on port 8080 — /health, /api/v1/exports, /api/v1/stats
+- **feat:** Web UI dashboard with Dracula dark theme matching stormd iframe integration
+- **feat:** Export management page — add/remove exports via browser
+- **feat:** Statistics page — per-export read/write/bytes counters with auto-refresh
+- **feat:** CLI subcommands — `serve`, `export list/add/remove`, `stats`, `health`
+- **feat:** reqwest-based CLI client for REST API interaction
+- **feat:** stormd [process.ui] integration — NextNFS tab in stormd dashboard
+- **feat:** Multi-export TOML config — `[[exports]]` array with backwards-compatible `[export]`
+- **feat:** api_listen config option for REST API bind address
+- **refactor:** NfsRequest holds ExportManagerHandle with cached FileManagerHandle per-export
+- **refactor:** NFSServer uses ExportManagerHandle instead of single VFS root
+- **refactor:** ServerBuilder takes ExportManagerHandle, no longer requires root/export_root
+
 ### 2026-03-21
 - **feat:** Initial project structure — NFSv4.0 server extracted from StormFS bold-nfs
 - **feat:** nextnfs-proto crate (XDR codec, NFS4/RPC protocol types)
