@@ -15,6 +15,7 @@ mod op_locku;
 mod op_lookup;
 mod op_open;
 mod op_openconfirm;
+pub mod op_pseudo;
 mod op_putfh;
 mod op_read;
 mod op_readdir;
