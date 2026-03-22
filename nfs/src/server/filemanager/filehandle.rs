@@ -186,6 +186,35 @@ impl Filehandle {
         }
     }
 
+    /// Create a synthetic filehandle for the pseudo-filesystem root.
+    pub fn pseudo_root(id: NfsFh4) -> Self {
+        let now = Self::current_time();
+        // Use a MemoryFS path as placeholder — pseudo-root has no real backing file
+        let file = vfs::VfsPath::new(vfs::MemoryFS::new());
+        Filehandle {
+            id,
+            path: "/".to_string(),
+            attr_type: NfsFtype4::Nf4dir,
+            attr_change: 1,
+            attr_size: 4096,
+            attr_fileid: 1,
+            attr_fsid: Fsid4 { major: 0, minor: 0 },
+            attr_mode: 0o755,
+            attr_nlink: 2,
+            attr_owner: "0".to_string(),
+            attr_owner_group: "0".to_string(),
+            attr_space_used: 4096,
+            attr_time_access: now,
+            attr_time_metadata: now,
+            attr_time_modify: now,
+            file,
+            verifier: None,
+            locks: Vec::new(),
+            write_cache: None,
+            version: 1,
+        }
+    }
+
     pub fn attr_change(file: &VfsPath, default: u64) -> u64 {
         if let Ok(v) = file.metadata() {
             if let Some(v) = v.modified {

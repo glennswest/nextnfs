@@ -5,7 +5,9 @@ use tracing::error;
 
 use super::{
     clientmanager::ClientManagerHandle,
+    export_manager::ExportManagerHandle,
     filemanager::{FileManagerHandle, Filehandle},
+    nfs40::op_pseudo,
 };
 
 #[derive(Debug)]
@@ -16,8 +18,12 @@ pub struct NfsRequest<'a> {
     saved_filehandle: Option<Filehandle>,
     // shared state for client manager between connections
     cmanager: ClientManagerHandle,
-    // local filehandle manager
-    fmanager: FileManagerHandle,
+    // export manager — routes to per-export FileManagerHandles
+    export_manager: ExportManagerHandle,
+    // cached file manager for the current export (set by set_export)
+    cached_fmanager: Option<FileManagerHandle>,
+    // current export id (extracted from filehandle)
+    current_export_id: Option<u8>,
     // time the server was booted
     pub boot_time: u64,
     // time the request was received
@@ -31,9 +37,9 @@ impl<'a> NfsRequest<'a> {
     pub fn new(
         client_addr: String,
         cmanager: ClientManagerHandle,
-        fmanager: FileManagerHandle,
+        export_manager: ExportManagerHandle,
+        default_fmanager: Option<FileManagerHandle>,
         boot_time: u64,
-        // cache ttl + filehandle
         filehandle_cache: Option<&'a mut HashMap<NfsFh4, (SystemTime, Filehandle)>>,
     ) -> Self {
         let request_time = std::time::UNIX_EPOCH.elapsed().unwrap().as_secs();
@@ -43,11 +49,12 @@ impl<'a> NfsRequest<'a> {
             filehandle: None,
             saved_filehandle: None,
             cmanager,
-            fmanager,
+            export_manager,
+            cached_fmanager: default_fmanager,
+            current_export_id: None,
             boot_time,
             request_time,
             filehandle_cache,
-            // set filehandle cache ttl to 10 seconds
             cache_ttl: 10,
         }
     }
@@ -64,7 +71,6 @@ impl<'a> NfsRequest<'a> {
     }
 
     pub fn current_filehandle(&self) -> Option<&Filehandle> {
-        // TODO handle None
         match self.filehandle {
             Some(ref fh) => Some(fh),
             None => None,
@@ -75,11 +81,50 @@ impl<'a> NfsRequest<'a> {
         self.cmanager.clone()
     }
 
+    pub fn export_manager(&self) -> ExportManagerHandle {
+        self.export_manager.clone()
+    }
+
+    /// Get the current export's FileManagerHandle (synchronous).
+    /// Panics if no export has been selected yet.
     pub fn file_manager(&self) -> FileManagerHandle {
-        self.fmanager.clone()
+        self.cached_fmanager
+            .clone()
+            .expect("file_manager() called before export was selected")
+    }
+
+    /// Switch to a different export by id. Updates the cached file manager.
+    /// Called by PUTROOTFH, PUTFH, LOOKUP when routing to an export.
+    pub async fn set_export(&mut self, export_id: u8) {
+        self.current_export_id = Some(export_id);
+        if export_id == op_pseudo::PSEUDO_ROOT_EXPORT_ID {
+            // Pseudo-root doesn't have a real file manager
+            self.cached_fmanager = None;
+            return;
+        }
+        if let Some((_info, fm)) = self.export_manager.get_export_by_id(export_id).await {
+            self.cached_fmanager = Some(fm);
+        }
+    }
+
+    /// Check if the current filehandle is the pseudo-root.
+    pub fn is_pseudo_root(&self) -> bool {
+        self.current_export_id == Some(op_pseudo::PSEUDO_ROOT_EXPORT_ID)
+    }
+
+    pub fn current_export_id(&self) -> Option<u8> {
+        self.current_export_id
     }
 
     pub fn set_filehandle(&mut self, filehandle: Filehandle) {
+        self.filehandle = Some(filehandle);
+    }
+
+    /// Set filehandle and extract/track export_id (no export switch — caller must
+    /// call set_export() separately if needed).
+    pub fn set_filehandle_with_export(&mut self, filehandle: Filehandle) {
+        let export_id = op_pseudo::export_id_from_fh(&filehandle.id);
+        self.current_export_id = Some(export_id);
         self.filehandle = Some(filehandle);
     }
 
@@ -105,7 +150,6 @@ impl<'a> NfsRequest<'a> {
     }
 
     pub fn get_filehandle_from_cache(&mut self, filehandle_id: NfsFh4) -> Option<Filehandle> {
-        // if no cache set, return None
         let cache = self.filehandle_cache.as_ref();
         match cache {
             None => None,
@@ -114,7 +158,6 @@ impl<'a> NfsRequest<'a> {
                     Some(fh) => {
                         let now: SystemTime = SystemTime::now();
                         let (time, filehandle) = fh;
-                        // if cache is expired since 10 seconds, remove it
                         if now.duration_since(*time).unwrap().as_secs() > self.cache_ttl {
                             self.drop_filehandle_from_cache(filehandle.id.clone());
                             None
@@ -132,7 +175,18 @@ impl<'a> NfsRequest<'a> {
         &mut self,
         filehandle_id: NfsFh4,
     ) -> Result<Filehandle, NfsStat4> {
-        let res = self.fmanager.get_filehandle_for_id(filehandle_id).await;
+        // Extract export_id and switch if needed
+        let export_id = op_pseudo::export_id_from_fh(&filehandle_id);
+        if self.current_export_id != Some(export_id) {
+            self.set_export(export_id).await;
+        }
+
+        if export_id == op_pseudo::PSEUDO_ROOT_EXPORT_ID {
+            return Err(NfsStat4::Nfs4errStale);
+        }
+
+        let fm = self.file_manager();
+        let res = fm.get_filehandle_for_id(filehandle_id).await;
         match res {
             Ok(ref fh) => {
                 self.filehandle = Some(fh.clone());
@@ -169,12 +223,5 @@ impl<'a> NfsRequest<'a> {
         self.saved_filehandle.as_ref()
     }
 
-    // this is called when the request is done
-    pub async fn close(&self) {
-        // if let Some(fh) = self.filehandle.as_ref() {
-        //     self.cmanager
-        //         .set_current_filehandle(self.client_addr.clone(), fh.id.clone())
-        //         .await;
-        // }
-    }
+    pub async fn close(&self) {}
 }

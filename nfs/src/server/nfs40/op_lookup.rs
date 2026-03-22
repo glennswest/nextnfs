@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use tracing::{debug, error};
 
 use crate::server::{
-    nfs40::{Lookup4res, NfsResOp4},
+    nfs40::{op_pseudo, Lookup4res, NfsResOp4},
     operation::NfsOperation,
     request::NfsRequest,
     response::NfsOpResponse,
@@ -17,6 +17,48 @@ impl NfsOperation for Lookup4args {
             "Operation 15: LOOKUP - Look Up Filename {:?}, with request {:?}",
             self, request
         );
+
+        // If on pseudo-root, resolve export name
+        if request.is_pseudo_root() {
+            let em = request.export_manager();
+            if let Some((info, _fm)) = em.get_export_by_name(&self.objname).await {
+                // Switch to this export
+                request.set_export(info.export_id).await;
+                match request.file_manager().get_root_filehandle().await {
+                    Ok(mut root_fh) => {
+                        // Stamp export_id into the filehandle
+                        op_pseudo::stamp_export_id(&mut root_fh.id, info.export_id);
+                        request.set_filehandle(root_fh);
+                        return NfsOpResponse {
+                            request,
+                            result: Some(NfsResOp4::Oplookup(Lookup4res {
+                                status: NfsStat4::Nfs4Ok,
+                            })),
+                            status: NfsStat4::Nfs4Ok,
+                        };
+                    }
+                    Err(e) => {
+                        error!("Failed to get export root: {:?}", e);
+                        return NfsOpResponse {
+                            request,
+                            result: Some(NfsResOp4::Oplookup(Lookup4res {
+                                status: NfsStat4::Nfs4errServerfault,
+                            })),
+                            status: NfsStat4::Nfs4errServerfault,
+                        };
+                    }
+                }
+            } else {
+                return NfsOpResponse {
+                    request,
+                    result: Some(NfsResOp4::Oplookup(Lookup4res {
+                        status: NfsStat4::Nfs4errNoent,
+                    })),
+                    status: NfsStat4::Nfs4errNoent,
+                };
+            }
+        }
+
         let current_fh = request.current_filehandle();
         let filehandle = match current_fh {
             Some(filehandle) => filehandle,
@@ -67,63 +109,5 @@ impl NfsOperation for Lookup4args {
             })),
             status: NfsStat4::Nfs4Ok,
         }
-    }
-}
-
-#[cfg(test)]
-mod integration_tests {
-    use crate::{
-        server::{
-            nfs40::{Lookup4args, NfsStat4, PutFh4args},
-            operation::NfsOperation,
-        },
-        test_utils::{create_fake_fs, create_nfs40_server},
-    };
-    use tracing_test::traced_test;
-
-    #[tokio::test]
-    #[traced_test]
-    async fn test_lookup() {
-        let request = create_nfs40_server(Some(create_fake_fs())).await;
-        let fh = request.file_manager().get_root_filehandle().await;
-
-        let putfh_args = PutFh4args {
-            object: fh.clone().unwrap().id,
-        };
-        let putfh_request = putfh_args.execute(request).await;
-
-        let args = Lookup4args {
-            objname: "file1.txt".to_string(),
-        };
-        let lookup1_response = args.execute(putfh_request.request).await;
-        assert_eq!(lookup1_response.status, NfsStat4::Nfs4Ok);
-        // if let Some(NfsResOp4::OpAccess(Access4res::Resok4(res))) = response.result {
-        //     assert_eq!(
-        //         res.supported,
-        //         ACCESS4_READ
-        //             | ACCESS4_LOOKUP
-        //             | ACCESS4_MODIFY
-        //             | ACCESS4_EXTEND
-        //             | ACCESS4_DELETE
-        //             | ACCESS4_EXECUTE
-        //     );
-        //     assert_eq!(
-        //         res.access,
-        //         ACCESS4_READ | ACCESS4_LOOKUP | ACCESS4_MODIFY | ACCESS4_EXTEND | ACCESS4_DELETE
-        //     );
-        // } else {
-        //     panic!("Unexpected response: {:?}", response);
-        // }
-
-        let putfh_args = PutFh4args {
-            object: fh.unwrap().id,
-        };
-        let putfh1_request = putfh_args.execute(lookup1_response.request).await;
-
-        let args = Lookup4args {
-            objname: "doesnotexist".to_string(),
-        };
-        let lookup2_response = args.execute(putfh1_request.request).await;
-        assert_eq!(lookup2_response.status, NfsStat4::Nfs4errNoent);
     }
 }

@@ -36,25 +36,51 @@ use tracing::{debug, error};
 pub struct NFS40Server;
 
 impl NFS40Server {
+    /// PUTROOTFH — set current filehandle to the pseudo-root.
+    /// The pseudo-root presents exports as top-level directories.
     async fn put_root_filehandle<'a>(&self, mut request: NfsRequest<'a>) -> NfsOpResponse<'a> {
-        match request.file_manager().get_root_filehandle().await {
-            Ok(filehandle) => {
-                let _ = request.set_filehandle_id(filehandle.id).await;
-                NfsOpResponse {
-                    request,
-                    result: Some(NfsResOp4::Opputrootfh(PutRootFh4res {
+        let exports = request.export_manager().list_exports().await;
+
+        if exports.len() == 1 {
+            // Single export mode: PUTROOTFH goes directly to the export root
+            let export = &exports[0];
+            request.set_export(export.export_id).await;
+            match request.file_manager().get_root_filehandle().await {
+                Ok(filehandle) => {
+                    let _ = request.set_filehandle_id(filehandle.id).await;
+                    NfsOpResponse {
+                        request,
+                        result: Some(NfsResOp4::Opputrootfh(PutRootFh4res {
+                            status: NfsStat4::Nfs4Ok,
+                        })),
                         status: NfsStat4::Nfs4Ok,
-                    })),
-                    status: NfsStat4::Nfs4Ok,
+                    }
+                }
+                Err(e) => {
+                    error!("Err {:?}", e);
+                    NfsOpResponse {
+                        request,
+                        result: None,
+                        status: NfsStat4::Nfs4errServerfault,
+                    }
                 }
             }
-            Err(e) => {
-                error!("Err {:?}", e);
-                NfsOpResponse {
-                    request,
-                    result: None,
-                    status: NfsStat4::Nfs4errServerfault,
-                }
+        } else {
+            // Multi-export mode: PUTROOTFH sets pseudo-root
+            use super::filemanager::Filehandle;
+            let pseudo_fh_id = op_pseudo::pseudo_root_fh();
+            request.set_export(op_pseudo::PSEUDO_ROOT_EXPORT_ID).await;
+
+            // Create a synthetic Filehandle for the pseudo-root
+            let pseudo_fh = Filehandle::pseudo_root(pseudo_fh_id);
+            request.set_filehandle(pseudo_fh);
+
+            NfsOpResponse {
+                request,
+                result: Some(NfsResOp4::Opputrootfh(PutRootFh4res {
+                    status: NfsStat4::Nfs4Ok,
+                })),
+                status: NfsStat4::Nfs4Ok,
             }
         }
     }
@@ -126,6 +152,17 @@ impl NFS40Server {
     }
 
     async fn lookup_parent<'a>(&self, mut request: NfsRequest<'a>) -> NfsOpResponse<'a> {
+        // If on pseudo-root, LOOKUPP is not supported
+        if request.is_pseudo_root() {
+            return NfsOpResponse {
+                request,
+                result: Some(NfsResOp4::Oplookupp(LookupP4res {
+                    status: NfsStat4::Nfs4errNoent,
+                })),
+                status: NfsStat4::Nfs4errNoent,
+            };
+        }
+
         let current_fh = match request.current_filehandle() {
             Some(fh) => fh.clone(),
             None => {
@@ -139,7 +176,25 @@ impl NFS40Server {
             }
         };
 
-        // Get parent path
+        // If at export root ("/"), go up to pseudo-root
+        if current_fh.path == "/" {
+            let exports = request.export_manager().list_exports().await;
+            if exports.len() > 1 {
+                let pseudo_fh_id = op_pseudo::pseudo_root_fh();
+                request.set_export(op_pseudo::PSEUDO_ROOT_EXPORT_ID).await;
+                let pseudo_fh =
+                    super::filemanager::Filehandle::pseudo_root(pseudo_fh_id);
+                request.set_filehandle(pseudo_fh);
+                return NfsOpResponse {
+                    request,
+                    result: Some(NfsResOp4::Oplookupp(LookupP4res {
+                        status: NfsStat4::Nfs4Ok,
+                    })),
+                    status: NfsStat4::Nfs4Ok,
+                };
+            }
+        }
+
         let parent_path = current_fh.file.parent();
         let parent_str = parent_path.as_str().to_string();
         let parent_key = if parent_str.is_empty() {
