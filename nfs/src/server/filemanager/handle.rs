@@ -661,9 +661,13 @@ pub struct WriteCacheHandle {
 }
 
 impl WriteCacheHandle {
-    pub fn new(filehandle: Filehandle, filemanager: FileManagerHandle) -> Self {
+    pub fn new(
+        filehandle: Filehandle,
+        filemanager: FileManagerHandle,
+        real_path: std::path::PathBuf,
+    ) -> Self {
         let (sender, receiver) = mpsc::channel(256);
-        let write_cache = WriteCache::new(receiver, filehandle, filemanager);
+        let write_cache = WriteCache::new(receiver, filehandle, filemanager, real_path);
         tokio::spawn(run_file_write_cache(write_cache));
 
         Self { sender }

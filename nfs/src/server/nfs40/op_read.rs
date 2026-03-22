@@ -26,11 +26,16 @@ impl NfsOperation for Read4args {
             }
         };
 
-        let file_size = filehandle.attr_size;
-        let mut buffer: Vec<u8> = vec![0; self.count as usize];
-
+        // Use VFS open_file
         match filehandle.file.open_file() {
             Ok(mut rfile) => {
+                // Get actual file size from the open handle
+                let file_size = match rfile.seek(SeekFrom::End(0)) {
+                    Ok(size) => size,
+                    Err(_) => filehandle.attr_size,
+                };
+
+                // Seek to read position
                 if let Err(e) = rfile.seek(SeekFrom::Start(self.offset)) {
                     error!("seek failed: {:?}", e);
                     return NfsOpResponse {
@@ -39,6 +44,11 @@ impl NfsOperation for Read4args {
                         status: NfsStat4::Nfs4errIo,
                     };
                 }
+
+                // Allocate buffer — cap at remaining bytes to avoid oversized alloc
+                let remaining = file_size.saturating_sub(self.offset);
+                let read_size = (self.count as u64).min(remaining) as usize;
+                let mut buffer = vec![0u8; read_size];
 
                 let bytes_read = match rfile.read(&mut buffer) {
                     Ok(n) => n,

@@ -360,7 +360,8 @@ impl FileManager {
         if self.cachedb.contains_key(&filehandle.id) {
             self.cachedb.get(&filehandle.id).unwrap().clone()
         } else {
-            let handle = WriteCacheHandle::new(filehandle.clone(), filemanager);
+            let real_path = self.real_path(&filehandle.file);
+            let handle = WriteCacheHandle::new(filehandle.clone(), filemanager, real_path);
             filehandle.write_cache = Some(handle.clone());
             self.cachedb.insert(filehandle.id.clone(), handle.clone());
             self.update_filehandle(filehandle);

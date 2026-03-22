@@ -19,3 +19,7 @@
 - **feat:** Multi-arch Containerfile (x86_64-musl + aarch64-musl scratch container)
 - **feat:** Makefile with build-x86, build-arm64, container, push targets
 - **feat:** Build script (build.sh) for podman container builds
+- **perf:** Write cache rewritten — direct filesystem writes instead of in-memory buffer
+- **perf:** COMMIT now calls fsync() for real durability guarantees
+- **perf:** READ uses actual file size from seek(End) instead of cached attr
+- **perf:** READ buffer allocation capped to remaining file bytes
