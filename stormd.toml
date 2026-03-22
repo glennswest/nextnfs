@@ -17,11 +17,15 @@ cols = 120
 [[process]]
 name = "nfs"
 command = "/usr/bin/nextnfs"
-args = ["--export", "/export", "--listen", "0.0.0.0:2049"]
+args = ["serve", "--export", "/export", "--listen", "0.0.0.0:2049", "--api-listen", "0.0.0.0:8080"]
 env = { RUST_LOG = "info" }
 on_failure = "restart"
 on_exit = "restart"
 restart_delay_secs = 2
+
+[process.ui]
+label = "NextNFS"
+proxy = "http://127.0.0.1:8080"
 
 [process.liveness]
 type = "tcp"

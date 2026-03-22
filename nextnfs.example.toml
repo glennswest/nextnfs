@@ -1,6 +1,19 @@
 [server]
 listen = "0.0.0.0:2049"
+api_listen = "0.0.0.0:8080"
 
+# Legacy single-export (still works)
 [export]
 path = "/export"
 read_only = false
+
+# Multi-export (use [[exports]] for multiple shares)
+# [[exports]]
+# name = "data"
+# path = "/data"
+# read_only = false
+#
+# [[exports]]
+# name = "backup"
+# path = "/backup"
+# read_only = true
