@@ -10,13 +10,14 @@ mod filehandle;
 pub use filehandle::Filehandle;
 pub use filehandle::RealMeta;
 pub use handle::FileManagerHandle;
+pub use handle::{LockResult, TestLockResult, UnlockResult};
 mod caching;
 mod handle;
 mod locking;
 
 use filehandle::FilehandleDb;
 use handle::{FileManagerMessage, WriteCacheHandle};
-use locking::{LockingState, LockingStateDb};
+use locking::{LockType, LockingState, LockingStateDb};
 use tokio::sync::mpsc;
 use tracing::{debug, error};
 use vfs::VfsPath;
@@ -128,8 +129,37 @@ impl FileManager {
                     req.respond_to.send(None).unwrap();
                 }
             }
-            FileManagerMessage::LockFile() => todo!(),
-            FileManagerMessage::CloseFile() => todo!(),
+            FileManagerMessage::LockFile(req) => {
+                let result = self.handle_lock(
+                    &req.filehandle_id,
+                    req.client_id,
+                    req.owner,
+                    req.lock_type,
+                    req.offset,
+                    req.length,
+                );
+                req.respond_to.send(result).unwrap();
+            }
+            FileManagerMessage::UnlockFile(req) => {
+                let result = self.handle_unlock(&req.lock_stateid, req.offset, req.length);
+                req.respond_to.send(result).unwrap();
+            }
+            FileManagerMessage::TestLock(req) => {
+                let result = self.handle_test_lock(
+                    &req.filehandle_id,
+                    req.client_id,
+                    &req.owner,
+                    &req.lock_type,
+                    req.offset,
+                    req.length,
+                );
+                req.respond_to.send(result).unwrap();
+            }
+            FileManagerMessage::ReleaseLockOwner(req) => {
+                let result = self.handle_release_lock_owner(req.client_id, &req.owner);
+                req.respond_to.send(result).unwrap();
+            }
+            FileManagerMessage::CloseFile() => {},
             FileManagerMessage::RemoveFile(req) => {
                 let filehandle = self.get_filehandle_by_path(&req.path.as_str().to_string());
                 let mut parent_path = req.path.parent().as_str().to_string();
@@ -474,6 +504,128 @@ impl FileManager {
             }
         }
         Some((answer_attrs, attrs))
+    }
+
+    fn handle_lock(
+        &mut self,
+        filehandle_id: &NfsFh4,
+        client_id: u64,
+        owner: Vec<u8>,
+        lock_type: nextnfs_proto::nfs4_proto::NfsLockType4,
+        offset: u64,
+        length: u64,
+    ) -> LockResult {
+        // Check for conflicts against all existing byte-range locks on this file
+        let existing_locks: Vec<LockingState> = self
+            .lockdb
+            .get_by_filehandle_id(filehandle_id)
+            .into_iter()
+            .cloned()
+            .collect();
+
+        for lock in &existing_locks {
+            if lock.conflicts_with(offset, length, &lock_type, &owner, client_id) {
+                return LockResult::Denied {
+                    offset: lock.start.unwrap_or(0),
+                    length: lock.length.unwrap_or(0),
+                    lock_type: lock.nfs_lock_type.clone().unwrap_or(
+                        nextnfs_proto::nfs4_proto::NfsLockType4::ReadLt,
+                    ),
+                    owner_clientid: lock.client_id,
+                    owner: lock.owner.clone(),
+                };
+            }
+        }
+
+        // No conflict — grant the lock
+        let stateid = self.get_new_lockingstate_id();
+        let lock = LockingState::new_byte_range_lock(
+            filehandle_id.clone(),
+            stateid,
+            client_id,
+            owner,
+            lock_type,
+            offset,
+            length,
+        );
+        let seqid = lock.seqid;
+        self.lockdb.insert(lock);
+
+        LockResult::Ok(nextnfs_proto::nfs4_proto::Stateid4 {
+            seqid,
+            other: stateid,
+        })
+    }
+
+    fn handle_unlock(
+        &mut self,
+        lock_stateid: &[u8; 12],
+        _offset: u64,
+        _length: u64,
+    ) -> UnlockResult {
+        // Find the lock by stateid
+        let lock = self.lockdb.get_by_stateid(lock_stateid);
+        match lock {
+            Some(lock) => {
+                let new_seqid = lock.seqid + 1;
+                let stateid_copy = lock.stateid;
+                self.lockdb.remove_by_stateid(lock_stateid);
+                UnlockResult::Ok(nextnfs_proto::nfs4_proto::Stateid4 {
+                    seqid: new_seqid,
+                    other: stateid_copy,
+                })
+            }
+            None => UnlockResult::Error(NfsStat4::Nfs4errBadStateid),
+        }
+    }
+
+    fn handle_test_lock(
+        &self,
+        filehandle_id: &NfsFh4,
+        client_id: u64,
+        owner: &[u8],
+        lock_type: &nextnfs_proto::nfs4_proto::NfsLockType4,
+        offset: u64,
+        length: u64,
+    ) -> TestLockResult {
+        let existing_locks: Vec<&LockingState> = self
+            .lockdb
+            .get_by_filehandle_id(filehandle_id)
+            .into_iter()
+            .collect();
+
+        for lock in &existing_locks {
+            if lock.conflicts_with(offset, length, lock_type, owner, client_id) {
+                return TestLockResult::Denied {
+                    offset: lock.start.unwrap_or(0),
+                    length: lock.length.unwrap_or(0),
+                    lock_type: lock.nfs_lock_type.clone().unwrap_or(
+                        nextnfs_proto::nfs4_proto::NfsLockType4::ReadLt,
+                    ),
+                    owner_clientid: lock.client_id,
+                    owner: lock.owner.clone(),
+                };
+            }
+        }
+
+        TestLockResult::Ok
+    }
+
+    fn handle_release_lock_owner(&mut self, client_id: u64, owner: &[u8]) -> NfsStat4 {
+        // Remove all byte-range locks for this owner
+        let locks: Vec<LockingState> = self
+            .lockdb
+            .get_by_client_id(&client_id)
+            .into_iter()
+            .filter(|l| matches!(l.lock_type, LockType::ByteRange) && l.owner == owner)
+            .cloned()
+            .collect();
+
+        for lock in locks {
+            self.lockdb.remove_by_stateid(&lock.stateid);
+        }
+
+        NfsStat4::Nfs4Ok
     }
 
     pub fn attr_supported_attrs(&self) -> Attrlist4<FileAttr> {

@@ -1,4 +1,4 @@
-use nextnfs_proto::nfs4_proto::NfsFh4;
+use nextnfs_proto::nfs4_proto::{NfsFh4, NfsLockType4};
 use multi_index_map::MultiIndexMap;
 
 pub type LockingStateDb = MultiIndexLockingStateMap;
@@ -12,47 +12,22 @@ pub enum LockType {
 #[derive(MultiIndexMap, Debug, Clone)]
 #[multi_index_derive(Debug, Clone)]
 pub struct LockingState {
-    // https://datatracker.ietf.org/doc/html/rfc7530#section-9.1.4
-    // When the server grants a lock of any type (including opens,
-    // byte-range locks, and delegations), it responds with a unique stateid
-    // that represents a set of locks (often a single lock) for the same
-    // file, of the same type, and sharing the same ownership
-    // characteristics.
+    #[multi_index(hashed_unique)]
     pub stateid: [u8; 12],
     pub seqid: u32,
-    // clientid:
-    // The clientid of the client that created the open stateid.
     #[multi_index(hashed_non_unique)]
     pub client_id: u64,
-    // owner:
-    // The owner of the lock.
     #[multi_index(hashed_non_unique)]
     pub owner: Vec<u8>,
-    // lock_type:
-    // The type of lock being requested.
     pub lock_type: LockType,
-    // filehandle:
-    // The filehandle of the file on which the lock is being requested.
     #[multi_index(hashed_non_unique)]
     pub filehandle_id: NfsFh4,
-    // start:
-    // The starting offset of the lock. (byte-range locks only)
     pub start: Option<u64>,
-    // length:
-    // The length of the lock. (byte-range locks only)
     pub length: Option<u64>,
-    // https://datatracker.ietf.org/doc/html/rfc7530#section-9.9
-    // Share Reservations
-    // share_access:
-    // The access mode that is requested by the client for the share
-    // reservation.
-    // OPEN4_SHARE_ACCESS_READ | OPEN4_SHARE_ACCESS_WRITE | OPEN4_SHARE_ACCESS_BOTH
     pub share_access: Option<u32>,
-    // share_deny:
-    // The deny mode that is requested by the client for the share
-    // reservation.
-    // OPEN4_SHARE_DENY_NONE | OPEN4_SHARE_DENY_READ | OPEN4_SHARE_DENY_WRITE | OPEN4_SHARE_DENY_BOTH
     pub share_deny: Option<u32>,
+    /// For byte-range locks: read vs write
+    pub nfs_lock_type: Option<NfsLockType4>,
 }
 
 impl LockingState {
@@ -75,6 +50,83 @@ impl LockingState {
             length: None,
             share_access: Some(share_access),
             share_deny: Some(share_deny),
+            nfs_lock_type: None,
         }
+    }
+
+    pub fn new_byte_range_lock(
+        filehandle_id: NfsFh4,
+        stateid: [u8; 12],
+        client_id: u64,
+        owner: Vec<u8>,
+        lock_type: NfsLockType4,
+        offset: u64,
+        length: u64,
+    ) -> Self {
+        LockingState {
+            stateid,
+            seqid: 1,
+            client_id,
+            owner,
+            lock_type: LockType::ByteRange,
+            filehandle_id,
+            start: Some(offset),
+            length: Some(length),
+            share_access: None,
+            share_deny: None,
+            nfs_lock_type: Some(lock_type),
+        }
+    }
+
+    /// Check if this byte-range lock conflicts with a proposed lock.
+    /// Returns true if there IS a conflict.
+    pub fn conflicts_with(
+        &self,
+        offset: u64,
+        length: u64,
+        lock_type: &NfsLockType4,
+        owner: &[u8],
+        client_id: u64,
+    ) -> bool {
+        // Only byte-range locks can conflict
+        let (my_start, my_length) = match (&self.lock_type, self.start, self.length) {
+            (LockType::ByteRange, Some(s), Some(l)) => (s, l),
+            _ => return false,
+        };
+
+        // Same owner on same client — no conflict (lock upgrade/coalesce)
+        if self.client_id == client_id && self.owner == owner {
+            return false;
+        }
+
+        // Check range overlap
+        // NFS length 0 means "to end of file" (0xFFFFFFFFFFFFFFFF)
+        let my_end = if my_length == 0 {
+            u64::MAX
+        } else {
+            my_start.saturating_add(my_length)
+        };
+        let req_end = if length == 0 {
+            u64::MAX
+        } else {
+            offset.saturating_add(length)
+        };
+
+        if my_start >= req_end || offset >= my_end {
+            return false; // no overlap
+        }
+
+        // Overlapping ranges — read locks don't conflict with each other
+        let my_is_write = matches!(
+            self.nfs_lock_type,
+            Some(NfsLockType4::WriteLt) | Some(NfsLockType4::WritewLt)
+        );
+        let req_is_write = matches!(
+            lock_type,
+            NfsLockType4::WriteLt | NfsLockType4::WritewLt
+        );
+
+        // Conflict if either is a write lock
+        my_is_write || req_is_write
     }
 }

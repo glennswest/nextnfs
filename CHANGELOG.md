@@ -13,3 +13,6 @@
 - **feat:** CLI binary with clap (--export, --listen, --config)
 - **feat:** TOML config file support (server.listen, export.path, export.read_only)
 - **feat:** Symlink and hardlink support enabled
+- **feat:** NFSv4 byte-range locking (LOCK, LOCKT, LOCKU, RELEASE_LOCKOWNER)
+- **feat:** LINK operation for hard links
+- **feat:** Lock conflict detection with proper range overlap and read/write semantics

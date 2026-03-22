@@ -5,8 +5,8 @@ use vfs::VfsPath;
 use std::path::PathBuf;
 
 use nextnfs_proto::nfs4_proto::{
-    Attrlist4, FileAttr, FileAttrValue, NfsLease4, NfsStat4, ACL4_SUPPORT_ALLOW_ACL,
-    FH4_PERSISTENT,
+    Attrlist4, FileAttr, FileAttrValue, NfsLease4, NfsLockType4, NfsStat4, Stateid4,
+    ACL4_SUPPORT_ALLOW_ACL, FH4_PERSISTENT,
 };
 
 use super::{
@@ -23,7 +23,10 @@ pub enum FileManagerMessage {
     RemoveFile(RemoveFileRequest),
     TouchFile(TouchFileRequest),
     UpdateFilehandle(Filehandle),
-    LockFile(),
+    LockFile(LockFileRequest),
+    UnlockFile(UnlockFileRequest),
+    TestLock(TestLockRequest),
+    ReleaseLockOwner(ReleaseLockOwnerRequest),
     CloseFile(),
     GetWriteCacheHandle(WriteCacheHandleRequest),
     DropWriteCacheHandle(DropCacheHandleRequest),
@@ -72,6 +75,70 @@ pub struct WriteCacheHandleRequest {
 
 pub struct DropCacheHandleRequest {
     pub filehandle_id: NfsFh4,
+}
+
+pub struct LockFileRequest {
+    pub filehandle_id: NfsFh4,
+    pub client_id: u64,
+    pub owner: Vec<u8>,
+    pub lock_type: NfsLockType4,
+    pub offset: u64,
+    pub length: u64,
+    pub respond_to: oneshot::Sender<LockResult>,
+}
+
+pub struct UnlockFileRequest {
+    pub lock_stateid: [u8; 12],
+    pub offset: u64,
+    pub length: u64,
+    pub respond_to: oneshot::Sender<UnlockResult>,
+}
+
+pub struct TestLockRequest {
+    pub filehandle_id: NfsFh4,
+    pub client_id: u64,
+    pub owner: Vec<u8>,
+    pub lock_type: NfsLockType4,
+    pub offset: u64,
+    pub length: u64,
+    pub respond_to: oneshot::Sender<TestLockResult>,
+}
+
+pub struct ReleaseLockOwnerRequest {
+    pub client_id: u64,
+    pub owner: Vec<u8>,
+    pub respond_to: oneshot::Sender<NfsStat4>,
+}
+
+#[derive(Debug)]
+pub enum LockResult {
+    Ok(Stateid4),
+    Denied {
+        offset: u64,
+        length: u64,
+        lock_type: NfsLockType4,
+        owner_clientid: u64,
+        owner: Vec<u8>,
+    },
+    Error(NfsStat4),
+}
+
+#[derive(Debug)]
+pub enum UnlockResult {
+    Ok(Stateid4),
+    Error(NfsStat4),
+}
+
+#[derive(Debug)]
+pub enum TestLockResult {
+    Ok,
+    Denied {
+        offset: u64,
+        length: u64,
+        lock_type: NfsLockType4,
+        owner_clientid: u64,
+        owner: Vec<u8>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -298,6 +365,92 @@ impl FileManagerHandle {
             ))
             .await
             .unwrap();
+    }
+
+    pub async fn lock_file(
+        &self,
+        filehandle_id: NfsFh4,
+        client_id: u64,
+        owner: Vec<u8>,
+        lock_type: NfsLockType4,
+        offset: u64,
+        length: u64,
+    ) -> LockResult {
+        let (tx, rx) = oneshot::channel();
+        let req = LockFileRequest {
+            filehandle_id,
+            client_id,
+            owner,
+            lock_type,
+            offset,
+            length,
+            respond_to: tx,
+        };
+        self.sender
+            .send(FileManagerMessage::LockFile(req))
+            .await
+            .unwrap();
+        rx.await.unwrap()
+    }
+
+    pub async fn unlock_file(
+        &self,
+        lock_stateid: [u8; 12],
+        offset: u64,
+        length: u64,
+    ) -> UnlockResult {
+        let (tx, rx) = oneshot::channel();
+        let req = UnlockFileRequest {
+            lock_stateid,
+            offset,
+            length,
+            respond_to: tx,
+        };
+        self.sender
+            .send(FileManagerMessage::UnlockFile(req))
+            .await
+            .unwrap();
+        rx.await.unwrap()
+    }
+
+    pub async fn test_lock(
+        &self,
+        filehandle_id: NfsFh4,
+        client_id: u64,
+        owner: Vec<u8>,
+        lock_type: NfsLockType4,
+        offset: u64,
+        length: u64,
+    ) -> TestLockResult {
+        let (tx, rx) = oneshot::channel();
+        let req = TestLockRequest {
+            filehandle_id,
+            client_id,
+            owner,
+            lock_type,
+            offset,
+            length,
+            respond_to: tx,
+        };
+        self.sender
+            .send(FileManagerMessage::TestLock(req))
+            .await
+            .unwrap();
+        rx.await.unwrap()
+    }
+
+    pub async fn release_lock_owner(&self, client_id: u64, owner: Vec<u8>) -> NfsStat4 {
+        let (tx, rx) = oneshot::channel();
+        let req = ReleaseLockOwnerRequest {
+            client_id,
+            owner,
+            respond_to: tx,
+        };
+        self.sender
+            .send(FileManagerMessage::ReleaseLockOwner(req))
+            .await
+            .unwrap();
+        rx.await.unwrap()
     }
 
     pub fn filehandle_attrs(

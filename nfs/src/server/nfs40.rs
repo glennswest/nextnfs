@@ -8,6 +8,10 @@ mod op_close;
 mod op_commit;
 mod op_create;
 mod op_getattr;
+mod op_link;
+mod op_lock;
+mod op_lockt;
+mod op_locku;
 mod op_lookup;
 mod op_open;
 mod op_openconfirm;
@@ -15,6 +19,7 @@ mod op_putfh;
 mod op_read;
 mod op_readdir;
 mod op_readlink;
+mod op_release_lockowner;
 mod op_remove;
 mod op_rename;
 mod op_renew;
@@ -275,11 +280,12 @@ impl NfsProtoImpl for NFS40Server {
                         NfsArgOp::Opdelegpurge(_) => self.operation_not_supported(request),
                         NfsArgOp::Opdelegreturn(_) => self.operation_not_supported(request),
 
-                        // locking (not yet supported)
-                        NfsArgOp::Oplink(_) => self.operation_not_supported(request),
-                        NfsArgOp::Oplock(_) => self.operation_not_supported(request),
-                        NfsArgOp::Oplockt(_) => self.operation_not_supported(request),
-                        NfsArgOp::Oplocku(_) => self.operation_not_supported(request),
+                        // locking
+                        NfsArgOp::Oplink(args) => args.execute(request).await,
+                        NfsArgOp::Oplock(args) => args.execute(request).await,
+                        NfsArgOp::Oplockt(args) => args.execute(request).await,
+                        NfsArgOp::Oplocku(args) => args.execute(request).await,
+                        NfsArgOp::OpreleaseLockOwner(args) => args.execute(request).await,
 
                         // misc not yet supported
                         NfsArgOp::Opnverify(_) => self.operation_not_supported(request),
@@ -287,7 +293,6 @@ impl NfsProtoImpl for NFS40Server {
                         NfsArgOp::OpopenDowngrade(_) => self.operation_not_supported(request),
                         NfsArgOp::OpSecinfo(_) => self.operation_not_supported(request),
                         NfsArgOp::Opverify(_) => self.operation_not_supported(request),
-                        NfsArgOp::OpreleaseLockOwner(_) => self.operation_not_supported(request),
                     };
                     let res = response.result;
                     last_status = response.status;

@@ -465,9 +465,9 @@ pub struct OpenOwner4 {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct LockOwner4 {
-    clientid: Clientid4,
+    pub clientid: Clientid4,
     #[serde(with = "serde_bytes")]
-    owner: Vec<u8>,
+    pub owner: Vec<u8>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -747,12 +747,12 @@ pub enum GetFh4res {
 pub struct Link4args {
     /* SAVED_FH: source object */
     /* CURRENT_FH: target directory */
-    newname: Component4,
+    pub newname: Component4,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Link4resok {
-    cinfo: ChangeInfo4,
+    pub cinfo: ChangeInfo4,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -766,10 +766,10 @@ pub enum Link4res {
  */
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct OpenToLockOwner4 {
-    open_seqid: Seqid4,
-    open_stateid: Stateid4,
-    lock_seqid: Seqid4,
-    lock_owner: LockOwner4,
+    pub open_seqid: Seqid4,
+    pub open_stateid: Stateid4,
+    pub lock_seqid: Seqid4,
+    pub lock_owner: LockOwner4,
 }
 
 /*
@@ -777,8 +777,8 @@ pub struct OpenToLockOwner4 {
  */
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ExistLockOwner4 {
-    lock_stateid: Stateid4,
-    lock_seqid: Seqid4,
+    pub lock_stateid: Stateid4,
+    pub lock_seqid: Seqid4,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -794,24 +794,24 @@ pub enum Locker4 {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Lock4args {
     /* CURRENT_FH: file */
-    locktype: NfsLockType4,
-    reclaim: bool,
-    offset: Offset4,
-    length: Length4,
-    locker: Locker4,
+    pub locktype: NfsLockType4,
+    pub reclaim: bool,
+    pub offset: Offset4,
+    pub length: Length4,
+    pub locker: Locker4,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Lock4denied {
-    offset: Offset4,
-    length: Length4,
-    locktype: NfsLockType4,
-    owner: LockOwner4,
+    pub offset: Offset4,
+    pub length: Length4,
+    pub locktype: NfsLockType4,
+    pub owner: LockOwner4,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Lock4resok {
-    lock_stateid: Stateid4,
+    pub lock_stateid: Stateid4,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -824,10 +824,10 @@ pub enum Lock4res {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Lockt4args {
     /* CURRENT_FH: file */
-    locktype: NfsLockType4,
-    offset: Offset4,
-    length: Length4,
-    owner: LockOwner4,
+    pub locktype: NfsLockType4,
+    pub offset: Offset4,
+    pub length: Length4,
+    pub owner: LockOwner4,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -839,11 +839,11 @@ pub enum Lockt4res {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Locku4args {
     /* CURRENT_FH: file */
-    locktype: NfsLockType4,
-    seqid: Seqid4,
-    lock_stateid: Stateid4,
-    offset: Offset4,
-    length: Length4,
+    pub locktype: NfsLockType4,
+    pub seqid: Seqid4,
+    pub lock_stateid: Stateid4,
+    pub offset: Offset4,
+    pub length: Length4,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1431,12 +1431,12 @@ pub enum Write4res {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ReleaseLockowner4args {
-    lock_owner: LockOwner4,
+    pub lock_owner: LockOwner4,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ReleaseLockowner4res {
-    status: NfsStat4,
+    pub status: NfsStat4,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
