@@ -1,0 +1,10 @@
+# Cross-compilation settings for Linux musl targets
+# These are used when building on the Linux build host (devx.gw.lo)
+# or inside the multi-stage container build.
+# macOS local development uses native aarch64-apple-darwin.
+
+[target.x86_64-unknown-linux-musl]
+linker = "x86_64-linux-musl-gcc"
+
+[target.aarch64-unknown-linux-musl]
+linker = "aarch64-linux-musl-gcc"
