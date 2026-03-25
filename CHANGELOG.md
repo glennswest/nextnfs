@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [v0.4.0] — 2026-03-25
+
 ### Added
 - Unit tests for CLOSE (2 tests: no filehandle, successful close with stateid)
 - Unit tests for SETATTR (2 tests: no filehandle, empty attributes)
@@ -16,6 +18,7 @@
 - Unit tests for RELEASE_LOCKOWNER (1 test: no locks)
 - Unit tests for pseudo-fs (6 tests: fh structure, is_pseudo_root, export_id, stamp, getattr type/multiple)
 - Unit tests for PUTFH (2 tests: pseudo root, invalid handle)
+- All 18 op_*.rs files now have test modules — 100% operation coverage
 - Make Commit4args and OpenConfirm4args fields public for testability
 
 ### Fixed
