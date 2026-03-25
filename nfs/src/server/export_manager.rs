@@ -312,3 +312,149 @@ impl ExportManagerHandle {
         rx.await.ok().flatten()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_list_exports_empty() {
+        let em = ExportManagerHandle::new();
+        let exports = em.list_exports().await;
+        assert!(exports.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_add_export_real_dir() {
+        let em = ExportManagerHandle::new();
+        // /tmp exists on all platforms
+        let result = em
+            .add_export("tmpdir".to_string(), PathBuf::from("/tmp"), false)
+            .await;
+        assert!(result.is_ok());
+        let info = result.unwrap();
+        assert_eq!(info.name, "tmpdir");
+        assert_eq!(info.export_id, 1);
+        assert!(!info.read_only);
+    }
+
+    #[tokio::test]
+    async fn test_add_export_nonexistent_path() {
+        let em = ExportManagerHandle::new();
+        let result = em
+            .add_export(
+                "bad".to_string(),
+                PathBuf::from("/nonexistent_path_abc123"),
+                false,
+            )
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_add_duplicate_export() {
+        let em = ExportManagerHandle::new();
+        let r1 = em
+            .add_export("dup".to_string(), PathBuf::from("/tmp"), false)
+            .await;
+        assert!(r1.is_ok());
+        let r2 = em
+            .add_export("dup".to_string(), PathBuf::from("/tmp"), false)
+            .await;
+        assert!(r2.is_err());
+        assert!(r2.unwrap_err().contains("already exists"));
+    }
+
+    #[tokio::test]
+    async fn test_remove_export() {
+        let em = ExportManagerHandle::new();
+        em.add_export("removeme".to_string(), PathBuf::from("/tmp"), false)
+            .await
+            .unwrap();
+        let result = em.remove_export("removeme").await;
+        assert!(result.is_ok());
+        // Should be gone
+        let exports = em.list_exports().await;
+        assert!(exports.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_remove_nonexistent_export() {
+        let em = ExportManagerHandle::new();
+        let result = em.remove_export("nosuch").await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn test_get_export_by_id() {
+        let em = ExportManagerHandle::new();
+        let info = em
+            .add_export("byid".to_string(), PathBuf::from("/tmp"), true)
+            .await
+            .unwrap();
+        let result = em.get_export_by_id(info.export_id).await;
+        assert!(result.is_some());
+        let (found_info, _fm) = result.unwrap();
+        assert_eq!(found_info.name, "byid");
+        assert!(found_info.read_only);
+    }
+
+    #[tokio::test]
+    async fn test_get_export_by_id_not_found() {
+        let em = ExportManagerHandle::new();
+        let result = em.get_export_by_id(99).await;
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_get_export_by_name() {
+        let em = ExportManagerHandle::new();
+        em.add_export("named".to_string(), PathBuf::from("/tmp"), false)
+            .await
+            .unwrap();
+        let result = em.get_export_by_name("named").await;
+        assert!(result.is_some());
+        let (info, _fm) = result.unwrap();
+        assert_eq!(info.name, "named");
+    }
+
+    #[tokio::test]
+    async fn test_get_export_by_name_not_found() {
+        let em = ExportManagerHandle::new();
+        let result = em.get_export_by_name("nosuch").await;
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_multiple_exports_sequential_ids() {
+        let em = ExportManagerHandle::new();
+        let r1 = em
+            .add_export("e1".to_string(), PathBuf::from("/tmp"), false)
+            .await
+            .unwrap();
+        let r2 = em
+            .add_export("e2".to_string(), PathBuf::from("/tmp"), false)
+            .await
+            .unwrap();
+        assert_eq!(r1.export_id, 1);
+        assert_eq!(r2.export_id, 2);
+        let exports = em.list_exports().await;
+        assert_eq!(exports.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_export_stats_initial_zero() {
+        let em = ExportManagerHandle::new();
+        let info = em
+            .add_export("stats".to_string(), PathBuf::from("/tmp"), false)
+            .await
+            .unwrap();
+        let snap = info.stats.snapshot();
+        assert_eq!(snap.reads, 0);
+        assert_eq!(snap.writes, 0);
+        assert_eq!(snap.bytes_read, 0);
+        assert_eq!(snap.bytes_written, 0);
+        assert_eq!(snap.ops, 0);
+    }
+}

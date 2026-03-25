@@ -98,3 +98,115 @@ where
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::*;
+    use nfs40::NFS40Server;
+    use nextnfs_proto::nfs4_proto::*;
+    use nextnfs_proto::rpc_proto::*;
+
+    fn make_rpc_call(proc: u32) -> RpcCallMsg {
+        RpcCallMsg {
+            xid: 42,
+            body: MsgType::Call(CallBody {
+                rpcvers: 2,
+                prog: 100003,
+                vers: 4,
+                proc,
+                cred: OpaqueAuth::AuthNull(vec![]),
+                verf: OpaqueAuth::AuthNull(vec![]),
+                args: Some(Compound4args {
+                    tag: "test".to_string(),
+                    minor_version: 0,
+                    argarray: vec![],
+                }),
+            }),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_rpc_null_procedure() {
+        let service = NFSService::new(NFS40Server::new());
+        let request = create_nfs40_server(None).await;
+        let msg = make_rpc_call(0);
+        let reply = service.call(msg, request).await;
+        assert_eq!(reply.xid, 42);
+        match reply.body {
+            MsgType::Reply(ReplyBody::MsgAccepted(accepted)) => {
+                match accepted.reply_data {
+                    AcceptBody::Success(_) => {} // NULL returns success
+                    _ => panic!("Expected Success for NULL"),
+                }
+            }
+            _ => panic!("Expected MsgAccepted"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_rpc_compound_procedure() {
+        let service = NFSService::new(NFS40Server::new());
+        let request = create_nfs40_server(None).await;
+        let msg = make_rpc_call(1);
+        let reply = service.call(msg, request).await;
+        assert_eq!(reply.xid, 42);
+        match reply.body {
+            MsgType::Reply(ReplyBody::MsgAccepted(accepted)) => {
+                match accepted.reply_data {
+                    AcceptBody::Success(_) => {}
+                    _ => panic!("Expected Success for COMPOUND"),
+                }
+            }
+            _ => panic!("Expected MsgAccepted"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_rpc_proc_unavail() {
+        let service = NFSService::new(NFS40Server::new());
+        let request = create_nfs40_server(None).await;
+        let msg = make_rpc_call(99);
+        let reply = service.call(msg, request).await;
+        assert_eq!(reply.xid, 42);
+        match reply.body {
+            MsgType::Reply(ReplyBody::MsgAccepted(accepted)) => {
+                assert!(matches!(accepted.reply_data, AcceptBody::ProcUnavail));
+            }
+            _ => panic!("Expected MsgAccepted"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_rpc_garbage_args_non_call() {
+        let service = NFSService::new(NFS40Server::new());
+        let request = create_nfs40_server(None).await;
+        let msg = RpcCallMsg {
+            xid: 99,
+            body: MsgType::Reply(ReplyBody::MsgAccepted(AcceptedReply {
+                verf: OpaqueAuth::AuthNull(vec![]),
+                reply_data: AcceptBody::GarbageArgs,
+            })),
+        };
+        let reply = service.call(msg, request).await;
+        assert_eq!(reply.xid, 99);
+        match reply.body {
+            MsgType::Reply(ReplyBody::MsgAccepted(accepted)) => {
+                assert!(matches!(accepted.reply_data, AcceptBody::GarbageArgs));
+            }
+            _ => panic!("Expected MsgAccepted"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_rpc_xid_preserved() {
+        let service = NFSService::new(NFS40Server::new());
+        for xid in [0, 1, 0xDEADBEEF, u32::MAX] {
+            let request = create_nfs40_server(None).await;
+            let mut msg = make_rpc_call(0);
+            msg.xid = xid;
+            let reply = service.call(msg, request).await;
+            assert_eq!(reply.xid, xid);
+        }
+    }
+}

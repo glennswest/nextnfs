@@ -226,3 +226,108 @@ impl<'a> NfsRequest<'a> {
 
     pub async fn close(&self) {}
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::*;
+
+    #[tokio::test]
+    async fn test_request_no_filehandle_initially() {
+        let request = create_nfs40_server(None).await;
+        assert!(request.current_filehandle().is_none());
+        assert!(request.current_filehandle_id().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_request_no_saved_filehandle_initially() {
+        let request = create_nfs40_server(None).await;
+        assert!(request.saved_filehandle().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_request_save_restore_filehandle() {
+        let mut request = create_nfs40_server_with_root_fh(None).await;
+        let fh_id = request.current_filehandle_id().unwrap();
+
+        // Save
+        request.save_filehandle();
+        assert!(request.saved_filehandle().is_some());
+
+        // Clear current
+        request.unset_filehandle();
+        assert!(request.current_filehandle().is_none());
+
+        // Restore
+        assert!(request.restore_filehandle());
+        assert_eq!(request.current_filehandle_id().unwrap(), fh_id);
+    }
+
+    #[tokio::test]
+    async fn test_request_restore_without_save() {
+        let mut request = create_nfs40_server(None).await;
+        assert!(!request.restore_filehandle());
+    }
+
+    #[tokio::test]
+    async fn test_request_unset_filehandle() {
+        let mut request = create_nfs40_server_with_root_fh(None).await;
+        assert!(request.current_filehandle().is_some());
+        request.unset_filehandle();
+        assert!(request.current_filehandle().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_request_client_addr() {
+        let request = create_nfs40_server(None).await;
+        assert_eq!(request.client_addr(), "127.0.0.1:12345");
+    }
+
+    #[tokio::test]
+    async fn test_request_no_export_id_initially() {
+        let request = create_nfs40_server(None).await;
+        assert!(request.current_export_id().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_request_is_not_pseudo_root_initially() {
+        let request = create_nfs40_server(None).await;
+        assert!(!request.is_pseudo_root());
+    }
+
+    #[tokio::test]
+    async fn test_set_filehandle_id_bad_id() {
+        let mut request = create_nfs40_server(None).await;
+        let bad_id: NfsFh4 = [0xCC; 26];
+        let result = request.set_filehandle_id(bad_id).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_request_boot_time_set() {
+        let request = create_nfs40_server(None).await;
+        assert!(request.boot_time > 0);
+    }
+
+    #[tokio::test]
+    async fn test_request_time_set() {
+        let request = create_nfs40_server(None).await;
+        assert!(request.request_time > 0);
+    }
+
+    #[tokio::test]
+    async fn test_request_close_no_panic() {
+        let request = create_nfs40_server(None).await;
+        request.close().await;
+    }
+
+    #[tokio::test]
+    async fn test_set_filehandle_with_export() {
+        let mut request = create_nfs40_server_with_root_fh(None).await;
+        let fh = request.current_filehandle().unwrap().clone();
+        request.unset_filehandle();
+        request.set_filehandle_with_export(fh.clone());
+        assert!(request.current_filehandle().is_some());
+        assert!(request.current_export_id().is_some());
+    }
+}
