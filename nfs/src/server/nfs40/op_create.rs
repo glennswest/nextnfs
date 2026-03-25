@@ -29,7 +29,7 @@ impl NfsOperation for Create4args {
             }
         };
 
-        if self.objname.len() == 0 {
+        if self.objname.is_empty() {
             // If the objname is of zero length, NFS4ERR_INVAL will be returned.
             // The objname is also subject to the normal UTF-8, character support,
             // and name checks.  See Section 12.7 for further discussion.

@@ -31,14 +31,14 @@ impl NfsOperation for SetAttr4args {
                 let attrsset = if !self.obj_attributes.attrmask.is_empty() {
                     let attrsset = request
                         .file_manager()
-                        .set_attr(&filehandle, &self.obj_attributes.attr_vals);
+                        .set_attr(filehandle, &self.obj_attributes.attr_vals);
 
                     request
                         .file_manager()
-                        .touch_file(filehandle.id.clone())
+                        .touch_file(filehandle.id)
                         .await;
 
-                    match request.set_filehandle_id(filehandle.id.clone()).await {
+                    match request.set_filehandle_id(filehandle.id).await {
                         Ok(fh) => {
                             request.cache_filehandle(fh);
                         }

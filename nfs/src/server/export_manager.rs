@@ -63,7 +63,7 @@ pub struct ExportInfo {
 /// Full export state including the FileManagerHandle.
 struct ExportState {
     pub info: ExportInfo,
-    pub vfs_root: VfsPath,
+    pub _vfs_root: VfsPath,
     pub file_manager: FileManagerHandle,
 }
 
@@ -190,7 +190,7 @@ impl ExportManager {
 
         let state = ExportState {
             info: info.clone(),
-            vfs_root,
+            _vfs_root: vfs_root,
             file_manager,
         };
 
@@ -222,6 +222,12 @@ async fn run_export_manager(mut actor: ExportManager) {
 #[derive(Debug, Clone)]
 pub struct ExportManagerHandle {
     sender: mpsc::Sender<ExportManagerMessage>,
+}
+
+impl Default for ExportManagerHandle {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ExportManagerHandle {

@@ -18,7 +18,7 @@ impl NfsOperation for PutFh4args {
         if op_pseudo::is_pseudo_root(&self.object) {
             request.set_export(op_pseudo::PSEUDO_ROOT_EXPORT_ID).await;
             let pseudo_fh =
-                crate::server::filemanager::Filehandle::pseudo_root(self.object.clone());
+                crate::server::filemanager::Filehandle::pseudo_root(self.object);
             request.set_filehandle(pseudo_fh);
             return NfsOpResponse {
                 request,
@@ -35,21 +35,18 @@ impl NfsOperation for PutFh4args {
             request.set_export(export_id).await;
         }
 
-        match request.get_filehandle_from_cache(self.object.clone()) {
-            Some(fh) => {
-                request.set_filehandle(fh);
-                return NfsOpResponse {
-                    request,
-                    result: Some(NfsResOp4::Opputfh(PutFh4res {
-                        status: NfsStat4::Nfs4Ok,
-                    })),
+        if let Some(fh) = request.get_filehandle_from_cache(self.object) {
+            request.set_filehandle(fh);
+            return NfsOpResponse {
+                request,
+                result: Some(NfsResOp4::Opputfh(PutFh4res {
                     status: NfsStat4::Nfs4Ok,
-                };
-            }
-            None => {}
+                })),
+                status: NfsStat4::Nfs4Ok,
+            };
         }
 
-        match request.set_filehandle_id(self.object.clone()).await {
+        match request.set_filehandle_id(self.object).await {
             Ok(fh) => {
                 request.cache_filehandle(fh);
                 return NfsOpResponse {

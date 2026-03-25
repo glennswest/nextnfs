@@ -175,6 +175,12 @@ pub struct ServerBuilder {
     export_manager: Option<ExportManagerHandle>,
 }
 
+impl Default for ServerBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ServerBuilder {
     pub fn new() -> Self {
         ServerBuilder {

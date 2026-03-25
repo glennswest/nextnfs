@@ -77,8 +77,8 @@ impl FileManager {
                 req.respond_to.send(fh).unwrap();
             }
             FileManagerMessage::GetFilehandle(req) => {
-                if req.filehandle.is_some() {
-                    let fh = self.get_filehandle_by_id(&req.filehandle.unwrap());
+                if let Some(fh_id) = req.filehandle {
+                    let fh = self.get_filehandle_by_id(&fh_id);
                     match fh {
                         Some(fh_wo_locks) => {
                             let fh = self.attach_locks(fh_wo_locks);
@@ -115,7 +115,7 @@ impl FileManager {
                 if let Some(mut fh) = fh {
                     let stateid = self.get_new_lockingstate_id();
                     let lock = LockingState::new_shared_reservation(
-                        fh.id.clone(),
+                        fh.id,
                         stateid,
                         req.client_id,
                         req.owner,
@@ -222,7 +222,7 @@ impl FileManager {
         let fh = if let Some(meta) = RealMeta::from_path(&real_path) {
             Filehandle::new_real(
                 filehandle.file.clone(),
-                filehandle.id.clone(),
+                filehandle.id,
                 self.fsid,
                 self.fsid,
                 filehandle.version,
@@ -231,7 +231,7 @@ impl FileManager {
         } else {
             Filehandle::new(
                 filehandle.file.clone(),
-                filehandle.id.clone(),
+                filehandle.id,
                 self.fsid,
                 self.fsid,
                 filehandle.version,
@@ -363,7 +363,7 @@ impl FileManager {
             let real_path = self.real_path(&filehandle.file);
             let handle = WriteCacheHandle::new(filehandle.clone(), filemanager, real_path);
             filehandle.write_cache = Some(handle.clone());
-            self.cachedb.insert(filehandle.id.clone(), handle.clone());
+            self.cachedb.insert(filehandle.id, handle.clone());
             self.update_filehandle(filehandle);
             handle
         }
@@ -395,7 +395,7 @@ impl FileManager {
                 if let Some(meta) = RealMeta::from_path(&real_path) {
                     let refreshed = Filehandle::new_real(
                         old_fh.file.clone(),
-                        old_fh.id.clone(),
+                        old_fh.id,
                         self.fsid,
                         self.fsid,
                         old_fh.version,
@@ -541,7 +541,7 @@ impl FileManager {
         // No conflict — grant the lock
         let stateid = self.get_new_lockingstate_id();
         let lock = LockingState::new_byte_range_lock(
-            filehandle_id.clone(),
+            *filehandle_id,
             stateid,
             client_id,
             owner,

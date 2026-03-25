@@ -95,11 +95,11 @@ impl NfsOperation for Rename4args {
                 // Touch both parent directories
                 request
                     .file_manager()
-                    .touch_file(saved_fh.id.clone())
+                    .touch_file(saved_fh.id)
                     .await;
                 request
                     .file_manager()
-                    .touch_file(current_fh.id.clone())
+                    .touch_file(current_fh.id)
                     .await;
 
                 let change = ChangeInfo4 {

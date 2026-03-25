@@ -145,11 +145,7 @@ impl NfsOperation for Readdir4args {
                     attrmask: answer_attrs,
                     attr_vals: attrs,
                 },
-                nextentry: if tnextentry.is_some() {
-                    Some(Box::new(tnextentry.unwrap()))
-                } else {
-                    None
-                },
+                nextentry: tnextentry.map(Box::new),
             };
             added_entries += 1;
             tnextentry = Some(entry);

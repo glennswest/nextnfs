@@ -14,7 +14,7 @@ pub struct WriteCache {
     pub filehandle: Filehandle,
     pub receiver: mpsc::Receiver<WriteCacheMessage>,
     pub filemanager: FileManagerHandle,
-    pub real_path: std::path::PathBuf,
+    pub _real_path: std::path::PathBuf,
 }
 
 impl WriteCache {
@@ -28,6 +28,7 @@ impl WriteCache {
         let file = OpenOptions::new()
             .write(true)
             .create(true)
+            .truncate(false)
             .mode(0o644)
             .open(&real_path);
 
@@ -42,7 +43,7 @@ impl WriteCache {
             filehandle,
             receiver,
             filemanager,
-            real_path,
+            _real_path: real_path,
         }
     }
 
@@ -78,11 +79,11 @@ impl WriteCache {
                     }
                     self.dirty = false;
                     self.filemanager
-                        .touch_file(self.filehandle.id.clone())
+                        .touch_file(self.filehandle.id)
                         .await;
                 }
                 self.filemanager
-                    .drop_write_cache_handle(self.filehandle.id.clone())
+                    .drop_write_cache_handle(self.filehandle.id)
                     .await;
             }
         }

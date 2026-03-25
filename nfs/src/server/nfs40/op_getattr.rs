@@ -51,7 +51,7 @@ impl NfsOperation for Getattr4args {
             Some(filehandle) => {
                 let resp = request
                     .file_manager()
-                    .filehandle_attrs(&self.attr_request, &filehandle);
+                    .filehandle_attrs(&self.attr_request, filehandle);
 
                 let (answer_attrs, attrs) = match resp {
                     Some(inner) => inner,

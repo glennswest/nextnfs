@@ -43,10 +43,10 @@ impl NfsOperation for Commit4args {
 
         request
             .file_manager()
-            .touch_file(filehandle.id.clone())
+            .touch_file(filehandle.id)
             .await;
 
-        request.drop_filehandle_from_cache(filehandle.id.clone());
+        request.drop_filehandle_from_cache(filehandle.id);
         let boot_time = request.boot_time;
         NfsOpResponse {
             request,

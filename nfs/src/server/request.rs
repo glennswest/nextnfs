@@ -79,17 +79,11 @@ impl<'a> NfsRequest<'a> {
     }
 
     pub fn current_filehandle_id(&self) -> Option<NfsFh4> {
-        match self.filehandle {
-            Some(ref fh) => Some(fh.id.clone()),
-            None => None,
-        }
+        self.filehandle.as_ref().map(|fh| fh.id)
     }
 
     pub fn current_filehandle(&self) -> Option<&Filehandle> {
-        match self.filehandle {
-            Some(ref fh) => Some(fh),
-            None => None,
-        }
+        self.filehandle.as_ref()
     }
 
     pub fn client_manager(&self) -> ClientManagerHandle {
@@ -144,23 +138,15 @@ impl<'a> NfsRequest<'a> {
     }
 
     pub fn cache_filehandle(&mut self, filehandle: Filehandle) {
-        let cache = self.filehandle_cache.as_mut();
-        match cache {
-            None => return,
-            Some(cache) => {
-                let now: SystemTime = SystemTime::now();
-                cache.insert(filehandle.id.clone(), (now, filehandle));
-            }
+        if let Some(cache) = self.filehandle_cache.as_mut() {
+            let now: SystemTime = SystemTime::now();
+            cache.insert(filehandle.id, (now, filehandle));
         }
     }
 
     pub fn drop_filehandle_from_cache(&mut self, filehandle_id: NfsFh4) {
-        let cache = self.filehandle_cache.as_mut();
-        match cache {
-            None => return,
-            Some(cache) => {
-                cache.remove(&filehandle_id);
-            }
+        if let Some(cache) = self.filehandle_cache.as_mut() {
+            cache.remove(&filehandle_id);
         }
     }
 
@@ -174,7 +160,7 @@ impl<'a> NfsRequest<'a> {
                         let now: SystemTime = SystemTime::now();
                         let (time, filehandle) = fh;
                         if now.duration_since(*time).unwrap().as_secs() > self.cache_ttl {
-                            self.drop_filehandle_from_cache(filehandle.id.clone());
+                            self.drop_filehandle_from_cache(filehandle.id);
                             None
                         } else {
                             Some(filehandle.clone())

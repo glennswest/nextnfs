@@ -46,7 +46,7 @@ impl NfsOperation for Write4args {
                         .get_write_cache_handle(filehandle.clone())
                         .await
                         .unwrap();
-                    request.drop_filehandle_from_cache(filehandle.id.clone());
+                    request.drop_filehandle_from_cache(filehandle.id);
                     &write_cache.clone()
                 }
             };
@@ -57,7 +57,7 @@ impl NfsOperation for Write4args {
         } else {
             // write to file
             let mut file = filehandle.file.append_file().unwrap();
-            let _ = file.seek(SeekFrom::Start(self.offset as u64));
+            let _ = file.seek(SeekFrom::Start(self.offset));
             count = file.write(&self.data).unwrap() as u32;
             stable = StableHow4::FileSync4;
 
@@ -71,7 +71,7 @@ impl NfsOperation for Write4args {
         NfsOpResponse {
             request,
             result: Some(NfsResOp4::Opwrite(Write4res::Resok4(Write4resok {
-                count: count,
+                count,
                 committed: stable,
                 writeverf: verifier_from_boot(&boot_time),
             }))),
