@@ -24,6 +24,8 @@
 - CREATE is_file() panic on VFS error — now uses unwrap_or(false)
 - CREATE panics on invalid path join — now returns Nfs4errInval
 - RENAME panics on invalid destination path join — now returns Nfs4errInval
+- FileManager actor: path join and exists() panics on invalid VFS operations
+- FileManager: cache lookup uses if-let instead of contains_key+unwrap
 - Clippy collapsible_match warnings in SETCLIENTID_CONFIRM and RENEW tests
 - Clippy bool_assert_comparison warning in nfstest XDR tests
 

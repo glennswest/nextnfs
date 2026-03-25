@@ -90,8 +90,14 @@ impl FileManager {
                         }
                     }
                 } else if let Some(req_path) = req.path {
-                    let path = self.root.join(req_path).unwrap();
-                    if path.exists().unwrap() {
+                    let path = match self.root.join(req_path) {
+                        Ok(p) => p,
+                        Err(_) => {
+                            let _ = req.respond_to.send(None);
+                            return;
+                        }
+                    };
+                    if path.exists().unwrap_or(false) {
                         let fh_wo_locks = self.get_filehandle(&path);
                         let fh = self.attach_locks(fh_wo_locks);
                         let _ = req.respond_to.send(Some(fh));
@@ -272,7 +278,7 @@ impl FileManager {
         let mut id = vec![0_u8, 0_u8, 0_u8, 0_u8];
         id.extend(self.next_stateid_id.to_be_bytes().to_vec());
         self.next_stateid_id += 1;
-        id.try_into().unwrap()
+        id.try_into().expect("stateid is always 12 bytes")
     }
 
     fn get_filehandle_id(&mut self, file: &VfsPath) -> NfsFh4 {
@@ -313,7 +319,7 @@ impl FileManager {
     fn get_filehandle_by_id(&mut self, id: &NfsFh4) -> Option<Filehandle> {
         let fh = self.fhdb.get_by_id(id);
         if let Some(fh) = fh {
-            if fh.file.exists().unwrap() {
+            if fh.file.exists().unwrap_or(false) {
                 return Some(fh.clone());
             } else {
                 self.fhdb.remove_by_id(id);
@@ -358,8 +364,8 @@ impl FileManager {
         mut filehandle: Filehandle,
         filemanager: FileManagerHandle,
     ) -> WriteCacheHandle {
-        if self.cachedb.contains_key(&filehandle.id) {
-            self.cachedb.get(&filehandle.id).unwrap().clone()
+        if let Some(cached) = self.cachedb.get(&filehandle.id) {
+            cached.clone()
         } else {
             let real_path = self.real_path(&filehandle.file);
             let handle = WriteCacheHandle::new(filehandle.clone(), filemanager, real_path);
