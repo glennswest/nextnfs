@@ -1,6 +1,6 @@
 REGISTRY ?= registry.gt.lo:5000
 IMAGE    ?= $(REGISTRY)/nextnfs
-VERSION  ?= 0.5.0
+VERSION  ?= 0.6.0
 
 .PHONY: build build-x86 build-arm64 container-x86 container-arm64 push rpm-x86 rpm-arm64 deb-x86 deb-arm64 clean
 

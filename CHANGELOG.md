@@ -2,12 +2,14 @@
 
 ## [Unreleased]
 
-### 2026-03-25
-- **test:** Filehandle & RealMeta tests (23 tests: new/new_real for all 7 file types, time attrs, space_used, nlink, pseudo_root, attr_size, current_time, RealMeta from_path, initial state)
-- **test:** ClientManager actor tests (11 tests: renew_leases valid/stale, set_current_fh, multiple clients unique ids, confirm wrong principal, get_client not found/unconfirmed, handle upsert+confirm/renew/set_fh)
-- **test:** Proto type serialization tests (16 tests: Stateid4, Fsid4, Nfstime4, NfsFtype4, NfsStat4, NfsLockType4, StableHow4, Createtype4, NfsClientId4, ClientAddr4, LockOwner4, access flags)
-- **test:** RPC proto tests (8 tests: AuthUnix defaults/roundtrip, RpcReplyMsg serialization, XID encoding, AuthStat default, CallBody fields)
-- **test:** Expanded op_access (4 tests), op_read (4 tests), op_write (3 tests), op_lock (2 tests), op_lockt (1 test)
+## [v0.6.0] — 2026-03-25
+
+### Added
+- Filehandle & RealMeta tests (23 tests: new/new_real for all 7 file types, time attrs, space_used, nlink, pseudo_root, attr_size, current_time, RealMeta from_path, initial state)
+- ClientManager actor tests (11 tests: renew_leases valid/stale, set_current_fh, multiple clients unique ids, confirm wrong principal, get_client not found/unconfirmed, handle upsert+confirm/renew/set_fh)
+- Proto type serialization tests (16 tests: Stateid4, Fsid4, Nfstime4, NfsFtype4, NfsStat4, NfsLockType4, StableHow4, Createtype4, NfsClientId4, ClientAddr4, LockOwner4, access flags)
+- RPC proto tests (8 tests: AuthUnix defaults/roundtrip, RpcReplyMsg serialization, XID encoding, AuthStat default, CallBody fields)
+- Expanded op_access (4 tests), op_read (4 tests), op_write (3 tests), op_lock (2 tests), op_lockt (1 test)
 - Total workspace tests: 230 (39 proto + 185 server + 6 nfstest), 0 clippy warnings
 
 ## [v0.5.0] — 2026-03-25
