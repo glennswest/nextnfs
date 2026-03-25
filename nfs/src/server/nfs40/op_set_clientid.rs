@@ -54,82 +54,82 @@ impl NfsOperation for SetClientId4args {
     }
 }
 
-// #[cfg(test)]
-// mod integration_tests {
+#[cfg(test)]
+mod integration_tests {
+    use crate::{
+        server::{
+            nfs40::{NfsResOp4, NfsStat4, SetClientId4res},
+            operation::NfsOperation,
+        },
+        test_utils::{create_client, create_nfs40_server},
+    };
+    use tracing_test::traced_test;
 
-//     use crate::{
-//         server::{
-//             nfs40::{NfsResOp4, NfsStat4, SetClientId4res},
-//             operation::NfsOperation,
-//         },
-//         test_utils::{create_client, create_nfs40_server},
-//     };
+    #[tokio::test]
+    #[traced_test]
+    async fn test_setup_new_client() {
+        let request = create_nfs40_server(None).await;
 
-//     #[tokio::test]
-//     async fn test_setup_new_client() {
-//         let request = create_nfs40_server(None).await;
+        let client1 = create_client(
+            [23, 213, 67, 174, 197, 95, 35, 119],
+            "Linux NFSv4.0 LAPTOP/127.0.0.1".to_string(),
+        );
+        let client1_dup = create_client(
+            [45, 5, 67, 56, 197, 6, 35, 119],
+            "Linux NFSv4.0 LAPTOP/127.0.0.1".to_string(),
+        );
 
-//         let client1 = create_client(
-//             [23, 213, 67, 174, 197, 95, 35, 119],
-//             "Linux NFSv4.0 LAPTOP/127.0.0.1".to_string(),
-//         );
-//         let client1_dup = create_client(
-//             [45, 5, 67, 56, 197, 6, 35, 119],
-//             "Linux NFSv4.0 LAPTOP/127.0.0.1".to_string(),
-//         );
+        // run client1
+        let response = client1.execute(request).await;
+        let result = response.result.unwrap();
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
 
-//         // run client1
-//         let response = client1.execute(request.clone()).await;
-//         let result = response.result.unwrap();
-//         assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        match result {
+            NfsResOp4::Opsetclientid(res) => match res {
+                SetClientId4res::Resok4(resok) => {
+                    assert_eq!(resok.clientid, 1);
+                    assert_eq!(resok.setclientid_confirm.len(), 8);
+                }
+                _ => panic!("Expected Resok4"),
+            },
+            _ => panic!("Expected Opsetclientid"),
+        }
 
-//         match result {
-//             NfsResOp4::Opsetclientid(res) => match res {
-//                 SetClientId4res::Resok4(resok) => {
-//                     assert_eq!(resok.clientid, 1);
-//                     assert_eq!(resok.setclientid_confirm.len(), 8);
-//                 }
-//                 _ => panic!("Expected Resok4"),
-//             },
-//             _ => panic!("Expected Opsetclientid"),
-//         }
+        // run client1_dup (same NfsClientId4.id — should return same client_id)
+        let response = client1_dup.execute(response.request).await;
+        let result = response.result.unwrap();
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
 
-//         // run client1_dup
-//         let response = client1_dup.execute(request.clone()).await;
-//         let result = response.result.unwrap();
-//         assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        match result {
+            NfsResOp4::Opsetclientid(res) => match res {
+                SetClientId4res::Resok4(resok) => {
+                    assert_eq!(resok.clientid, 1);
+                    assert_eq!(resok.setclientid_confirm.len(), 8);
+                }
+                _ => panic!("Expected Resok4"),
+            },
+            _ => panic!("Expected Opsetclientid"),
+        }
 
-//         match result {
-//             NfsResOp4::Opsetclientid(res) => match res {
-//                 SetClientId4res::Resok4(resok) => {
-//                     // this is the same NfsClientId4.id, so it should return the same client_id
-//                     assert_eq!(resok.clientid, 1);
-//                     assert_eq!(resok.setclientid_confirm.len(), 8);
-//                 }
-//                 _ => panic!("Expected Resok4"),
-//             },
-//             _ => panic!("Expected Opsetclientid"),
-//         }
+        let client2 = create_client(
+            [123, 213, 2, 174, 3, 95, 5, 119],
+            "Linux NFSv4.0 LAPTOP-1/127.0.0.1".to_string(),
+        );
 
-//         let client2 = create_client(
-//             [123, 213, 2, 174, 3, 95, 5, 119],
-//             "Linux NFSv4.0 LAPTOP-1/127.0.0.1".to_string(),
-//         );
+        // run client2 (different id — should get new client_id)
+        let response = client2.execute(response.request).await;
+        let result = response.result.unwrap();
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
 
-//         // run client2
-//         let response = client2.execute(request.clone()).await;
-//         let result = response.result.unwrap();
-//         assert_eq!(response.status, NfsStat4::Nfs4Ok);
-
-//         match result {
-//             NfsResOp4::Opsetclientid(res) => match res {
-//                 SetClientId4res::Resok4(resok) => {
-//                     assert_eq!(resok.clientid, 2);
-//                     assert_eq!(resok.setclientid_confirm.len(), 8);
-//                 }
-//                 _ => panic!("Expected Resok4"),
-//             },
-//             _ => panic!("Expected Opsetclientid"),
-//         }
-//     }
-// }
+        match result {
+            NfsResOp4::Opsetclientid(res) => match res {
+                SetClientId4res::Resok4(resok) => {
+                    assert_eq!(resok.clientid, 2);
+                    assert_eq!(resok.setclientid_confirm.len(), 8);
+                }
+                _ => panic!("Expected Resok4"),
+            },
+            _ => panic!("Expected Opsetclientid"),
+        }
+    }
+}

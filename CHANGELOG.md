@@ -3,6 +3,8 @@
 ## [Unreleased]
 
 ### 2026-03-25
+- **fix:** Create test_utils module for nextnfs-server — enables all workspace tests (was --exclude workaround)
+- **fix:** Re-enable SETCLIENTID and RENEW integration tests (fix request chaining, no Clone)
 - **feat:** Unified CI test suite — wire-level + shell functional + performance benchmarks
 - **feat:** nextnfstest wire-level protocol tester integrated as workspace member (nfstest/)
 - **feat:** NFSv4.0 basic functional tests — 35 cases (file ops, attrs, symlinks, hardlinks, read/write)

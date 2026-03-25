@@ -660,8 +660,7 @@ main() {
     phase 2 "Unit Tests & Lint"
 
     section "cargo test"
-    # nextnfs-server has incomplete test stubs (missing test_utils module) — skip for now
-    if cargo test --workspace --exclude nextnfs-server 2>&1; then
+    if cargo test --workspace 2>&1; then
         ok "unit tests"
     else
         fail "unit tests"

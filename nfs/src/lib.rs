@@ -1,5 +1,8 @@
 pub mod server;
 
+#[cfg(test)]
+pub mod test_utils;
+
 use std::collections::HashMap;
 use std::net::SocketAddr;
 
