@@ -8,6 +8,7 @@ use super::{
     export_manager::ExportManagerHandle,
     filemanager::{FileManagerHandle, Filehandle},
     nfs40::op_pseudo,
+    nfs41::SessionManager,
 };
 
 #[derive(Debug)]
@@ -31,6 +32,11 @@ pub struct NfsRequest<'a> {
     // locally cached filehandles for this client
     pub filehandle_cache: Option<&'a mut HashMap<NfsFh4, (SystemTime, Filehandle)>>,
     cache_ttl: u64,
+    // NFSv4.1 session manager (None for v4.0-only)
+    session_manager: Option<SessionManager>,
+    // Session context set by SEQUENCE handler
+    pub session_id: Option<[u8; 16]>,
+    pub sequence_slotid: Option<u32>,
 }
 
 impl<'a> NfsRequest<'a> {
@@ -41,6 +47,7 @@ impl<'a> NfsRequest<'a> {
         default_fmanager: Option<FileManagerHandle>,
         boot_time: u64,
         filehandle_cache: Option<&'a mut HashMap<NfsFh4, (SystemTime, Filehandle)>>,
+        session_manager: Option<SessionManager>,
     ) -> Self {
         let request_time = std::time::UNIX_EPOCH.elapsed().unwrap().as_secs();
 
@@ -56,7 +63,15 @@ impl<'a> NfsRequest<'a> {
             request_time,
             filehandle_cache,
             cache_ttl: 10,
+            session_manager,
+            session_id: None,
+            sequence_slotid: None,
         }
+    }
+
+    /// Get the session manager (for v4.1+ operations).
+    pub fn session_manager(&self) -> Option<&SessionManager> {
+        self.session_manager.as_ref()
     }
 
     pub fn client_addr(&self) -> &String {

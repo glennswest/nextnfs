@@ -27,6 +27,7 @@ pub struct NFSServer {
     export_manager: ExportManagerHandle,
     service_0: Option<server::nfs40::NFS40Server>,
     boot_time: u64,
+    session_manager: server::nfs41::SessionManager,
 }
 
 impl NFSServer {
@@ -99,6 +100,7 @@ impl NFSServer {
                     let dfm = default_fm.clone();
                     let boot_time = self.boot_time;
                     let service_0 = self.service_0.clone();
+                    let sm = self.session_manager.clone();
 
                     tokio::spawn(async move {
                         let span = span!(Level::DEBUG, "nfs_client", %addr);
@@ -117,6 +119,7 @@ impl NFSServer {
                                         dfm.clone(),
                                         boot_time,
                                         Some(&mut filehandle_cache),
+                                        Some(sm.clone()),
                                     );
                                     let nfs_protocol = service_0.as_ref().unwrap();
                                     let service = NFSService::new(nfs_protocol.clone());
@@ -192,6 +195,7 @@ impl ServerBuilder {
 
     pub fn build(&self) -> NFSServer {
         let boot_time = std::time::UNIX_EPOCH.elapsed().unwrap().as_secs();
+        let session_manager = server::nfs41::SessionManager::new();
         NFSServer {
             bind: self.bind.clone(),
             export_manager: self
@@ -200,6 +204,7 @@ impl ServerBuilder {
                 .expect("export_manager must be set before build()"),
             service_0: Some(server::nfs40::NFS40Server::new()),
             boot_time,
+            session_manager,
         }
     }
 }

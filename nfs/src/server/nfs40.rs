@@ -30,10 +30,13 @@ mod op_setattr;
 mod op_write;
 
 use super::NfsProtoImpl;
+use super::nfs41::SessionManager;
 use tracing::{debug, error};
 
 #[derive(Debug, Clone)]
-pub struct NFS40Server;
+pub struct NFS40Server {
+    pub session_manager: SessionManager,
+}
 
 impl NFS40Server {
     /// PUTROOTFH — set current filehandle to the pseudo-root.
@@ -242,7 +245,9 @@ impl NFS40Server {
 #[async_trait]
 impl NfsProtoImpl for NFS40Server {
     fn new() -> Self {
-        Self {}
+        Self {
+            session_manager: SessionManager::new(),
+        }
     }
 
     fn hash(&self) -> u64 {
@@ -349,6 +354,9 @@ impl NfsProtoImpl for NFS40Server {
                         NfsArgOp::OpopenDowngrade(_) => self.operation_not_supported(request),
                         NfsArgOp::OpSecinfo(_) => self.operation_not_supported(request),
                         NfsArgOp::Opverify(_) => self.operation_not_supported(request),
+
+                        // NFSv4.1/v4.2 ops — handled properly in compound() version routing
+                        _ => self.operation_not_supported(request),
                     };
                     let res = response.result;
                     last_status = response.status;
