@@ -207,8 +207,8 @@ impl TestManager {
                 Ok(()) => (TestStatus::Pass, None, None),
                 Err(e) => {
                     let msg = format!("{}", e);
-                    if msg.starts_with("SKIP:") {
-                        (TestStatus::Skip, Some(msg[5..].trim().to_string()), None)
+                    if let Some(reason) = msg.strip_prefix("SKIP:") {
+                        (TestStatus::Skip, Some(reason.trim().to_string()), None)
                     } else {
                         (TestStatus::Fail, Some(msg), None)
                     }

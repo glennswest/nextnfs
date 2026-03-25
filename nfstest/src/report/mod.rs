@@ -19,7 +19,7 @@ pub fn write_markdown_report(result: &RunResult) -> anyhow::Result<()> {
 
     let mut md = String::new();
 
-    md.push_str(&format!("# NFS Test Report\n\n"));
+    md.push_str("# NFS Test Report\n\n");
     md.push_str(&format!("**Run ID:** `{}`\n\n", result.run_id));
     md.push_str(&format!(
         "**Server:** `{}:{}{}`\n\n",
@@ -41,7 +41,7 @@ pub fn write_markdown_report(result: &RunResult) -> anyhow::Result<()> {
     md.push_str(&format!("| Failed | {} |\n", result.summary.failed));
     md.push_str(&format!("| Skipped | {} |\n", result.summary.skipped));
     md.push_str(&format!("| Errors | {} |\n", result.summary.errors));
-    md.push_str("\n");
+    md.push('\n');
 
     // Pass rate
     let pass_rate = if result.summary.total > 0 {
@@ -88,7 +88,7 @@ pub fn write_markdown_report(result: &RunResult) -> anyhow::Result<()> {
                 msg
             ));
         }
-        md.push_str("\n");
+        md.push('\n');
     }
 
     // Failed tests detail
@@ -110,7 +110,7 @@ pub fn write_markdown_report(result: &RunResult) -> anyhow::Result<()> {
             if let Some(ref detail) = r.detail {
                 md.push_str(&format!("\n```\n{}\n```\n", detail));
             }
-            md.push_str("\n");
+            md.push('\n');
         }
     }
 

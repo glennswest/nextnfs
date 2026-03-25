@@ -112,7 +112,7 @@ impl RpcClient {
         let total_len = msg_bytes.len() + args.len();
         let mut frame = BytesMut::with_capacity(4 + total_len);
         // Last fragment bit (0x80000000) OR'd with length
-        frame.put_u32((0x80000000 | total_len as u32) as u32);
+        frame.put_u32(0x80000000 | total_len as u32);
         frame.put_slice(&msg_bytes);
         frame.put_slice(args);
 
@@ -127,7 +127,7 @@ impl RpcClient {
         stream.flush().await?;
 
         // Receive reply (TCP record marking)
-        let reply = self.read_record(&mut *stream).await?;
+        let reply = self.read_record(&mut stream).await?;
 
         // Parse RPC reply header
         let mut dec = XdrDecoder::new(&reply);
@@ -168,8 +168,7 @@ impl RpcClient {
 
     /// Send a NULL RPC call (procedure 0) to test connectivity.
     pub async fn null_call(&self, program: u32, version: u32) -> anyhow::Result<()> {
-        let reply = self.call(program, version, 0, &[]).await?;
-        // NULL should return empty body
+        let _reply = self.call(program, version, 0, &[]).await?;
         Ok(())
     }
 
