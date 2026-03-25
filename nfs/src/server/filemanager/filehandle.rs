@@ -96,14 +96,14 @@ impl Filehandle {
         }
         let version = version + 1;
 
-        let attr_type = match real_meta.mode & libc::S_IFMT {
-            m if m == libc::S_IFDIR => NfsFtype4::Nf4dir,
-            m if m == libc::S_IFREG => NfsFtype4::Nf4reg,
-            m if m == libc::S_IFLNK => NfsFtype4::Nf4lnk,
-            m if m == libc::S_IFBLK => NfsFtype4::Nf4blk,
-            m if m == libc::S_IFCHR => NfsFtype4::Nf4chr,
-            m if m == libc::S_IFIFO => NfsFtype4::Nf4fifo,
-            m if m == libc::S_IFSOCK => NfsFtype4::Nf4sock,
+        let attr_type = match real_meta.mode & (libc::S_IFMT as u32) {
+            m if m == libc::S_IFDIR as u32 => NfsFtype4::Nf4dir,
+            m if m == libc::S_IFREG as u32 => NfsFtype4::Nf4reg,
+            m if m == libc::S_IFLNK as u32 => NfsFtype4::Nf4lnk,
+            m if m == libc::S_IFBLK as u32 => NfsFtype4::Nf4blk,
+            m if m == libc::S_IFCHR as u32 => NfsFtype4::Nf4chr,
+            m if m == libc::S_IFIFO as u32 => NfsFtype4::Nf4fifo,
+            m if m == libc::S_IFSOCK as u32 => NfsFtype4::Nf4sock,
             _ => NfsFtype4::Nf4Undef,
         };
 
