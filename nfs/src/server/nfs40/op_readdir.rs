@@ -281,10 +281,82 @@ mod tests {
         let response = readdir_args.execute(request).await;
         assert_eq!(response.status, NfsStat4::Nfs4Ok);
         if let Some(NfsResOp4::Opreaddir(ReadDir4res::Resok4(resok))) = response.result {
-            // Should have entries
             assert!(resok.reply.entries.is_some());
         } else {
             panic!("Expected Opreaddir Resok4 with entries");
+        }
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_readdir_eof_flag() {
+        let request = create_nfs40_server_with_root_fh(None).await;
+        // Create a single entry
+        let create_args = Create4args {
+            objtype: Createtype4::Nf4dir,
+            objname: "single".to_string(),
+            createattrs: Fattr4 {
+                attrmask: Attrlist4(vec![]),
+                attr_vals: Attrlist4(vec![]),
+            },
+        };
+        let response = create_args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+
+        let mut request = response.request;
+        let root_fh = request.file_manager().get_root_filehandle().await.unwrap();
+        request.set_filehandle(root_fh);
+
+        let readdir_args = Readdir4args {
+            cookie: 0,
+            cookieverf: [0u8; 8],
+            dircount: 4096,
+            maxcount: 8192,
+            attr_request: Attrlist4(vec![FileAttr::Type]),
+        };
+        let response = readdir_args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        if let Some(NfsResOp4::Opreaddir(ReadDir4res::Resok4(resok))) = response.result {
+            assert!(resok.reply.eof);
+        } else {
+            panic!("Expected Opreaddir Resok4");
+        }
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_readdir_multiple_attrs() {
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let create_args = Create4args {
+            objtype: Createtype4::Nf4dir,
+            objname: "attrdir".to_string(),
+            createattrs: Fattr4 {
+                attrmask: Attrlist4(vec![]),
+                attr_vals: Attrlist4(vec![]),
+            },
+        };
+        let response = create_args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+
+        let mut request = response.request;
+        let root_fh = request.file_manager().get_root_filehandle().await.unwrap();
+        request.set_filehandle(root_fh);
+
+        let readdir_args = Readdir4args {
+            cookie: 0,
+            cookieverf: [0u8; 8],
+            dircount: 4096,
+            maxcount: 8192,
+            attr_request: Attrlist4(vec![FileAttr::Type, FileAttr::Size, FileAttr::Mode]),
+        };
+        let response = readdir_args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        if let Some(NfsResOp4::Opreaddir(ReadDir4res::Resok4(resok))) = response.result {
+            assert!(resok.reply.entries.is_some());
+            let entry = resok.reply.entries.unwrap();
+            assert_eq!(entry.attrs.attrmask.len(), 3);
+        } else {
+            panic!("Expected Opreaddir Resok4");
         }
     }
 }

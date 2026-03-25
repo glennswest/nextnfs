@@ -143,4 +143,64 @@ mod tests {
             panic!("Expected Opgetattr with 5 attributes");
         }
     }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_getattr_supported_attrs() {
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let args = Getattr4args {
+            attr_request: Attrlist4(vec![FileAttr::SupportedAttrs]),
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        if let Some(NfsResOp4::Opgetattr(Getattr4resok { obj_attributes: Some(fattr), .. })) = response.result {
+            assert_eq!(fattr.attrmask.len(), 1);
+            assert_eq!(fattr.attrmask.0[0], FileAttr::SupportedAttrs);
+        } else {
+            panic!("Expected Opgetattr with SupportedAttrs");
+        }
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_getattr_lease_time() {
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let args = Getattr4args {
+            attr_request: Attrlist4(vec![FileAttr::LeaseTime]),
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_getattr_on_created_file() {
+        use crate::server::nfs40::{FileAttrValue, Createtype4, Create4args, Fattr4};
+
+        let request = create_nfs40_server_with_root_fh(None).await;
+        // Create a file first
+        let root_file = request.current_filehandle().unwrap().file.clone();
+        root_file.join("getattr_file").unwrap().create_file().unwrap();
+        {
+            use std::io::Write;
+            let mut f = root_file.join("getattr_file").unwrap().append_file().unwrap();
+            f.write_all(b"content").unwrap();
+        }
+        let mut request = request;
+        let fh = request.file_manager()
+            .get_filehandle_for_path("getattr_file".to_string())
+            .await.unwrap();
+        request.set_filehandle(fh);
+
+        let args = Getattr4args {
+            attr_request: Attrlist4(vec![FileAttr::Size, FileAttr::Type]),
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        if let Some(NfsResOp4::Opgetattr(Getattr4resok { obj_attributes: Some(fattr), .. })) = response.result {
+            assert_eq!(fattr.attrmask.len(), 2);
+        } else {
+            panic!("Expected Opgetattr with attributes");
+        }
+    }
 }

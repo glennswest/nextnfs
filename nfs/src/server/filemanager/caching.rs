@@ -95,3 +95,82 @@ pub async fn run_file_write_cache(mut actor: WriteCache) {
         actor.handle_message(msg).await;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::super::handle::{WriteCacheMessage, WriteBytesRequest};
+    use std::path::PathBuf;
+    use tokio::sync::mpsc;
+    use vfs::{MemoryFS, VfsPath};
+
+    fn make_test_handle() -> FileManagerHandle {
+        let vfs_root = VfsPath::new(MemoryFS::new());
+        FileManagerHandle::new(vfs_root, Some(1), PathBuf::from("/tmp"))
+    }
+
+    fn make_test_filehandle() -> super::super::Filehandle {
+        let vfs_root = VfsPath::new(MemoryFS::new());
+        super::super::Filehandle::new(vfs_root, [0u8; 26], 1, 1, 0)
+    }
+
+    #[tokio::test]
+    async fn test_write_cache_new_invalid_path() {
+        let (_, rx) = mpsc::channel(256);
+        let fh = make_test_filehandle();
+        let fm = make_test_handle();
+        let wc = WriteCache::new(rx, fh, fm, PathBuf::from("/nonexistent/path/file.dat"));
+        assert!(wc.file.is_none());
+        assert!(!wc.dirty);
+    }
+
+    #[tokio::test]
+    async fn test_write_cache_new_valid_path() {
+        let (_, rx) = mpsc::channel(256);
+        let fh = make_test_filehandle();
+        let fm = make_test_handle();
+        let path = PathBuf::from("/tmp/nextnfs_test_cache_valid");
+        let wc = WriteCache::new(rx, fh, fm, path.clone());
+        assert!(wc.file.is_some());
+        assert!(!wc.dirty);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn test_write_cache_write_sets_dirty() {
+        let (_, rx) = mpsc::channel(256);
+        let fh = make_test_filehandle();
+        let fm = make_test_handle();
+        let path = PathBuf::from("/tmp/nextnfs_test_cache_dirty");
+        let mut wc = WriteCache::new(rx, fh, fm, path.clone());
+        assert!(!wc.dirty);
+
+        let write_msg = WriteCacheMessage::Write(WriteBytesRequest {
+            offset: 0,
+            data: b"hello".to_vec(),
+        });
+        wc.handle_message(write_msg).await;
+        assert!(wc.dirty);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn test_write_cache_vfs_fallback() {
+        let (_, rx) = mpsc::channel(256);
+        let vfs = VfsPath::new(MemoryFS::new());
+        let _ = vfs.join("testfile").unwrap().create_file();
+        let fh = super::super::Filehandle::new(
+            vfs.join("testfile").unwrap(), [0u8; 26], 1, 1, 0,
+        );
+        let fm = make_test_handle();
+        let mut wc = WriteCache::new(rx, fh, fm, PathBuf::from("/nonexistent/fallback"));
+        assert!(wc.file.is_none());
+
+        let write_msg = WriteCacheMessage::Write(WriteBytesRequest {
+            offset: 0,
+            data: b"vfs_data".to_vec(),
+        });
+        wc.handle_message(write_msg).await;
+        assert!(wc.dirty);
+    }
+}

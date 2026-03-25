@@ -54,7 +54,38 @@ mod tests {
             length: 100,
         };
         let response = args.execute(request).await;
-        // Unlocking a nonexistent lock — should error
         assert_ne!(response.status, NfsStat4::Nfs4Ok);
+    }
+
+    #[tokio::test]
+    async fn test_locku_valid_unlock() {
+        use crate::server::filemanager::LockResult;
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let root_fh_id = request.current_filehandle().unwrap().id;
+
+        // Acquire a lock first
+        let lock_result = request.file_manager()
+            .lock_file(root_fh_id, 1, b"owner1".to_vec(), NfsLockType4::WriteLt, 0, 100)
+            .await;
+        let stateid = match lock_result {
+            LockResult::Ok(s) => s,
+            other => panic!("Expected LockResult::Ok, got {:?}", other),
+        };
+
+        let args = Locku4args {
+            locktype: NfsLockType4::WriteLt,
+            seqid: stateid.seqid,
+            lock_stateid: stateid.clone(),
+            offset: 0,
+            length: 100,
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        match response.result {
+            Some(NfsResOp4::Oplocku(Locku4res::LockStateid(sid))) => {
+                assert_eq!(sid.seqid, stateid.seqid + 1);
+            }
+            other => panic!("Expected Oplocku LockStateid, got {:?}", other),
+        }
     }
 }

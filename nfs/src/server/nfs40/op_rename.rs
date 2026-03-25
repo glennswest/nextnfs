@@ -214,4 +214,67 @@ mod tests {
         let response = args.execute(request).await;
         assert_eq!(response.status, NfsStat4::Nfs4Ok);
     }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_rename_file() {
+        use std::io::Write;
+        let request = create_nfs40_server_with_root_fh(None).await;
+
+        // Create a file via VFS
+        let root_file = request.current_filehandle().unwrap().file.clone();
+        root_file.join("origfile.txt").unwrap().create_file().unwrap();
+        {
+            let mut f = root_file.join("origfile.txt").unwrap().append_file().unwrap();
+            f.write_all(b"data").unwrap();
+        }
+
+        let mut request = request;
+        request.save_filehandle(); // save root as source dir
+        // current fh is also root (target dir)
+
+        let args = Rename4args {
+            oldname: "origfile.txt".to_string(),
+            newname: "renamed.txt".to_string(),
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_rename_returns_change_info() {
+        use crate::server::nfs40::{NfsResOp4, Rename4res};
+        let request = create_nfs40_server_with_root_fh(None).await;
+
+        let create_args = Create4args {
+            objtype: Createtype4::Nf4dir,
+            objname: "ci_old".to_string(),
+            createattrs: Fattr4 {
+                attrmask: Attrlist4(vec![]),
+                attr_vals: Attrlist4(vec![]),
+            },
+        };
+        let response = create_args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+
+        let mut request = response.request;
+        let root_fh = request.file_manager().get_root_filehandle().await.unwrap();
+        request.set_filehandle(root_fh);
+        request.save_filehandle();
+
+        let args = Rename4args {
+            oldname: "ci_old".to_string(),
+            newname: "ci_new".to_string(),
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        match response.result {
+            Some(NfsResOp4::Oprename(Rename4res::Resok4(resok))) => {
+                assert!(resok.source_cinfo.atomic);
+                assert!(resok.target_cinfo.atomic);
+            }
+            other => panic!("Expected Oprename Resok4, got {:?}", other),
+        }
+    }
 }

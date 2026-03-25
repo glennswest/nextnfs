@@ -181,4 +181,89 @@ mod tests {
         let removed = mgr.destroy_client(cid).await;
         assert_eq!(removed, 2);
     }
+
+    #[tokio::test]
+    async fn test_allocate_client_id_increments() {
+        let mgr = SessionManager::new();
+        let id1 = mgr.allocate_client_id().await;
+        let id2 = mgr.allocate_client_id().await;
+        let id3 = mgr.allocate_client_id().await;
+        assert_eq!(id1, 1);
+        assert_eq!(id2, 2);
+        assert_eq!(id3, 3);
+    }
+
+    #[tokio::test]
+    async fn test_create_session_unique_ids() {
+        let mgr = SessionManager::new();
+        let cid = mgr.allocate_client_id().await;
+        let s1 = mgr.create_session(cid, 4).await;
+        let s2 = mgr.create_session(cid, 4).await;
+        assert_ne!(s1.id, s2.id);
+    }
+
+    #[tokio::test]
+    async fn test_get_session_nonexistent() {
+        let mgr = SessionManager::new();
+        assert!(mgr.get_session(&[0u8; 16]).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_destroy_session_nonexistent() {
+        let mgr = SessionManager::new();
+        assert!(!mgr.destroy_session(&[0u8; 16]).await);
+    }
+
+    #[tokio::test]
+    async fn test_destroy_client_no_sessions() {
+        let mgr = SessionManager::new();
+        assert_eq!(mgr.destroy_client(999).await, 0);
+    }
+
+    #[test]
+    fn test_channel_attrs_default() {
+        let attrs = ChannelAttrs::default();
+        assert_eq!(attrs.max_request_size, 1048576);
+        assert_eq!(attrs.max_response_size, 1048576);
+        assert_eq!(attrs.max_ops, 64);
+        assert_eq!(attrs.max_requests, 64);
+    }
+
+    #[test]
+    fn test_slot_state_default() {
+        let slot = SlotState::default();
+        assert_eq!(slot.sequence_id, 0);
+        assert!(slot.cached_reply.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_session_manager_default() {
+        let mgr = SessionManager::default();
+        let cid = mgr.allocate_client_id().await;
+        assert_eq!(cid, 1);
+    }
+
+    #[tokio::test]
+    async fn test_create_session_slot_count() {
+        let mgr = SessionManager::new();
+        let cid = mgr.allocate_client_id().await;
+        let session = mgr.create_session(cid, 8).await;
+        assert_eq!(session.slots.len(), 8);
+        for slot in &session.slots {
+            assert_eq!(slot.sequence_id, 0);
+            assert!(slot.cached_reply.is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_destroy_client_preserves_other_sessions() {
+        let mgr = SessionManager::new();
+        let cid1 = mgr.allocate_client_id().await;
+        let cid2 = mgr.allocate_client_id().await;
+        let _s1 = mgr.create_session(cid1, 2).await;
+        let s2 = mgr.create_session(cid2, 2).await;
+
+        mgr.destroy_client(cid1).await;
+        assert!(mgr.get_session(&s2.id).await.is_some());
+    }
 }

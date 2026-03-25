@@ -45,7 +45,30 @@ mod tests {
             },
         };
         let response = args.execute(request).await;
-        // Releasing a nonexistent lock owner should succeed (no-op)
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+    }
+
+    #[tokio::test]
+    async fn test_release_lockowner_after_lock() {
+        use crate::server::filemanager::LockResult;
+        use nextnfs_proto::nfs4_proto::NfsLockType4;
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let root_fh_id = request.current_filehandle().unwrap().id;
+
+        // Acquire a lock
+        let result = request.file_manager()
+            .lock_file(root_fh_id, 42, b"release_me".to_vec(), NfsLockType4::WriteLt, 0, 100)
+            .await;
+        assert!(matches!(result, LockResult::Ok(_)));
+
+        // Release it
+        let args = ReleaseLockowner4args {
+            lock_owner: LockOwner4 {
+                clientid: 42,
+                owner: b"release_me".to_vec(),
+            },
+        };
+        let response = args.execute(request).await;
         assert_eq!(response.status, NfsStat4::Nfs4Ok);
     }
 }

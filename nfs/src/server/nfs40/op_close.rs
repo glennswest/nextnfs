@@ -77,4 +77,25 @@ mod tests {
             other => panic!("Expected Opclose, got {:?}", other),
         }
     }
+
+    #[tokio::test]
+    async fn test_close_uses_args_seqid() {
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let args = Close4args {
+            seqid: 42,
+            open_stateid: Stateid4 {
+                seqid: 7,
+                other: [10; 12],
+            },
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        match response.result {
+            Some(NfsResOp4::Opclose(Close4res::OpenStateid(stateid))) => {
+                assert_eq!(stateid.seqid, 42);
+                assert_eq!(stateid.other, [10; 12]);
+            }
+            other => panic!("Expected Opclose, got {:?}", other),
+        }
+    }
 }

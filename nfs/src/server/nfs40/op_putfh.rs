@@ -90,7 +90,20 @@ mod tests {
             object: [0xFF; 26],
         };
         let response = args.execute(request).await;
-        // Invalid filehandle should fail (stale or bad handle)
         assert_ne!(response.status, NfsStat4::Nfs4Ok);
+    }
+
+    #[tokio::test]
+    async fn test_putfh_valid_root_handle() {
+        // Get the root fh ID, then use PUTFH to set it
+        let mut request = create_nfs40_server(None).await;
+        let root_fh = request.file_manager().get_root_filehandle().await.unwrap();
+        let root_id = root_fh.id;
+        // Need to cache the filehandle so putfh can find it
+        request.set_filehandle(root_fh);
+
+        let args = PutFh4args { object: root_id };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
     }
 }

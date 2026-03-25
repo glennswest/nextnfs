@@ -194,4 +194,34 @@ mod tests {
         let response = args.execute(request).await;
         assert_eq!(response.status, NfsStat4::Nfs4errBadtype);
     }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_create_nested_directory() {
+        let request = create_nfs40_server_with_root_fh(None).await;
+        // Create parent dir
+        let args = Create4args {
+            objtype: Createtype4::Nf4dir,
+            objname: "parent".to_string(),
+            createattrs: Fattr4 {
+                attrmask: Attrlist4(vec![]),
+                attr_vals: Attrlist4(vec![]),
+            },
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+
+        // Current fh is now "parent" — create child inside it
+        let request = response.request;
+        let args = Create4args {
+            objtype: Createtype4::Nf4dir,
+            objname: "child".to_string(),
+            createattrs: Fattr4 {
+                attrmask: Attrlist4(vec![]),
+                attr_vals: Attrlist4(vec![]),
+            },
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+    }
 }

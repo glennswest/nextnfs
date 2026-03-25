@@ -90,4 +90,32 @@ mod tests {
         let verifier = verifier_from_boot(&boot_time);
         assert_eq!(verifier, [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]);
     }
+
+    #[tokio::test]
+    async fn test_commit_with_file() {
+        use crate::server::nfs40::{Commit4res, NfsResOp4};
+        let mut request = create_nfs40_server_with_root_fh(None).await;
+        let root_file = request.current_filehandle().unwrap().file.clone();
+        root_file.join("commitme").unwrap().create_file().unwrap();
+        let fh = request.file_manager()
+            .get_filehandle_for_path("commitme".to_string())
+            .await.unwrap();
+        request.set_filehandle(fh);
+
+        let args = Commit4args { offset: 0, count: 0 };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        match response.result {
+            Some(NfsResOp4::Opcommit(Commit4res::Resok4(resok))) => {
+                assert_ne!(resok.writeverf, [0u8; 8]);
+            }
+            other => panic!("Expected Opcommit Resok4, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_verifier_from_boot_zero() {
+        let verifier = verifier_from_boot(&0);
+        assert_eq!(verifier, [0u8; 8]);
+    }
 }

@@ -329,7 +329,61 @@ mod tests {
         let request = create_nfs40_server_with_root_fh(None).await;
         let args = make_open_args("nonexistent.txt", OpenFlag4::Open4Nocreate);
         let response = args.execute(request).await;
-        // Should fail since the file doesn't exist
         assert_ne!(response.status, NfsStat4::Nfs4Ok);
+    }
+
+    #[tokio::test]
+    async fn test_open_exclusive_create() {
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let args = Open4args {
+            seqid: 1,
+            share_access: 2, // WRITE
+            share_deny: 0,
+            owner: OpenOwner4 {
+                clientid: 1,
+                owner: b"excl_owner".to_vec(),
+            },
+            openhow: OpenFlag4::How(CreateHow4::EXCLUSIVE4([1, 2, 3, 4, 5, 6, 7, 8])),
+            claim: OpenClaim4::ClaimNull("exclusive.dat".to_string()),
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        match &response.result {
+            Some(NfsResOp4::Opopen(Open4res::Resok4(resok))) => {
+                assert_eq!(resok.rflags, OPEN4_RESULT_CONFIRM);
+            }
+            other => panic!("Expected Opopen Resok4, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_open_on_non_directory() {
+        let mut request = create_nfs40_server_with_root_fh(None).await;
+        // Create a file and set it as current fh
+        let root_file = request.current_filehandle().unwrap().file.clone();
+        root_file.join("afile").unwrap().create_file().unwrap();
+        let fh = request.file_manager()
+            .get_filehandle_for_path("afile".to_string())
+            .await.unwrap();
+        request.set_filehandle(fh);
+
+        let args = make_open_args("nested", OpenFlag4::Open4Nocreate);
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4errNotdir);
+    }
+
+    #[tokio::test]
+    async fn test_open_read_existing_file() {
+        let mut request = create_nfs40_server_with_root_fh(None).await;
+        // Create file first
+        let root_file = request.current_filehandle().unwrap().file.clone();
+        root_file.join("readable.txt").unwrap().create_file().unwrap();
+        // Reset fh to root for OPEN
+        let root_fh = request.file_manager().get_root_filehandle().await.unwrap();
+        request.set_filehandle(root_fh);
+
+        let args = make_open_args("readable.txt", OpenFlag4::Open4Nocreate);
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
     }
 }

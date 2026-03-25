@@ -139,4 +139,20 @@ mod tests {
         let response = remove_args.execute(request).await;
         assert_eq!(response.status, NfsStat4::Nfs4Ok);
     }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_remove_file() {
+        let request = create_nfs40_server_with_root_fh(None).await;
+
+        // Create file via VFS
+        let root_file = request.current_filehandle().unwrap().file.clone();
+        root_file.join("removeme.txt").unwrap().create_file().unwrap();
+
+        let remove_args = Remove4args {
+            target: "removeme.txt".to_string(),
+        };
+        let response = remove_args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+    }
 }

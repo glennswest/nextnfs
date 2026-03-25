@@ -48,3 +48,44 @@ pub enum DataContent {
     Data = 0,
     Hole = 1,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_nfs42_op_values() {
+        assert_eq!(Nfs42Op::Allocate as u32, 59);
+        assert_eq!(Nfs42Op::Copy as u32, 60);
+        assert_eq!(Nfs42Op::CopyNotify as u32, 61);
+        assert_eq!(Nfs42Op::Deallocate as u32, 62);
+        assert_eq!(Nfs42Op::IoAdvise as u32, 63);
+        assert_eq!(Nfs42Op::LayoutError as u32, 64);
+        assert_eq!(Nfs42Op::LayoutStats as u32, 65);
+        assert_eq!(Nfs42Op::OffloadCancel as u32, 66);
+        assert_eq!(Nfs42Op::OffloadStatus as u32, 67);
+        assert_eq!(Nfs42Op::ReadPlus as u32, 68);
+        assert_eq!(Nfs42Op::Seek as u32, 69);
+        assert_eq!(Nfs42Op::WriteSame as u32, 70);
+        assert_eq!(Nfs42Op::Clone as u32, 71);
+    }
+
+    #[test]
+    fn test_data_content_values() {
+        assert_eq!(DataContent::Data as u32, 0);
+        assert_eq!(DataContent::Hole as u32, 1);
+    }
+
+    #[test]
+    fn test_nfs42_op_equality() {
+        assert_eq!(Nfs42Op::Copy, Nfs42Op::Copy);
+        assert_ne!(Nfs42Op::Copy, Nfs42Op::Seek);
+    }
+
+    #[test]
+    fn test_nfs42_op_clone() {
+        let a = Nfs42Op::Clone;
+        let b = a;
+        assert_eq!(a, b);
+    }
+}

@@ -672,3 +672,284 @@ pub async fn run_file_manager(mut actor: FileManager) {
         actor.handle_message(msg);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nextnfs_proto::nfs4_proto::NfsLockType4;
+    use tokio::sync::mpsc;
+    use vfs::MemoryFS;
+
+    fn make_fm() -> FileManager {
+        let (_tx, rx) = mpsc::channel(256);
+        let root = VfsPath::new(MemoryFS::new());
+        FileManager::new(rx, root, Some(42), PathBuf::from("/tmp"))
+    }
+
+    #[test]
+    fn test_new_defaults() {
+        let fm = make_fm();
+        assert_eq!(fm.lease_time, 90);
+        assert!(fm.hard_link_support);
+        assert!(fm.symlink_support);
+        assert!(fm.unique_handles);
+        assert_eq!(fm.fsid, 42);
+        assert_eq!(fm.next_fh_id, 100);
+        assert_eq!(fm.next_stateid_id, 100);
+        assert!(fm.cachedb.is_empty());
+    }
+
+    #[test]
+    fn test_new_default_fsid() {
+        let (_tx, rx) = mpsc::channel(256);
+        let root = VfsPath::new(MemoryFS::new());
+        let fm = FileManager::new(rx, root, None, PathBuf::from("/tmp"));
+        assert_eq!(fm.fsid, 152);
+    }
+
+    #[test]
+    fn test_root_fh_is_root_path() {
+        let mut fm = make_fm();
+        let root = fm.root_fh();
+        assert_eq!(root.path, "/");
+    }
+
+    #[test]
+    fn test_root_fh_stable_id() {
+        let mut fm = make_fm();
+        let r1 = fm.root_fh();
+        let r2 = fm.root_fh();
+        assert_eq!(r1.id, r2.id);
+    }
+
+    #[test]
+    fn test_create_file_returns_filehandle() {
+        let mut fm = make_fm();
+        let newfile = fm.root.join("testfile").unwrap();
+        let fh = fm.create_file(&newfile);
+        assert!(fh.is_some());
+        let fh = fh.unwrap();
+        assert_eq!(fh.path, "/testfile");
+    }
+
+    #[test]
+    fn test_create_file_in_subdir() {
+        let mut fm = make_fm();
+        let _ = fm.root.join("subdir").unwrap().create_dir();
+        let newfile = fm.root.join("subdir").unwrap().join("file.txt").unwrap();
+        let fh = fm.create_file(&newfile);
+        assert!(fh.is_some());
+    }
+
+    #[test]
+    fn test_get_filehandle_by_path_nonexistent() {
+        let fm = make_fm();
+        let result = fm.get_filehandle_by_path(&"nonexistent".to_string());
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_get_filehandle_by_path_root() {
+        let fm = make_fm();
+        let result = fm.get_filehandle_by_path(&"/".to_string());
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_get_filehandle_by_id_nonexistent() {
+        let mut fm = make_fm();
+        let bad_id = [0xFF; 26];
+        let result = fm.get_filehandle_by_id(&bad_id);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_get_filehandle_by_id_valid() {
+        let mut fm = make_fm();
+        let root = fm.root_fh();
+        let result = fm.get_filehandle_by_id(&root.id);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().path, "/");
+    }
+
+    #[test]
+    fn test_get_new_lockingstate_id_increments() {
+        let mut fm = make_fm();
+        let id1 = fm.get_new_lockingstate_id();
+        let id2 = fm.get_new_lockingstate_id();
+        assert_ne!(id1, id2);
+        assert_eq!(&id1[0..4], &[0, 0, 0, 0]);
+        assert_eq!(fm.next_stateid_id, 102);
+    }
+
+    #[test]
+    fn test_attr_supported_attrs_count() {
+        let fm = make_fm();
+        let attrs = fm.attr_supported_attrs();
+        assert!(attrs.len() >= 20);
+    }
+
+    #[test]
+    fn test_real_path_root() {
+        let fm = make_fm();
+        let root_path = fm.real_path(&fm.root);
+        assert_eq!(root_path, PathBuf::from("/tmp"));
+    }
+
+    #[test]
+    fn test_real_path_subpath() {
+        let fm = make_fm();
+        let subpath = fm.root.join("subdir").unwrap();
+        let real = fm.real_path(&subpath);
+        assert_eq!(real, PathBuf::from("/tmp/subdir"));
+    }
+
+    #[test]
+    fn test_handle_lock_success() {
+        let mut fm = make_fm();
+        let root = fm.root_fh();
+        let result = fm.handle_lock(
+            &root.id, 1, b"owner1".to_vec(),
+            NfsLockType4::WriteLt, 0, 100,
+        );
+        assert!(matches!(result, LockResult::Ok(_)));
+    }
+
+    #[test]
+    fn test_handle_lock_conflict() {
+        let mut fm = make_fm();
+        let root = fm.root_fh();
+        let _ = fm.handle_lock(&root.id, 1, b"owner1".to_vec(), NfsLockType4::WriteLt, 0, 100);
+        let result = fm.handle_lock(&root.id, 2, b"owner2".to_vec(), NfsLockType4::WriteLt, 50, 50);
+        assert!(matches!(result, LockResult::Denied { .. }));
+    }
+
+    #[test]
+    fn test_handle_unlock_success() {
+        let mut fm = make_fm();
+        let root = fm.root_fh();
+        let lock_result = fm.handle_lock(&root.id, 1, b"owner1".to_vec(), NfsLockType4::WriteLt, 0, 100);
+        let stateid = match lock_result {
+            LockResult::Ok(s) => s,
+            _ => panic!("Expected Ok"),
+        };
+        let result = fm.handle_unlock(&stateid.other, 0, 100);
+        assert!(matches!(result, UnlockResult::Ok(_)));
+    }
+
+    #[test]
+    fn test_handle_unlock_bad_stateid() {
+        let mut fm = make_fm();
+        let result = fm.handle_unlock(&[0xFF; 12], 0, 100);
+        match result {
+            UnlockResult::Error(s) => assert_eq!(s, NfsStat4::Nfs4errBadStateid),
+            _ => panic!("Expected Error"),
+        }
+    }
+
+    #[test]
+    fn test_handle_test_lock_no_conflict() {
+        let mut fm = make_fm();
+        let root = fm.root_fh();
+        let result = fm.handle_test_lock(&root.id, 1, b"owner1", &NfsLockType4::ReadLt, 0, 100);
+        assert!(matches!(result, TestLockResult::Ok));
+    }
+
+    #[test]
+    fn test_handle_test_lock_detects_conflict() {
+        let mut fm = make_fm();
+        let root = fm.root_fh();
+        let _ = fm.handle_lock(&root.id, 1, b"owner1".to_vec(), NfsLockType4::WriteLt, 0, 100);
+        let result = fm.handle_test_lock(&root.id, 2, b"owner2", &NfsLockType4::ReadLt, 50, 50);
+        assert!(matches!(result, TestLockResult::Denied { .. }));
+    }
+
+    #[test]
+    fn test_handle_release_lock_owner() {
+        let mut fm = make_fm();
+        let root = fm.root_fh();
+        let _ = fm.handle_lock(&root.id, 1, b"owner1".to_vec(), NfsLockType4::WriteLt, 0, 100);
+        let status = fm.handle_release_lock_owner(1, b"owner1");
+        assert_eq!(status, NfsStat4::Nfs4Ok);
+        // Verify lock was released — another owner can lock same range
+        let result = fm.handle_lock(&root.id, 2, b"owner2".to_vec(), NfsLockType4::WriteLt, 0, 100);
+        assert!(matches!(result, LockResult::Ok(_)));
+    }
+
+    #[test]
+    fn test_attach_locks_empty_for_new_fh() {
+        let mut fm = make_fm();
+        let root = fm.root_fh();
+        let attached = fm.attach_locks(root);
+        assert!(attached.locks.is_empty());
+    }
+
+    #[test]
+    fn test_attach_locks_includes_locks() {
+        let mut fm = make_fm();
+        let root = fm.root_fh();
+        let _ = fm.handle_lock(&root.id, 1, b"owner1".to_vec(), NfsLockType4::WriteLt, 0, 100);
+        let root2 = fm.root_fh();
+        let attached = fm.attach_locks(root2);
+        assert_eq!(attached.locks.len(), 1);
+    }
+
+    #[test]
+    fn test_touch_filehandle_reinserts() {
+        let mut fm = make_fm();
+        let root = fm.root_fh();
+        fm.touch_filehandle(root);
+        // After touch, the filehandle should still exist in the db
+        let refreshed = fm.get_filehandle_by_path(&"/".to_string());
+        assert!(refreshed.is_some());
+    }
+
+    #[test]
+    fn test_update_filehandle_replaces() {
+        let mut fm = make_fm();
+        let mut root = fm.root_fh();
+        root.attr_size = 9999;
+        fm.update_filehandle(root);
+        let updated = fm.get_filehandle_by_path(&"/".to_string()).unwrap();
+        assert_eq!(updated.attr_size, 9999);
+    }
+
+    #[test]
+    fn test_filehandle_attrs_returns_requested() {
+        let mut fm = make_fm();
+        let root = fm.root_fh();
+        let result = fm.filehandle_attrs(
+            &vec![FileAttr::Type, FileAttr::Size, FileAttr::Mode],
+            &root.id,
+        );
+        assert!(result.is_some());
+        let (keys, vals) = result.unwrap();
+        assert_eq!(keys.len(), 3);
+        assert_eq!(vals.len(), 3);
+    }
+
+    #[test]
+    fn test_filehandle_attrs_nonexistent_id() {
+        let mut fm = make_fm();
+        let result = fm.filehandle_attrs(&vec![FileAttr::Type], &[0xFF; 26]);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_get_filehandle_id_volatile_fallback() {
+        let mut fm = make_fm();
+        // VFS path exists in memory but no real path → volatile handle
+        let subdir = fm.root.join("vdir").unwrap();
+        let _ = subdir.create_dir();
+        let id = fm.get_filehandle_id(&subdir);
+        // Volatile handles start with 0x80
+        assert_eq!(id[0], 0x80);
+    }
+
+    #[test]
+    fn test_drop_cache_handle_no_panic() {
+        let mut fm = make_fm();
+        // Dropping a cache for a non-cached filehandle should not panic
+        fm.drop_cache_handle(&[0xAA; 26]);
+    }
+}
