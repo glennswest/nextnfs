@@ -348,7 +348,15 @@ impl ClientManagerHandle {
             }))
             .await;
         match resp {
-            Ok(_) => rx.await.unwrap(),
+            Ok(_) => match rx.await {
+                Ok(result) => result,
+                Err(_) => {
+                    error!("client manager actor died before responding to upsert");
+                    Err(ClientManagerError {
+                        nfs_error: NfsStat4::Nfs4errServerfault,
+                    })
+                }
+            },
             Err(e) => {
                 error!("Couldn't upsert client: {:?}", e);
                 Err(ClientManagerError {
@@ -375,7 +383,15 @@ impl ClientManagerHandle {
             }))
             .await;
         match resp {
-            Ok(_) => rx.await.unwrap(),
+            Ok(_) => match rx.await {
+                Ok(result) => result,
+                Err(_) => {
+                    error!("client manager actor died before responding to confirm");
+                    Err(ClientManagerError {
+                        nfs_error: NfsStat4::Nfs4errServerfault,
+                    })
+                }
+            },
             Err(e) => {
                 error!("Couldn't confirm client: {:?}", e);
                 Err(ClientManagerError {
@@ -395,7 +411,15 @@ impl ClientManagerHandle {
             }))
             .await;
         match resp {
-            Ok(_) => rx.await.unwrap(),
+            Ok(_) => match rx.await {
+                Ok(result) => result,
+                Err(_) => {
+                    error!("client manager actor died before responding to renew");
+                    Err(ClientManagerError {
+                        nfs_error: NfsStat4::Nfs4errServerfault,
+                    })
+                }
+            },
             Err(e) => {
                 error!("Couldn't renew leases: {:?}", e);
                 Err(ClientManagerError {
