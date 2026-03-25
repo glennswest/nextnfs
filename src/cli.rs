@@ -9,8 +9,8 @@ pub async fn export_list(api_url: &str) {
                     println!("No exports configured.");
                 } else {
                     println!(
-                        "{:<16} {:<40} {:<6} {}",
-                        "NAME", "PATH", "MODE", "ID"
+                        "{:<16} {:<40} {:<6} ID",
+                        "NAME", "PATH", "MODE"
                     );
                     for e in &exports {
                         let mode = if e["read_only"].as_bool().unwrap_or(false) {
