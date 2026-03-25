@@ -2,38 +2,36 @@
 
 ## [Unreleased]
 
-### 2026-03-25
-- **fix:** Fattr4 attribute deserialization — implement all common attr types (was todo!() panics), fix XDR offset arithmetic
-- **fix:** RPC dispatch returns ProcUnavail/GarbageArgs instead of panic on invalid procedure/message
-- **fix:** REMOVE operation returned Nfs4errStale on success instead of Nfs4Ok, and panicked on error (todo!())
-- **fix:** Replace all unwrap() panics in filemanager actor channels with proper error handling
-- **fix:** Parent filehandle lookup in create_file/remove_file no longer panics on missing parent
-- **fix:** SETATTR size truncation no longer panics on I/O errors
-- **fix:** Create test_utils module for nextnfs-server — enables all workspace tests (was --exclude workaround)
-- **fix:** Re-enable SETCLIENTID and RENEW integration tests (fix request chaining, no Clone)
-- **feat:** Unified CI test suite — wire-level + shell functional + performance benchmarks
-- **feat:** nextnfstest wire-level protocol tester integrated as workspace member (nfstest/)
-- **feat:** NFSv4.0 basic functional tests — 35 cases (file ops, attrs, symlinks, hardlinks, read/write)
-- **feat:** NFSv4.0 edge case tests — 19 cases (error conditions, filehandle stability, concurrency, locking)
-- **feat:** NFSv4.0 stress tests — 9 cases (10K files, parallel workers, deep paths, mount cycling)
-- **feat:** NFSv4.1 session tests — 6 cases (mount, I/O, clean unmount, recovery, multi-session)
-- **feat:** Performance benchmarks — fio throughput/latency, metadata ops/sec, concurrency scaling
-- **feat:** knfsd baseline — run all tests against kernel NFS first for comparison
-- **feat:** Comparison report — side-by-side knfsd vs nextnfs (functional, wire, performance)
-- **chore:** ci-test.sh rewritten as 6-phase unified orchestrator
-- **fix:** Resolve all clippy warnings in nfstest crate (strip_prefix, push_str, redundant cast, auto-deref)
-- **fix:** CI excludes nextnfs-server from cargo test (broken test stubs)
-- **fix:** CI knfsd mount tries export path before fallback to /
-- **fix:** OpaqueAuth deserialization for RFC 5531 compliance — custom de/serializer handles opaque body wrapper
-- **fix:** AuthUnix.stamp type corrected from u64 to u32 per RFC 5531 authsys_parms
+## [v0.3.0] — 2026-03-25
 
-### 2026-03-22
-- **feat:** RPM packaging for Fedora/RHEL (nextnfs.spec + build-rpm.sh)
-- **feat:** DEB packaging for Debian/Ubuntu (control files + build-deb.sh)
-- **feat:** systemd service file (packaging/nextnfs.service)
-- **feat:** Makefile targets for rpm-x86, rpm-arm64, deb-x86, deb-arm64
-- **fix:** VERSION in Makefile and build.sh updated from 0.1.0 to 0.2.0
-- **docs:** README updated with RPM/DEB install instructions and build targets
+### Added
+- Unified CI test suite — wire-level + shell functional + performance benchmarks (ci-test.sh)
+- nextnfstest wire-level protocol tester integrated as workspace member (nfstest/)
+- NFSv4.0 basic functional tests — 35 cases (file ops, attrs, symlinks, hardlinks, read/write)
+- NFSv4.0 edge case tests — 19 cases (error conditions, filehandle stability, concurrency, locking)
+- NFSv4.0 stress tests — 9 cases (10K files, parallel workers, deep paths, mount cycling)
+- NFSv4.1 session tests — 6 cases (mount, I/O, clean unmount, recovery, multi-session)
+- Performance benchmarks — fio throughput/latency, metadata ops/sec, concurrency scaling
+- knfsd baseline comparison — run all tests against kernel NFS for side-by-side report
+- NFSv4.1 session operation types (proto)
+- NFSv4.2 operation types (proto)
+- RPM packaging for Fedora/RHEL (nextnfs.spec + build-rpm.sh)
+- DEB packaging for Debian/Ubuntu (control files + build-deb.sh)
+- systemd service file (packaging/nextnfs.service)
+- test_utils module — in-memory VFS test harness for nextnfs-server unit tests
+- SETCLIENTID, SETCLIENTID_CONFIRM, and RENEW integration tests restored
+
+### Fixed
+- Fattr4 attribute deserialization — implement all 12 common attribute types (was todo!() panics); fix XDR offset arithmetic (was using loop index instead of byte widths)
+- RPC dispatch returns ProcUnavail/GarbageArgs per RFC 5531 instead of panicking on invalid procedure/message
+- REMOVE operation returned Nfs4errStale on success instead of Nfs4Ok; error path was todo!()
+- Filemanager actor channel sends no longer panic if actor dies — return NfsStat4::Nfs4errServerfault
+- Parent filehandle lookup in create_file/remove_file no longer panics on missing parent
+- SETATTR size truncation no longer panics on I/O errors
+- OpaqueAuth deserialization for RFC 5531 compliance — custom de/serializer handles opaque body wrapper
+- AuthUnix.stamp type corrected from u64 to u32 per RFC 5531 authsys_parms
+- Manual RPC header parsing for wire compatibility with real NFS clients
+- All clippy warnings resolved across workspace
 
 ## [v0.2.0] — 2026-03-22
 
