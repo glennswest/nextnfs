@@ -287,28 +287,42 @@ start_knfsd() {
     # Enable and start NFS services
     modprobe nfsd 2>/dev/null || true
     systemctl start rpcbind 2>/dev/null || rpcbind 2>/dev/null || true
-    systemctl start nfs-server 2>/dev/null || {
-        rpc.nfsd 8
-        rpc.mountd
-    }
-    exportfs -ra
+    sleep 1
 
-    if wait_for_port 127.0.0.1 "$KNFSD_PORT" 10 "knfsd"; then
+    if systemctl start nfs-server 2>&1; then
+        ok "nfs-server.service started"
+    else
+        echo "  systemctl start nfs-server failed, trying manual start..."
+        rpc.nfsd 8 2>&1 || true
+        rpc.mountd 2>&1 || true
+    fi
+    exportfs -ra 2>&1
+    sleep 2
+
+    if wait_for_port 127.0.0.1 "$KNFSD_PORT" 15 "knfsd"; then
         ok "knfsd started, exporting $KNFSD_EXPORT_DIR"
     else
         fail "knfsd failed to start"
+        echo "  rpcinfo output:"
+        rpcinfo -p 2>&1 || true
         return 1
     fi
 
-    # Mount
+    # Mount — use nolock since lockd may not be available in container
     mkdir -p "$KNFSD_MOUNT"
-    mount -t nfs4 -o vers=4.0,proto=tcp,port=${KNFSD_PORT},soft,timeo=50,retrans=2 \
-        127.0.0.1:/ "$KNFSD_MOUNT" 2>&1
+    local mount_out
+    mount_out=$(mount -t nfs4 -o vers=4.0,proto=tcp,soft,timeo=50,retrans=2 \
+        127.0.0.1:/ "$KNFSD_MOUNT" 2>&1) || true
+    echo "  mount output: $mount_out"
 
     if mountpoint -q "$KNFSD_MOUNT"; then
         ok "knfsd mounted at $KNFSD_MOUNT"
     else
         fail "failed to mount knfsd"
+        echo "  rpcinfo:"
+        rpcinfo -p 2>&1 || true
+        echo "  dmesg (last 10 NFS lines):"
+        dmesg 2>/dev/null | grep -i nfs | tail -10 || true
         return 1
     fi
 }
@@ -359,18 +373,22 @@ start_nextnfs() {
         return 1
     fi
 
-    # Mount
+    # Mount — use port= for non-standard port, nolock since we handle locking in-server
     mkdir -p "$NEXTNFS_MOUNT"
-    mount -t nfs4 -o vers=4.0,proto=tcp,port=${NEXTNFS_PORT},mountport=${NEXTNFS_PORT},soft,timeo=50,retrans=2 \
-        127.0.0.1:/ "$NEXTNFS_MOUNT" 2>&1
+    local mount_out
+    mount_out=$(mount -t nfs4 -o "vers=4.0,proto=tcp,port=${NEXTNFS_PORT},soft,timeo=50,retrans=2" \
+        "127.0.0.1:/" "$NEXTNFS_MOUNT" 2>&1) || true
+    echo "  mount output: $mount_out"
 
     if mountpoint -q "$NEXTNFS_MOUNT"; then
         ok "nextnfs mounted at $NEXTNFS_MOUNT"
     else
         fail "failed to mount nextnfs"
-        echo "--- nextnfs log ---"
-        tail -50 /tmp/nextnfs-test.log 2>/dev/null || true
-        echo "--- end log ---"
+        echo "--- mount debug ---"
+        echo "  port: $NEXTNFS_PORT"
+        echo "  server log (last 30 lines):"
+        tail -30 /tmp/nextnfs-test.log 2>/dev/null || true
+        echo "--- end ---"
         return 1
     fi
 }
@@ -607,7 +625,7 @@ main() {
     cargo --version
 
     section "Debug build (all workspace crates)"
-    if cargo build 2>&1; then
+    if cargo build --workspace 2>&1; then
         ok "debug build"
     else
         fail "debug build"
@@ -633,14 +651,14 @@ main() {
     phase 2 "Unit Tests & Lint"
 
     section "cargo test"
-    if cargo test 2>&1; then
+    if cargo test --workspace 2>&1; then
         ok "unit tests"
     else
         fail "unit tests"
     fi
 
     section "cargo clippy"
-    if cargo clippy -- -D warnings 2>&1; then
+    if cargo clippy --workspace -- -D warnings 2>&1; then
         ok "clippy"
     else
         fail "clippy"
@@ -680,7 +698,7 @@ main() {
 
     phase 5 "Release Build"
 
-    if cargo build --release 2>&1; then
+    if cargo build --release --workspace 2>&1; then
         ok "release build"
         local size
         size=$(ls -lh target/release/nextnfs 2>/dev/null | awk '{print $5}')

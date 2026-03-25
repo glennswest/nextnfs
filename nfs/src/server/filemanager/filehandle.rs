@@ -96,7 +96,10 @@ impl Filehandle {
         }
         let version = version + 1;
 
-        let attr_type = match real_meta.mode & (libc::S_IFMT as u32) {
+        #[allow(clippy::unnecessary_cast)]
+        let file_type = real_meta.mode & (libc::S_IFMT as u32);
+        #[allow(clippy::unnecessary_cast)]
+        let attr_type = match file_type {
             m if m == libc::S_IFDIR as u32 => NfsFtype4::Nf4dir,
             m if m == libc::S_IFREG as u32 => NfsFtype4::Nf4reg,
             m if m == libc::S_IFLNK as u32 => NfsFtype4::Nf4lnk,
