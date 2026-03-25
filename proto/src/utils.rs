@@ -15,7 +15,7 @@ use crate::nfs4_proto::Compound4args;
 
 use super::{
     nfs4_proto::{Attrlist4, Fattr4, FileAttr, FileAttrValue, Getattr4resok, NfsResOp4, NfsStat4},
-    rpc_proto::CallBody,
+    rpc_proto::{AuthUnix, CallBody, OpaqueAuth},
 };
 
 pub fn write_argarray<T, S>(v: &T, serializer: S) -> Result<S::Ok, S::Error>
@@ -127,6 +127,107 @@ impl<'de> Deserialize<'de> for CallBody {
 
         const FIELDS: &[&str] = &["rpcvers", "prog", "vers", "proc", "cred", "verf", "args"];
         deserializer.deserialize_struct("CallBody", FIELDS, CallBodyVisitor)
+    }
+}
+
+/// Custom serializer for OpaqueAuth.
+///
+/// RFC 5531 opaque_auth = flavor (u32) + opaque body (u32 length + data + padding).
+/// We serialize by writing the flavor, then the body as opaque bytes.
+impl Serialize for OpaqueAuth {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let (flavor, body_bytes) = match self {
+            OpaqueAuth::AuthNull(data) => (0u32, data.clone()),
+            OpaqueAuth::AuthUnix(auth) => {
+                let mut bytes = Vec::new();
+                serde_xdr::to_writer(&mut bytes, auth)
+                    .map_err(serde::ser::Error::custom)?;
+                (1u32, bytes)
+            }
+            OpaqueAuth::AuthShort => (2u32, Vec::new()),
+            OpaqueAuth::AuthDes => (3u32, Vec::new()),
+        };
+
+        let mut seq = serializer.serialize_struct("OpaqueAuth", 2)?;
+        seq.serialize_field("flavor", &flavor)?;
+        seq.serialize_field("body", &serde_bytes::Bytes::new(&body_bytes))?;
+        seq.end()
+    }
+}
+
+/// Custom deserializer for OpaqueAuth.
+///
+/// RFC 5531 defines opaque_auth as:
+///   struct opaque_auth {
+///       auth_flavor flavor;
+///       opaque body<400>;
+///   };
+///
+/// The body is a variable-length opaque containing the serialized auth
+/// credentials. serde_xdr's enum deserialization would treat this as a
+/// discriminated union (reading variant fields directly), but the wire
+/// format wraps the body in an XDR opaque (u32 length + data + padding).
+/// We must read the opaque wrapper and then parse the body by flavor.
+impl<'de> Deserialize<'de> for OpaqueAuth {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct OpaqueAuthVisitor;
+
+        impl<'de> Visitor<'de> for OpaqueAuthVisitor {
+            type Value = OpaqueAuth;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("struct opaque_auth (flavor + opaque body)")
+            }
+
+            fn visit_seq<V>(self, mut seq: V) -> Result<OpaqueAuth, V::Error>
+            where
+                V: SeqAccess<'de>,
+            {
+                // Read flavor (u32)
+                let flavor: u32 = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(0, &self))?;
+
+                // Read body as opaque bytes (XDR variable-length opaque)
+                let body: serde_bytes::ByteBuf = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+
+                match flavor {
+                    0 => {
+                        // AUTH_NULL — body is typically empty
+                        Ok(OpaqueAuth::AuthNull(body.into_vec()))
+                    }
+                    1 => {
+                        // AUTH_SYS — parse body as AuthUnix (authsys_parms)
+                        let body_bytes = body.into_vec();
+                        let mut cursor = std::io::Cursor::new(&body_bytes);
+                        let auth: AuthUnix =
+                            serde_xdr::from_reader(&mut cursor).map_err(|e| {
+                                de::Error::custom(format!(
+                                    "failed to parse AUTH_SYS body: {:?}",
+                                    e
+                                ))
+                            })?;
+                        Ok(OpaqueAuth::AuthUnix(auth))
+                    }
+                    _ => {
+                        // Unsupported auth flavor — store as raw bytes in AuthNull
+                        debug!("unsupported auth flavor {}, treating as null", flavor);
+                        Ok(OpaqueAuth::AuthNull(body.into_vec()))
+                    }
+                }
+            }
+        }
+
+        const FIELDS: &[&str] = &["flavor", "body"];
+        deserializer.deserialize_struct("OpaqueAuth", FIELDS, OpaqueAuthVisitor)
     }
 }
 

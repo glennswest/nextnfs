@@ -13,14 +13,14 @@ use super::{
 
 #[derive(Clone, Debug, Deserialize, Serialize, Default)]
 pub struct AuthUnix {
-    pub stamp: u64,
+    pub stamp: u32,
     pub machinename: String,
     pub uid: u32,
     pub gid: u32,
     pub gids: Vec<u32>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug)]
 #[repr(u32)]
 pub enum OpaqueAuth {
     AuthNull(Vec<u8>) = 0,
