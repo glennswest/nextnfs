@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+- Functional workflow tests (16 tests: write→read roundtrip, write→overwrite→read, open→write→close lifecycle, create→lookup→getattr chain, nested dir readdir, create→remove→lookup, rename verify, multi-file readdir, lock→unlock→relock, partial read, setattr→getattr, compound CREATE→GETFH, compound CREATE→LOOKUP→GETATTR, compound SAVEFH→RENAME, open→read existing, create/remove/readdir)
+- Total workspace tests: 315 (39 proto + 270 server + 6 nfstest), 0 clippy warnings
+
 ## [v0.7.0] — 2026-03-25
 
 ### Added
