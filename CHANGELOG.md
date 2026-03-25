@@ -3,6 +3,8 @@
 ## [Unreleased]
 
 ### 2026-03-25
+- **fix:** Fattr4 attribute deserialization — implement all common attr types (was todo!() panics), fix XDR offset arithmetic
+- **fix:** RPC dispatch returns ProcUnavail/GarbageArgs instead of panic on invalid procedure/message
 - **fix:** REMOVE operation returned Nfs4errStale on success instead of Nfs4Ok, and panicked on error (todo!())
 - **fix:** Replace all unwrap() panics in filemanager actor channels with proper error handling
 - **fix:** Parent filehandle lookup in create_file/remove_file no longer panics on missing parent

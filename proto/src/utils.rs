@@ -9,7 +9,7 @@ use serde::{
     ser::{SerializeSeq, SerializeStruct},
     Deserialize, Serialize, Serializer,
 };
-use tracing::{debug, error};
+use tracing::debug;
 
 use crate::nfs4_proto::Compound4args;
 
@@ -258,53 +258,110 @@ impl FattrRaw {
     fn attrvalues_from_bytes(&self, fileattrs: &[FileAttr]) -> Attrlist4<FileAttrValue> {
         let mut attr_vals = Attrlist4::<FileAttrValue>::new(None);
         let mut offset = 0;
-        for (idx, attr) in fileattrs.iter().enumerate() {
+        let buf = &self.attr_vals;
+        for attr in fileattrs.iter() {
+            if offset > buf.len() {
+                break;
+            }
             match attr {
                 FileAttr::Type => {
-                    todo!();
+                    if offset + 4 > buf.len() { break; }
+                    let val = u32::from_be_bytes(buf[offset..offset + 4].try_into().unwrap());
+                    use crate::nfs4_proto::NfsFtype4;
+                    let ftype = match val {
+                        1 => NfsFtype4::Nf4reg,
+                        2 => NfsFtype4::Nf4dir,
+                        3 => NfsFtype4::Nf4blk,
+                        4 => NfsFtype4::Nf4chr,
+                        5 => NfsFtype4::Nf4lnk,
+                        6 => NfsFtype4::Nf4sock,
+                        7 => NfsFtype4::Nf4fifo,
+                        8 => NfsFtype4::Nf4attrdir,
+                        9 => NfsFtype4::Nf4namedattr,
+                        _ => NfsFtype4::Nf4Undef,
+                    };
+                    attr_vals.push(FileAttrValue::Type(ftype));
+                    offset += 4;
                 }
                 FileAttr::Change => {
-                    todo!();
+                    if offset + 8 > buf.len() { break; }
+                    let val = u64::from_be_bytes(buf[offset..offset + 8].try_into().unwrap());
+                    attr_vals.push(FileAttrValue::Change(val));
+                    offset += 8;
                 }
                 FileAttr::Size => {
-                    let ele =
-                        u64::from_be_bytes(self.attr_vals[offset..offset + 8].try_into().unwrap());
-                    attr_vals.push(FileAttrValue::Size(ele));
-                    offset += idx + 4;
-                }
-                FileAttr::TimeAccess => {
-                    todo!();
-                }
-                FileAttr::TimeModify => {
-                    todo!();
-                }
-                FileAttr::TimeMetadata => {
-                    todo!();
-                }
-                FileAttr::MountedOnFileid => {
-                    todo!();
-                }
-                FileAttr::Owner => {
-                    todo!();
-                }
-                FileAttr::OwnerGroup => {
-                    todo!();
-                }
-                FileAttr::SpaceUsed => {
-                    todo!();
-                }
-                FileAttr::Numlinks => {
-                    todo!();
+                    if offset + 8 > buf.len() { break; }
+                    let val = u64::from_be_bytes(buf[offset..offset + 8].try_into().unwrap());
+                    attr_vals.push(FileAttrValue::Size(val));
+                    offset += 8;
                 }
                 FileAttr::Mode => {
-                    let ele =
-                        u32::from_be_bytes(self.attr_vals[offset..offset + 4].try_into().unwrap());
-                    attr_vals.push(FileAttrValue::Mode(ele));
-                    offset += idx + 4;
+                    if offset + 4 > buf.len() { break; }
+                    let val = u32::from_be_bytes(buf[offset..offset + 4].try_into().unwrap());
+                    attr_vals.push(FileAttrValue::Mode(val));
+                    offset += 4;
+                }
+                FileAttr::Numlinks => {
+                    if offset + 4 > buf.len() { break; }
+                    let val = u32::from_be_bytes(buf[offset..offset + 4].try_into().unwrap());
+                    attr_vals.push(FileAttrValue::Numlinks(val));
+                    offset += 4;
+                }
+                FileAttr::SpaceUsed => {
+                    if offset + 8 > buf.len() { break; }
+                    let val = u64::from_be_bytes(buf[offset..offset + 8].try_into().unwrap());
+                    attr_vals.push(FileAttrValue::SpaceUsed(val));
+                    offset += 8;
+                }
+                FileAttr::MountedOnFileid => {
+                    if offset + 8 > buf.len() { break; }
+                    let val = u64::from_be_bytes(buf[offset..offset + 8].try_into().unwrap());
+                    attr_vals.push(FileAttrValue::MountedOnFileid(val));
+                    offset += 8;
+                }
+                FileAttr::TimeAccess => {
+                    if offset + 12 > buf.len() { break; }
+                    let seconds = i64::from_be_bytes(buf[offset..offset + 8].try_into().unwrap());
+                    let nseconds = u32::from_be_bytes(buf[offset + 8..offset + 12].try_into().unwrap());
+                    attr_vals.push(FileAttrValue::TimeAccess(crate::nfs4_proto::Nfstime4 { seconds, nseconds }));
+                    offset += 12;
+                }
+                FileAttr::TimeModify => {
+                    if offset + 12 > buf.len() { break; }
+                    let seconds = i64::from_be_bytes(buf[offset..offset + 8].try_into().unwrap());
+                    let nseconds = u32::from_be_bytes(buf[offset + 8..offset + 12].try_into().unwrap());
+                    attr_vals.push(FileAttrValue::TimeModify(crate::nfs4_proto::Nfstime4 { seconds, nseconds }));
+                    offset += 12;
+                }
+                FileAttr::TimeMetadata => {
+                    if offset + 12 > buf.len() { break; }
+                    let seconds = i64::from_be_bytes(buf[offset..offset + 8].try_into().unwrap());
+                    let nseconds = u32::from_be_bytes(buf[offset + 8..offset + 12].try_into().unwrap());
+                    attr_vals.push(FileAttrValue::TimeMetadata(crate::nfs4_proto::Nfstime4 { seconds, nseconds }));
+                    offset += 12;
+                }
+                FileAttr::Owner => {
+                    if offset + 4 > buf.len() { break; }
+                    let len = u32::from_be_bytes(buf[offset..offset + 4].try_into().unwrap()) as usize;
+                    offset += 4;
+                    if offset + len > buf.len() { break; }
+                    let val = String::from_utf8_lossy(&buf[offset..offset + len]).to_string();
+                    attr_vals.push(FileAttrValue::Owner(val));
+                    offset += len + (4 - (len % 4)) % 4; // XDR padding to 4-byte boundary
+                }
+                FileAttr::OwnerGroup => {
+                    if offset + 4 > buf.len() { break; }
+                    let len = u32::from_be_bytes(buf[offset..offset + 4].try_into().unwrap()) as usize;
+                    offset += 4;
+                    if offset + len > buf.len() { break; }
+                    let val = String::from_utf8_lossy(&buf[offset..offset + len]).to_string();
+                    attr_vals.push(FileAttrValue::OwnerGroup(val));
+                    offset += len + (4 - (len % 4)) % 4; // XDR padding to 4-byte boundary
                 }
                 _ => {
-                    error!("Cannot deserialize {:?}", attr);
-                    todo!()
+                    // Unknown attribute — can't determine wire size, stop parsing
+                    debug!("skipping unhandled attr {:?} in SETATTR deserialization", attr);
+                    break;
                 }
             }
         }
