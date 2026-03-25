@@ -89,7 +89,7 @@ pub async fn start_run(
                 && config
                     .tag_filter
                     .as_ref()
-                    .map(|tag| t.tags.iter().any(|tt| *tt == tag.as_str()))
+                    .map(|tag| t.tags.contains(&tag.as_str()))
                     .unwrap_or(true)
                 && config
                     .test_id_filter

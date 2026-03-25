@@ -76,7 +76,7 @@ pub fn list_tests(
             continue;
         }
         if let Some(ref tag) = tag_filter {
-            if !test.tags.iter().any(|t| t == tag) {
+            if !test.tags.contains(&tag.as_str()) {
                 continue;
             }
         }
