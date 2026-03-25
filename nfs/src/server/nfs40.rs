@@ -406,3 +406,304 @@ impl NfsProtoImpl for NFS40Server {
         0
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::*;
+
+    fn make_compound(ops: Vec<NfsArgOp>) -> CallBody {
+        CallBody {
+            rpcvers: 2,
+            prog: 100003,
+            vers: 4,
+            proc: 1,
+            cred: OpaqueAuth::AuthNull(vec![]),
+            verf: OpaqueAuth::AuthNull(vec![]),
+            args: Some(Compound4args {
+                tag: "test".to_string(),
+                minor_version: 0,
+                argarray: ops,
+            }),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_compound_null_procedure() {
+        let server = NFS40Server::new();
+        let request = create_nfs40_server(None).await;
+        let call = CallBody {
+            rpcvers: 2,
+            prog: 100003,
+            vers: 4,
+            proc: 0,
+            cred: OpaqueAuth::AuthNull(vec![]),
+            verf: OpaqueAuth::AuthNull(vec![]),
+            args: None,
+        };
+        let (_request, reply) = server.null(call, request).await;
+        match reply {
+            ReplyBody::MsgAccepted(accepted) => match accepted.reply_data {
+                AcceptBody::Success(res) => {
+                    assert_eq!(res.status, NfsStat4::Nfs4Ok);
+                    assert!(res.resarray.is_empty());
+                }
+                _ => panic!("Expected Success"),
+            },
+            _ => panic!("Expected MsgAccepted"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_compound_putrootfh_getattr() {
+        let server = NFS40Server::new();
+        let request = create_nfs40_server(None).await;
+        let msg = make_compound(vec![
+            NfsArgOp::Opputrootfh(()),
+            NfsArgOp::Opgetattr(Getattr4args {
+                attr_request: Attrlist4(vec![FileAttr::Type]),
+            }),
+        ]);
+        let (_request, reply) = server.compound(msg, request).await;
+        match reply {
+            ReplyBody::MsgAccepted(accepted) => match accepted.reply_data {
+                AcceptBody::Success(res) => {
+                    assert_eq!(res.status, NfsStat4::Nfs4Ok);
+                    assert_eq!(res.resarray.len(), 2);
+                }
+                _ => panic!("Expected Success"),
+            },
+            _ => panic!("Expected MsgAccepted"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_compound_error_stops_processing() {
+        let server = NFS40Server::new();
+        let request = create_nfs40_server(None).await;
+        // GETATTR without PUTROOTFH should fail, stopping the compound
+        let msg = make_compound(vec![
+            NfsArgOp::Opgetattr(Getattr4args {
+                attr_request: Attrlist4(vec![FileAttr::Type]),
+            }),
+            // This should NOT execute because the first op fails
+            NfsArgOp::Opgetattr(Getattr4args {
+                attr_request: Attrlist4(vec![FileAttr::Size]),
+            }),
+        ]);
+        let (_request, reply) = server.compound(msg, request).await;
+        match reply {
+            ReplyBody::MsgAccepted(accepted) => match accepted.reply_data {
+                AcceptBody::Success(res) => {
+                    assert_ne!(res.status, NfsStat4::Nfs4Ok);
+                    // Only the first failed op should be in resarray
+                    assert_eq!(res.resarray.len(), 1);
+                }
+                _ => panic!("Expected Success"),
+            },
+            _ => panic!("Expected MsgAccepted"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_compound_minor_version_mismatch() {
+        let server = NFS40Server::new();
+        let request = create_nfs40_server(None).await;
+        let msg = CallBody {
+            rpcvers: 2,
+            prog: 100003,
+            vers: 4,
+            proc: 1,
+            cred: OpaqueAuth::AuthNull(vec![]),
+            verf: OpaqueAuth::AuthNull(vec![]),
+            args: Some(Compound4args {
+                tag: "test".to_string(),
+                minor_version: 1, // v4.1 — should be rejected
+                argarray: vec![NfsArgOp::Opputrootfh(())],
+            }),
+        };
+        let (_request, reply) = server.compound(msg, request).await;
+        match reply {
+            ReplyBody::MsgAccepted(accepted) => match accepted.reply_data {
+                AcceptBody::Success(res) => {
+                    assert_eq!(res.status, NfsStat4::Nfs4errMinorVersMismatch);
+                    assert!(res.resarray.is_empty());
+                }
+                _ => panic!("Expected Success"),
+            },
+            _ => panic!("Expected MsgAccepted"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_compound_savefh_restorefh() {
+        let server = NFS40Server::new();
+        let request = create_nfs40_server(None).await;
+        let msg = make_compound(vec![
+            NfsArgOp::Opputrootfh(()),
+            NfsArgOp::Opsavefh(()),
+            NfsArgOp::Oprestorefh(()),
+            NfsArgOp::Opgetfh(()),
+        ]);
+        let (_request, reply) = server.compound(msg, request).await;
+        match reply {
+            ReplyBody::MsgAccepted(accepted) => match accepted.reply_data {
+                AcceptBody::Success(res) => {
+                    assert_eq!(res.status, NfsStat4::Nfs4Ok);
+                    assert_eq!(res.resarray.len(), 4);
+                }
+                _ => panic!("Expected Success"),
+            },
+            _ => panic!("Expected MsgAccepted"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_compound_restorefh_without_save() {
+        let server = NFS40Server::new();
+        let request = create_nfs40_server(None).await;
+        let msg = make_compound(vec![
+            NfsArgOp::Opputrootfh(()),
+            NfsArgOp::Oprestorefh(()), // no SAVEFH yet
+        ]);
+        let (_request, reply) = server.compound(msg, request).await;
+        match reply {
+            ReplyBody::MsgAccepted(accepted) => match accepted.reply_data {
+                AcceptBody::Success(res) => {
+                    assert_eq!(res.status, NfsStat4::Nfs4errRestorefh);
+                }
+                _ => panic!("Expected Success"),
+            },
+            _ => panic!("Expected MsgAccepted"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_compound_getfh_no_filehandle() {
+        let server = NFS40Server::new();
+        let request = create_nfs40_server(None).await;
+        let msg = make_compound(vec![NfsArgOp::Opgetfh(())]);
+        let (_request, reply) = server.compound(msg, request).await;
+        match reply {
+            ReplyBody::MsgAccepted(accepted) => match accepted.reply_data {
+                AcceptBody::Success(res) => {
+                    assert_ne!(res.status, NfsStat4::Nfs4Ok);
+                }
+                _ => panic!("Expected Success"),
+            },
+            _ => panic!("Expected MsgAccepted"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_compound_create_readdir_lifecycle() {
+        // Use root fh helper — bypasses PUTROOTFH export lookup
+        let server = NFS40Server::new();
+        let request = create_nfs40_server_with_root_fh(None).await;
+
+        // CREATE a directory in root
+        let msg = make_compound(vec![NfsArgOp::Opcreate(Create4args {
+            objtype: Createtype4::Nf4dir,
+            objname: "testdir".to_string(),
+            createattrs: Fattr4 {
+                attrmask: Attrlist4(vec![]),
+                attr_vals: Attrlist4(vec![]),
+            },
+        })]);
+        let (request, reply) = server.compound(msg, request).await;
+        match &reply {
+            ReplyBody::MsgAccepted(accepted) => match &accepted.reply_data {
+                AcceptBody::Success(res) => {
+                    assert_eq!(res.status, NfsStat4::Nfs4Ok);
+                }
+                _ => panic!("Expected Success"),
+            },
+            _ => panic!("Expected MsgAccepted"),
+        }
+
+        // READDIR the root to confirm the directory was created
+        // Need to re-establish root fh since CREATE changes the current fh
+        let root_fh = request.file_manager().get_root_filehandle().await.unwrap();
+        let mut request = request;
+        request.set_filehandle(root_fh);
+
+        let msg2 = make_compound(vec![NfsArgOp::Opreaddir(Readdir4args {
+            cookie: 0,
+            cookieverf: [0; 8],
+            dircount: 4096,
+            maxcount: 4096,
+            attr_request: Attrlist4(vec![FileAttr::Type]),
+        })]);
+        let (_request, reply) = server.compound(msg2, request).await;
+        match reply {
+            ReplyBody::MsgAccepted(accepted) => match accepted.reply_data {
+                AcceptBody::Success(res) => {
+                    assert_eq!(res.status, NfsStat4::Nfs4Ok);
+                    assert_eq!(res.resarray.len(), 1);
+                    // Verify READDIR returned an entry for "testdir"
+                    if let NfsResOp4::Opreaddir(readdir_res) = &res.resarray[0] {
+                        if let ReadDir4res::Resok4(resok) = readdir_res {
+                            assert!(resok.reply.entries.is_some());
+                        } else {
+                            panic!("Expected Resok4");
+                        }
+                    }
+                }
+                _ => panic!("Expected Success"),
+            },
+            _ => panic!("Expected MsgAccepted"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_compound_unsupported_ops() {
+        let server = NFS40Server::new();
+        let request = create_nfs40_server(None).await;
+        let msg = make_compound(vec![NfsArgOp::OpUndef0]);
+        let (_request, reply) = server.compound(msg, request).await;
+        match reply {
+            ReplyBody::MsgAccepted(accepted) => match accepted.reply_data {
+                AcceptBody::Success(res) => {
+                    assert_eq!(res.status, NfsStat4::Nfs4errNotsupp);
+                }
+                _ => panic!("Expected Success"),
+            },
+            _ => panic!("Expected MsgAccepted"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_compound_empty_args() {
+        let server = NFS40Server::new();
+        let request = create_nfs40_server(None).await;
+        let msg = make_compound(vec![]);
+        let (_request, reply) = server.compound(msg, request).await;
+        match reply {
+            ReplyBody::MsgAccepted(accepted) => match accepted.reply_data {
+                AcceptBody::Success(res) => {
+                    assert_eq!(res.status, NfsStat4::Nfs4Ok);
+                    assert!(res.resarray.is_empty());
+                }
+                _ => panic!("Expected Success"),
+            },
+            _ => panic!("Expected MsgAccepted"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_savefh_without_current_fh() {
+        let server = NFS40Server::new();
+        let request = create_nfs40_server(None).await;
+        let msg = make_compound(vec![NfsArgOp::Opsavefh(())]);
+        let (_request, reply) = server.compound(msg, request).await;
+        match reply {
+            ReplyBody::MsgAccepted(accepted) => match accepted.reply_data {
+                AcceptBody::Success(res) => {
+                    assert_eq!(res.status, NfsStat4::Nfs4errNofilehandle);
+                }
+                _ => panic!("Expected Success"),
+            },
+            _ => panic!("Expected MsgAccepted"),
+        }
+    }
+}

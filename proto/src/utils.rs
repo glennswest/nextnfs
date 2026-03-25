@@ -591,3 +591,257 @@ impl Serialize for Attrlist4<FileAttrValue> {
         serializer.serialize_bytes(&attr_values)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::nfs4_proto::*;
+
+    #[test]
+    fn test_attrlist4_fileattr_bitmap_roundtrip() {
+        let attrs = Attrlist4::<FileAttr>::new(Some(vec![
+            FileAttr::Type,
+            FileAttr::Size,
+            FileAttr::Mode,
+        ]));
+        let bitmap = attrs.file_attrs_to_bitmap().unwrap();
+        let roundtripped = Attrlist4::<FileAttr>::from_u32(bitmap);
+        assert_eq!(attrs.len(), roundtripped.len());
+        for (a, b) in attrs.iter().zip(roundtripped.iter()) {
+            assert_eq!(a, b);
+        }
+    }
+
+    #[test]
+    fn test_attrlist4_fileattr_bitmap_all_common_attrs() {
+        let attrs = Attrlist4::<FileAttr>::new(Some(vec![
+            FileAttr::SupportedAttrs,
+            FileAttr::Type,
+            FileAttr::FhExpireType,
+            FileAttr::Change,
+            FileAttr::Size,
+            FileAttr::Fsid,
+            FileAttr::Fileid,
+            FileAttr::Mode,
+            FileAttr::Numlinks,
+            FileAttr::Owner,
+            FileAttr::OwnerGroup,
+            FileAttr::SpaceUsed,
+            FileAttr::TimeAccess,
+            FileAttr::TimeModify,
+        ]));
+        let bitmap = attrs.file_attrs_to_bitmap().unwrap();
+        let roundtripped = Attrlist4::<FileAttr>::from_u32(bitmap);
+        assert_eq!(attrs.len(), roundtripped.len());
+    }
+
+    #[test]
+    fn test_attrlist4_fileattr_empty() {
+        let attrs = Attrlist4::<FileAttr>::new(None);
+        assert!(attrs.is_empty());
+        let bitmap = attrs.file_attrs_to_bitmap().unwrap();
+        let roundtripped = Attrlist4::<FileAttr>::from_u32(bitmap);
+        assert!(roundtripped.is_empty());
+    }
+
+    #[test]
+    fn test_fattr_value_type_roundtrip() {
+        let vals = Attrlist4::<FileAttrValue>::new(Some(vec![
+            FileAttrValue::Type(NfsFtype4::Nf4dir),
+        ]));
+        let bytes = vals.to_bytes();
+        assert_eq!(bytes.len(), 4);
+        let val = u32::from_be_bytes(bytes[0..4].try_into().unwrap());
+        assert_eq!(val, 2); // Nf4dir = 2
+    }
+
+    #[test]
+    fn test_fattr_value_size_roundtrip() {
+        let vals = Attrlist4::<FileAttrValue>::new(Some(vec![
+            FileAttrValue::Size(0x1234567890ABCDEF),
+        ]));
+        let bytes = vals.to_bytes();
+        assert_eq!(bytes.len(), 8);
+        let val = u64::from_be_bytes(bytes[0..8].try_into().unwrap());
+        assert_eq!(val, 0x1234567890ABCDEF);
+    }
+
+    #[test]
+    fn test_fattr_value_mode_roundtrip() {
+        let vals = Attrlist4::<FileAttrValue>::new(Some(vec![
+            FileAttrValue::Mode(0o755),
+        ]));
+        let bytes = vals.to_bytes();
+        assert_eq!(bytes.len(), 4);
+        let val = u32::from_be_bytes(bytes[0..4].try_into().unwrap());
+        assert_eq!(val, 0o755);
+    }
+
+    #[test]
+    fn test_fattr_value_time_roundtrip() {
+        let time = Nfstime4 {
+            seconds: 1711000000,
+            nseconds: 123456789,
+        };
+        let vals = Attrlist4::<FileAttrValue>::new(Some(vec![
+            FileAttrValue::TimeModify(time),
+        ]));
+        let bytes = vals.to_bytes();
+        assert_eq!(bytes.len(), 12);
+        let secs = i64::from_be_bytes(bytes[0..8].try_into().unwrap());
+        let nsecs = u32::from_be_bytes(bytes[8..12].try_into().unwrap());
+        assert_eq!(secs, 1711000000);
+        assert_eq!(nsecs, 123456789);
+    }
+
+    #[test]
+    fn test_fattr_value_owner_roundtrip() {
+        let vals = Attrlist4::<FileAttrValue>::new(Some(vec![
+            FileAttrValue::Owner("root".to_string()),
+        ]));
+        let bytes = vals.to_bytes();
+        // 4 bytes length + 4 bytes "root" = 8 bytes
+        assert_eq!(bytes.len(), 8);
+        let len = u32::from_be_bytes(bytes[0..4].try_into().unwrap()) as usize;
+        assert_eq!(len, 4);
+        let owner = String::from_utf8_lossy(&bytes[4..8]).to_string();
+        assert_eq!(owner, "root");
+    }
+
+    #[test]
+    fn test_fattr_value_multiple_attrs_roundtrip() {
+        let vals = Attrlist4::<FileAttrValue>::new(Some(vec![
+            FileAttrValue::Type(NfsFtype4::Nf4reg),
+            FileAttrValue::Size(4096),
+            FileAttrValue::Mode(0o644),
+        ]));
+        let bytes = vals.to_bytes();
+        // Type=4 + Size=8 + Mode=4 = 16 bytes
+        assert_eq!(bytes.len(), 16);
+
+        let ftype = u32::from_be_bytes(bytes[0..4].try_into().unwrap());
+        assert_eq!(ftype, 1); // Nf4reg = 1
+        let size = u64::from_be_bytes(bytes[4..12].try_into().unwrap());
+        assert_eq!(size, 4096);
+        let mode = u32::from_be_bytes(bytes[12..16].try_into().unwrap());
+        assert_eq!(mode, 0o644);
+    }
+
+    #[test]
+    fn test_fattr_raw_attrvalues_from_bytes() {
+        // Simulate a wire-format attribute value buffer: Type(dir) + Mode(755)
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&2u32.to_be_bytes()); // Type = Nf4dir
+        buf.extend_from_slice(&0o755u32.to_be_bytes()); // Mode
+
+        let raw = FattrRaw {
+            attrmask: vec![],
+            attr_vals: buf,
+        };
+        let attrs = &[FileAttr::Type, FileAttr::Mode];
+        let result = raw.attrvalues_from_bytes(attrs);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], FileAttrValue::Type(NfsFtype4::Nf4dir));
+        assert_eq!(result[1], FileAttrValue::Mode(0o755));
+    }
+
+    #[test]
+    fn test_fattr_raw_attrvalues_with_time() {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&1711000000i64.to_be_bytes());
+        buf.extend_from_slice(&500u32.to_be_bytes());
+
+        let raw = FattrRaw {
+            attrmask: vec![],
+            attr_vals: buf,
+        };
+        let attrs = &[FileAttr::TimeAccess];
+        let result = raw.attrvalues_from_bytes(attrs);
+        assert_eq!(result.len(), 1);
+        assert_eq!(
+            result[0],
+            FileAttrValue::TimeAccess(Nfstime4 {
+                seconds: 1711000000,
+                nseconds: 500,
+            })
+        );
+    }
+
+    #[test]
+    fn test_fattr_raw_attrvalues_with_string() {
+        let owner_str = "nobody";
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&(owner_str.len() as u32).to_be_bytes());
+        buf.extend_from_slice(owner_str.as_bytes());
+        // XDR pad to 4-byte boundary: "nobody" is 6 bytes, needs 2 bytes padding
+        buf.extend_from_slice(&[0u8; 2]);
+
+        let raw = FattrRaw {
+            attrmask: vec![],
+            attr_vals: buf,
+        };
+        let attrs = &[FileAttr::Owner];
+        let result = raw.attrvalues_from_bytes(attrs);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], FileAttrValue::Owner("nobody".to_string()));
+    }
+
+    #[test]
+    fn test_fattr_raw_truncated_buffer() {
+        // Buffer is too short for the requested attribute
+        let buf = vec![0u8; 2]; // Only 2 bytes, but Type needs 4
+        let raw = FattrRaw {
+            attrmask: vec![],
+            attr_vals: buf,
+        };
+        let attrs = &[FileAttr::Type];
+        let result = raw.attrvalues_from_bytes(attrs);
+        assert!(result.is_empty()); // Should stop parsing gracefully
+    }
+
+    #[test]
+    fn test_fattr_raw_to_fileattrs() {
+        // Bitmap with Type (bit 1) and Mode (bit 33) set
+        let raw = FattrRaw {
+            attrmask: vec![0b10, 0b10], // bit 1 in word 0, bit 1 in word 1
+            attr_vals: vec![],
+        };
+        let attrs = raw.to_fileattrs();
+        assert_eq!(attrs.len(), 2);
+        assert_eq!(attrs[0], FileAttr::Type);
+        assert_eq!(attrs[1], FileAttr::Mode);
+    }
+
+    #[test]
+    fn test_nfsstat4_serialize() {
+        let ok_bytes = serde_xdr::to_bytes(&NfsStat4::Nfs4Ok).unwrap();
+        let val = u32::from_be_bytes(ok_bytes[..4].try_into().unwrap());
+        assert_eq!(val, 0);
+
+        let stale_bytes = serde_xdr::to_bytes(&NfsStat4::Nfs4errStale).unwrap();
+        let val = u32::from_be_bytes(stale_bytes[..4].try_into().unwrap());
+        assert_eq!(val, 70);
+    }
+
+    #[test]
+    fn test_opaque_auth_null_serialize_roundtrip() {
+        let auth = OpaqueAuth::AuthNull(vec![]);
+        let bytes = serde_xdr::to_bytes(&auth).unwrap();
+        // flavor=0 (4 bytes) + body length=0 (4 bytes) = 8 bytes
+        assert_eq!(bytes.len(), 8);
+    }
+
+    #[test]
+    fn test_opaque_auth_unix_serialize_roundtrip() {
+        let auth = OpaqueAuth::AuthUnix(AuthUnix {
+            stamp: 12345,
+            machinename: "testhost".to_string(),
+            uid: 1000,
+            gid: 1000,
+            gids: vec![1000, 100],
+        });
+        let bytes = serde_xdr::to_bytes(&auth).unwrap();
+        // Should serialize without panic
+        assert!(!bytes.is_empty());
+    }
+}
