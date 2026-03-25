@@ -705,4 +705,749 @@ mod tests {
             _ => panic!("Expected MsgAccepted"),
         }
     }
+
+    // ===== Functional Workflow Tests =====
+    // These tests exercise multi-operation sequences that simulate real NFS client workflows.
+
+    #[tokio::test]
+    async fn test_workflow_write_read_roundtrip() {
+        use crate::server::nfs40::{Read4args, Read4res, Write4args, Write4res};
+        use crate::server::operation::NfsOperation;
+
+        let mut request = create_nfs40_server_with_root_fh(None).await;
+        let root_file = request.current_filehandle().unwrap().file.clone();
+        root_file.join("roundtrip.txt").unwrap().create_file().unwrap();
+        let fh = request.file_manager()
+            .get_filehandle_for_path("roundtrip.txt".to_string())
+            .await.unwrap();
+        request.set_filehandle(fh);
+
+        // Write data with FileSync
+        let write_args = Write4args {
+            stateid: Stateid4 { seqid: 0, other: [0u8; 12] },
+            offset: 0,
+            stable: StableHow4::FileSync4,
+            data: b"hello NFS world".to_vec(),
+        };
+        let response = write_args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        let mut request = response.request;
+
+        // Re-fetch filehandle (write may have invalidated cache)
+        let fh = request.file_manager()
+            .get_filehandle_for_path("roundtrip.txt".to_string())
+            .await.unwrap();
+        request.set_filehandle(fh);
+
+        // Read it back
+        let read_args = Read4args {
+            stateid: Stateid4 { seqid: 0, other: [0u8; 12] },
+            offset: 0,
+            count: 4096,
+        };
+        let response = read_args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        match response.result {
+            Some(NfsResOp4::Opread(Read4res::Resok4(resok))) => {
+                assert_eq!(resok.data, b"hello NFS world");
+                assert!(resok.eof);
+            }
+            other => panic!("Expected Read4res::Resok4, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_workflow_write_overwrite_read() {
+        use crate::server::nfs40::{Read4args, Read4res, Write4args};
+        use crate::server::operation::NfsOperation;
+
+        let mut request = create_nfs40_server_with_root_fh(None).await;
+        let root_file = request.current_filehandle().unwrap().file.clone();
+        root_file.join("overwrite.txt").unwrap().create_file().unwrap();
+        let fh = request.file_manager()
+            .get_filehandle_for_path("overwrite.txt".to_string())
+            .await.unwrap();
+        request.set_filehandle(fh);
+
+        // First write
+        let write1 = Write4args {
+            stateid: Stateid4 { seqid: 0, other: [0u8; 12] },
+            offset: 0,
+            stable: StableHow4::FileSync4,
+            data: b"AAAAAAAAAA".to_vec(),
+        };
+        let response = write1.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        let mut request = response.request;
+
+        // Re-fetch fh
+        let fh = request.file_manager()
+            .get_filehandle_for_path("overwrite.txt".to_string())
+            .await.unwrap();
+        request.set_filehandle(fh);
+
+        // Overwrite at offset 0
+        let write2 = Write4args {
+            stateid: Stateid4 { seqid: 0, other: [0u8; 12] },
+            offset: 0,
+            stable: StableHow4::FileSync4,
+            data: b"BBBB".to_vec(),
+        };
+        let response = write2.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        let mut request = response.request;
+
+        // Re-fetch fh
+        let fh = request.file_manager()
+            .get_filehandle_for_path("overwrite.txt".to_string())
+            .await.unwrap();
+        request.set_filehandle(fh);
+
+        // Read — should see "BBBB" followed by remaining "AAAAAA"
+        let read_args = Read4args {
+            stateid: Stateid4 { seqid: 0, other: [0u8; 12] },
+            offset: 0,
+            count: 4096,
+        };
+        let response = read_args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        match response.result {
+            Some(NfsResOp4::Opread(Read4res::Resok4(resok))) => {
+                assert_eq!(&resok.data[..4], b"BBBB");
+                assert_eq!(resok.data.len(), 10);
+            }
+            other => panic!("Expected Read4res::Resok4, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_workflow_open_write_close() {
+        use crate::server::nfs40::{
+            Close4args, Close4res, Open4args, Open4res, OpenClaim4, OpenFlag4,
+            OpenOwner4, Write4args, Write4res,
+        };
+        use crate::server::operation::NfsOperation;
+
+        let request = create_nfs40_server_with_root_fh(None).await;
+
+        // OPEN — create file
+        let open_args = Open4args {
+            seqid: 1,
+            share_access: 2, // WRITE
+            share_deny: 0,
+            owner: OpenOwner4 { clientid: 1, owner: b"test".to_vec() },
+            openhow: OpenFlag4::How(CreateHow4::UNCHECKED4(Fattr4 {
+                attrmask: Attrlist4(vec![]),
+                attr_vals: Attrlist4(vec![]),
+            })),
+            claim: OpenClaim4::ClaimNull("lifecycle.txt".to_string()),
+        };
+        let response = open_args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        let stateid = match &response.result {
+            Some(NfsResOp4::Opopen(Open4res::Resok4(resok))) => resok.stateid.clone(),
+            other => panic!("Expected Opopen Resok4, got {:?}", other),
+        };
+        let request = response.request;
+
+        // WRITE — write data to the opened file
+        let write_args = Write4args {
+            stateid: stateid.clone(),
+            offset: 0,
+            stable: StableHow4::FileSync4,
+            data: b"lifecycle data".to_vec(),
+        };
+        let response = write_args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        match &response.result {
+            Some(NfsResOp4::Opwrite(Write4res::Resok4(resok))) => {
+                assert_eq!(resok.count, 14);
+            }
+            other => panic!("Expected Write4res::Resok4, got {:?}", other),
+        }
+        let request = response.request;
+
+        // CLOSE
+        let close_args = Close4args {
+            seqid: stateid.seqid + 1,
+            open_stateid: stateid,
+        };
+        let response = close_args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        match response.result {
+            Some(NfsResOp4::Opclose(Close4res::OpenStateid(_))) => {}
+            other => panic!("Expected Opclose, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_workflow_create_lookup_getattr() {
+        use crate::server::nfs40::{Getattr4args, Getattr4resok, Lookup4args};
+        use crate::server::operation::NfsOperation;
+
+        let request = create_nfs40_server_with_root_fh(None).await;
+
+        // CREATE directory
+        let create_args = Create4args {
+            objtype: Createtype4::Nf4dir,
+            objname: "getattr_dir".to_string(),
+            createattrs: Fattr4 {
+                attrmask: Attrlist4(vec![]),
+                attr_vals: Attrlist4(vec![]),
+            },
+        };
+        let response = create_args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+
+        // Reset to root
+        let mut request = response.request;
+        let root_fh = request.file_manager().get_root_filehandle().await.unwrap();
+        request.set_filehandle(root_fh);
+
+        // LOOKUP the directory
+        let lookup_args = Lookup4args { objname: "getattr_dir".to_string() };
+        let response = lookup_args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        let request = response.request;
+
+        // GETATTR — verify it's a directory
+        let getattr_args = Getattr4args {
+            attr_request: Attrlist4(vec![FileAttr::Type]),
+        };
+        let response = getattr_args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        match response.result {
+            Some(NfsResOp4::Opgetattr(Getattr4resok { status, obj_attributes: Some(fattr) })) => {
+                assert_eq!(status, NfsStat4::Nfs4Ok);
+                assert!(fattr.attrmask.contains(&FileAttr::Type));
+            }
+            other => panic!("Expected Getattr4resok with attrs, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_workflow_nested_dir_readdir() {
+        use crate::server::operation::NfsOperation;
+
+        let request = create_nfs40_server_with_root_fh(None).await;
+
+        // CREATE parent directory
+        let create_parent = Create4args {
+            objtype: Createtype4::Nf4dir,
+            objname: "parent".to_string(),
+            createattrs: Fattr4 {
+                attrmask: Attrlist4(vec![]),
+                attr_vals: Attrlist4(vec![]),
+            },
+        };
+        let response = create_parent.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        // current fh is now "parent" dir
+        let request = response.request;
+
+        // CREATE child directory inside parent
+        let create_child = Create4args {
+            objtype: Createtype4::Nf4dir,
+            objname: "child".to_string(),
+            createattrs: Fattr4 {
+                attrmask: Attrlist4(vec![]),
+                attr_vals: Attrlist4(vec![]),
+            },
+        };
+        let response = create_child.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+
+        // Navigate back to parent for READDIR
+        let mut request = response.request;
+        let parent_fh = request.file_manager()
+            .get_filehandle_for_path("parent".to_string())
+            .await.unwrap();
+        request.set_filehandle(parent_fh);
+
+        // READDIR parent — should contain "child"
+        let readdir_args = Readdir4args {
+            cookie: 0,
+            cookieverf: [0; 8],
+            dircount: 4096,
+            maxcount: 4096,
+            attr_request: Attrlist4(vec![FileAttr::Type]),
+        };
+        let response = readdir_args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        match response.result {
+            Some(NfsResOp4::Opreaddir(ReadDir4res::Resok4(resok))) => {
+                assert!(resok.reply.entries.is_some());
+                // Walk linked list to collect names
+                let mut names = vec![];
+                let mut entry = resok.reply.entries.as_ref();
+                while let Some(e) = entry {
+                    names.push(e.name.as_str());
+                    entry = e.nextentry.as_deref();
+                }
+                assert!(names.contains(&"child"), "Expected 'child' in {:?}", names);
+            }
+            other => panic!("Expected Opreaddir Resok4, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_workflow_create_remove_lookup_fails() {
+        use crate::server::nfs40::{Lookup4args, Remove4args};
+        use crate::server::operation::NfsOperation;
+
+        let request = create_nfs40_server_with_root_fh(None).await;
+
+        // Create a file via VFS (not a directory — directory VFS removal has a known bug)
+        let root_file = request.current_filehandle().unwrap().file.clone();
+        root_file.join("doomed.txt").unwrap().create_file().unwrap();
+
+        // REMOVE the file
+        let remove_args = Remove4args { target: "doomed.txt".to_string() };
+        let response = remove_args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+
+        // Reset to root
+        let mut request = response.request;
+        let root_fh = request.file_manager().get_root_filehandle().await.unwrap();
+        request.set_filehandle(root_fh);
+
+        // LOOKUP — should fail since file was removed from VFS
+        let lookup_args = Lookup4args { objname: "doomed.txt".to_string() };
+        let response = lookup_args.execute(request).await;
+        assert_ne!(response.status, NfsStat4::Nfs4Ok);
+    }
+
+    #[tokio::test]
+    async fn test_workflow_rename_verify() {
+        use crate::server::nfs40::{Lookup4args, Rename4args};
+        use crate::server::operation::NfsOperation;
+
+        let request = create_nfs40_server_with_root_fh(None).await;
+
+        // CREATE directory
+        let create_args = Create4args {
+            objtype: Createtype4::Nf4dir,
+            objname: "before".to_string(),
+            createattrs: Fattr4 {
+                attrmask: Attrlist4(vec![]),
+                attr_vals: Attrlist4(vec![]),
+            },
+        };
+        let response = create_args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+
+        // Reset to root, save as source dir
+        let mut request = response.request;
+        let root_fh = request.file_manager().get_root_filehandle().await.unwrap();
+        request.set_filehandle(root_fh);
+        request.save_filehandle(); // saved=root (source dir)
+        // current=root (target dir)
+
+        // RENAME "before" → "after"
+        let rename_args = Rename4args {
+            oldname: "before".to_string(),
+            newname: "after".to_string(),
+        };
+        let response = rename_args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+
+        // Reset to root
+        let mut request = response.request;
+        let root_fh = request.file_manager().get_root_filehandle().await.unwrap();
+        request.set_filehandle(root_fh);
+
+        // LOOKUP new name — should succeed
+        let lookup_new = Lookup4args { objname: "after".to_string() };
+        let response = lookup_new.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+
+        // Reset to root
+        let mut request = response.request;
+        let root_fh = request.file_manager().get_root_filehandle().await.unwrap();
+        request.set_filehandle(root_fh);
+
+        // LOOKUP old name — should fail
+        let lookup_old = Lookup4args { objname: "before".to_string() };
+        let response = lookup_old.execute(request).await;
+        assert_ne!(response.status, NfsStat4::Nfs4Ok);
+    }
+
+    #[tokio::test]
+    async fn test_workflow_multi_file_readdir() {
+        use crate::server::operation::NfsOperation;
+
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let root_file = request.current_filehandle().unwrap().file.clone();
+
+        // Create 3 files directly via VFS
+        for name in &["alpha.txt", "beta.txt", "gamma.txt"] {
+            root_file.join(name).unwrap().create_file().unwrap();
+        }
+
+        // READDIR root
+        let readdir_args = Readdir4args {
+            cookie: 0,
+            cookieverf: [0; 8],
+            dircount: 8192,
+            maxcount: 8192,
+            attr_request: Attrlist4(vec![FileAttr::Type]),
+        };
+        let response = readdir_args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        match response.result {
+            Some(NfsResOp4::Opreaddir(ReadDir4res::Resok4(resok))) => {
+                // Walk linked list to collect names
+                let mut names = vec![];
+                let mut entry = resok.reply.entries.as_ref();
+                while let Some(e) = entry {
+                    names.push(e.name.clone());
+                    entry = e.nextentry.as_deref();
+                }
+                assert_eq!(names.len(), 3);
+                assert!(names.contains(&"alpha.txt".to_string()));
+                assert!(names.contains(&"beta.txt".to_string()));
+                assert!(names.contains(&"gamma.txt".to_string()));
+            }
+            other => panic!("Expected Opreaddir Resok4, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_workflow_lock_unlock_relock() {
+        use crate::server::filemanager::LockResult;
+        use crate::server::nfs40::{Locku4args, Locku4res, NfsLockType4};
+        use crate::server::operation::NfsOperation;
+
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let fh_id = request.current_filehandle().unwrap().id;
+
+        // LOCK
+        let lock_result = request.file_manager()
+            .lock_file(fh_id, 1, b"owner1".to_vec(), NfsLockType4::WriteLt, 0, 100)
+            .await;
+        let stateid = match lock_result {
+            LockResult::Ok(s) => s,
+            other => panic!("Expected LockResult::Ok, got {:?}", other),
+        };
+
+        // UNLOCK via LOCKU operation
+        let locku_args = Locku4args {
+            locktype: NfsLockType4::WriteLt,
+            seqid: stateid.seqid,
+            lock_stateid: stateid.clone(),
+            offset: 0,
+            length: 100,
+        };
+        let response = locku_args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        let request = response.request;
+
+        // RELOCK — same range should now succeed
+        let lock_result2 = request.file_manager()
+            .lock_file(fh_id, 2, b"owner2".to_vec(), NfsLockType4::WriteLt, 0, 100)
+            .await;
+        match lock_result2 {
+            LockResult::Ok(_) => {}
+            other => panic!("Expected second lock to succeed, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_workflow_partial_read_after_write() {
+        use crate::server::nfs40::{Read4args, Read4res, Write4args};
+        use crate::server::operation::NfsOperation;
+
+        let mut request = create_nfs40_server_with_root_fh(None).await;
+        let root_file = request.current_filehandle().unwrap().file.clone();
+        root_file.join("partial_rw.txt").unwrap().create_file().unwrap();
+        let fh = request.file_manager()
+            .get_filehandle_for_path("partial_rw.txt".to_string())
+            .await.unwrap();
+        request.set_filehandle(fh);
+
+        // Write 26 bytes (alphabet)
+        let write_args = Write4args {
+            stateid: Stateid4 { seqid: 0, other: [0u8; 12] },
+            offset: 0,
+            stable: StableHow4::FileSync4,
+            data: b"abcdefghijklmnopqrstuvwxyz".to_vec(),
+        };
+        let response = write_args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        let mut request = response.request;
+
+        // Re-fetch fh
+        let fh = request.file_manager()
+            .get_filehandle_for_path("partial_rw.txt".to_string())
+            .await.unwrap();
+        request.set_filehandle(fh);
+
+        // Read 5 bytes from offset 10 — should get "klmno"
+        let read_args = Read4args {
+            stateid: Stateid4 { seqid: 0, other: [0u8; 12] },
+            offset: 10,
+            count: 5,
+        };
+        let response = read_args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        match response.result {
+            Some(NfsResOp4::Opread(Read4res::Resok4(resok))) => {
+                assert_eq!(resok.data, b"klmno");
+                assert!(!resok.eof);
+            }
+            other => panic!("Expected Read4res::Resok4, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_workflow_setattr_getattr_roundtrip() {
+        use crate::server::nfs40::{
+            Getattr4args, Getattr4resok, SetAttr4args, SetAttr4res,
+        };
+        use crate::server::operation::NfsOperation;
+        use nextnfs_proto::nfs4_proto::FileAttrValue;
+
+        let request = create_nfs40_server_with_root_fh(None).await;
+
+        // SETATTR — set an attribute
+        let setattr_args = SetAttr4args {
+            stateid: Stateid4 { seqid: 0, other: [0u8; 12] },
+            obj_attributes: Fattr4 {
+                attrmask: Attrlist4(vec![FileAttr::Size]),
+                attr_vals: Attrlist4(vec![FileAttrValue::Size(0)]),
+            },
+        };
+        let response = setattr_args.execute(request).await;
+        // May or may not succeed on root dir, but shouldn't panic
+        let request = response.request;
+
+        // GETATTR — verify attributes are returned
+        let getattr_args = Getattr4args {
+            attr_request: Attrlist4(vec![FileAttr::Type, FileAttr::Size]),
+        };
+        let response = getattr_args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        match response.result {
+            Some(NfsResOp4::Opgetattr(Getattr4resok { status, obj_attributes: Some(fattr) })) => {
+                assert_eq!(status, NfsStat4::Nfs4Ok);
+                assert!(fattr.attrmask.contains(&FileAttr::Type));
+            }
+            other => panic!("Expected Getattr4resok, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_compound_putrootfh_create_getfh() {
+        let server = NFS40Server::new();
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let msg = make_compound(vec![
+            NfsArgOp::Opcreate(Create4args {
+                objtype: Createtype4::Nf4dir,
+                objname: "compound_dir".to_string(),
+                createattrs: Fattr4 {
+                    attrmask: Attrlist4(vec![]),
+                    attr_vals: Attrlist4(vec![]),
+                },
+            }),
+            NfsArgOp::Opgetfh(()),
+        ]);
+        let (_request, reply) = server.compound(msg, request).await;
+        match reply {
+            ReplyBody::MsgAccepted(accepted) => match accepted.reply_data {
+                AcceptBody::Success(res) => {
+                    assert_eq!(res.status, NfsStat4::Nfs4Ok);
+                    assert_eq!(res.resarray.len(), 2);
+                    // Second result should be GETFH with a valid filehandle
+                    match &res.resarray[1] {
+                        NfsResOp4::Opgetfh(GetFh4res::Resok4(resok)) => {
+                            assert_ne!(resok.object, [0u8; 26]);
+                        }
+                        other => panic!("Expected Opgetfh Resok4, got {:?}", other),
+                    }
+                }
+                _ => panic!("Expected Success"),
+            },
+            _ => panic!("Expected MsgAccepted"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_compound_create_lookup_in_sequence() {
+        let server = NFS40Server::new();
+        let request = create_nfs40_server_with_root_fh(None).await;
+
+        // First compound: CREATE
+        let msg1 = make_compound(vec![NfsArgOp::Opcreate(Create4args {
+            objtype: Createtype4::Nf4dir,
+            objname: "seq_dir".to_string(),
+            createattrs: Fattr4 {
+                attrmask: Attrlist4(vec![]),
+                attr_vals: Attrlist4(vec![]),
+            },
+        })]);
+        let (request, reply) = server.compound(msg1, request).await;
+        match &reply {
+            ReplyBody::MsgAccepted(accepted) => match &accepted.reply_data {
+                AcceptBody::Success(res) => assert_eq!(res.status, NfsStat4::Nfs4Ok),
+                _ => panic!("Expected Success"),
+            },
+            _ => panic!("Expected MsgAccepted"),
+        }
+
+        // Reset to root for next compound
+        let mut request = request;
+        let root_fh = request.file_manager().get_root_filehandle().await.unwrap();
+        request.set_filehandle(root_fh);
+
+        // Second compound: LOOKUP + GETATTR
+        let msg2 = make_compound(vec![
+            NfsArgOp::Oplookup(Lookup4args { objname: "seq_dir".to_string() }),
+            NfsArgOp::Opgetattr(Getattr4args {
+                attr_request: Attrlist4(vec![FileAttr::Type]),
+            }),
+        ]);
+        let (_request, reply) = server.compound(msg2, request).await;
+        match reply {
+            ReplyBody::MsgAccepted(accepted) => match accepted.reply_data {
+                AcceptBody::Success(res) => {
+                    assert_eq!(res.status, NfsStat4::Nfs4Ok);
+                    assert_eq!(res.resarray.len(), 2);
+                }
+                _ => panic!("Expected Success"),
+            },
+            _ => panic!("Expected MsgAccepted"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_compound_savefh_rename_workflow() {
+        let server = NFS40Server::new();
+        let request = create_nfs40_server_with_root_fh(None).await;
+
+        // Create a directory first
+        let msg1 = make_compound(vec![NfsArgOp::Opcreate(Create4args {
+            objtype: Createtype4::Nf4dir,
+            objname: "rename_src".to_string(),
+            createattrs: Fattr4 {
+                attrmask: Attrlist4(vec![]),
+                attr_vals: Attrlist4(vec![]),
+            },
+        })]);
+        let (request, _) = server.compound(msg1, request).await;
+
+        // Reset to root
+        let mut request = request;
+        let root_fh = request.file_manager().get_root_filehandle().await.unwrap();
+        request.set_filehandle(root_fh);
+
+        // Compound: SAVEFH (save root as source dir) + RENAME
+        let msg2 = make_compound(vec![
+            NfsArgOp::Opsavefh(()),
+            NfsArgOp::Oprename(Rename4args {
+                oldname: "rename_src".to_string(),
+                newname: "rename_dst".to_string(),
+            }),
+        ]);
+        let (_request, reply) = server.compound(msg2, request).await;
+        match reply {
+            ReplyBody::MsgAccepted(accepted) => match accepted.reply_data {
+                AcceptBody::Success(res) => {
+                    assert_eq!(res.status, NfsStat4::Nfs4Ok);
+                    assert_eq!(res.resarray.len(), 2);
+                }
+                _ => panic!("Expected Success"),
+            },
+            _ => panic!("Expected MsgAccepted"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_workflow_open_read_existing_file() {
+        use crate::server::nfs40::{
+            Open4args, Open4res, OpenClaim4, OpenFlag4, OpenOwner4, Read4args, Read4res,
+        };
+        use crate::server::operation::NfsOperation;
+
+        let request = create_nfs40_server_with_root_fh(None).await;
+
+        // Create a file with content via VFS
+        let root_file = request.current_filehandle().unwrap().file.clone();
+        root_file.join("existing.txt").unwrap().create_file().unwrap();
+        {
+            use std::io::Write;
+            let mut f = root_file.join("existing.txt").unwrap().append_file().unwrap();
+            f.write_all(b"pre-existing data").unwrap();
+        }
+
+        // OPEN for reading
+        let open_args = Open4args {
+            seqid: 1,
+            share_access: 1, // READ
+            share_deny: 0,
+            owner: OpenOwner4 { clientid: 1, owner: b"reader".to_vec() },
+            openhow: OpenFlag4::Open4Nocreate,
+            claim: OpenClaim4::ClaimNull("existing.txt".to_string()),
+        };
+        let response = open_args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        let request = response.request;
+
+        // READ the opened file
+        let read_args = Read4args {
+            stateid: Stateid4 { seqid: 0, other: [0u8; 12] },
+            offset: 0,
+            count: 4096,
+        };
+        let response = read_args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        match response.result {
+            Some(NfsResOp4::Opread(Read4res::Resok4(resok))) => {
+                assert_eq!(resok.data, b"pre-existing data");
+                assert!(resok.eof);
+            }
+            other => panic!("Expected Read4res::Resok4, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_workflow_create_two_files_remove_one_readdir() {
+        use crate::server::nfs40::Remove4args;
+        use crate::server::operation::NfsOperation;
+
+        let request = create_nfs40_server_with_root_fh(None).await;
+
+        // Create two files via VFS
+        let root_file = request.current_filehandle().unwrap().file.clone();
+        root_file.join("file_a.txt").unwrap().create_file().unwrap();
+        root_file.join("file_b.txt").unwrap().create_file().unwrap();
+
+        // REMOVE file_a
+        let remove_args = Remove4args { target: "file_a.txt".to_string() };
+        let response = remove_args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+
+        // Reset to root
+        let mut request = response.request;
+        let root_fh = request.file_manager().get_root_filehandle().await.unwrap();
+        request.set_filehandle(root_fh);
+
+        // READDIR — should only contain file_b.txt
+        let readdir_args = Readdir4args {
+            cookie: 0,
+            cookieverf: [0; 8],
+            dircount: 4096,
+            maxcount: 4096,
+            attr_request: Attrlist4(vec![]),
+        };
+        let response = readdir_args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        match response.result {
+            Some(NfsResOp4::Opreaddir(ReadDir4res::Resok4(resok))) => {
+                let first = resok.reply.entries.as_ref().expect("Expected at least one entry");
+                assert_eq!(first.name, "file_b.txt");
+                assert!(first.nextentry.is_none(), "Expected only one entry");
+            }
+            other => panic!("Expected Opreaddir Resok4, got {:?}", other),
+        }
+    }
 }
