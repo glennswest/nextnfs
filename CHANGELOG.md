@@ -9,6 +9,11 @@
 
 ### Fixed
 - FileManager RemoveFile handler was calling `read_dir()` (listing) instead of `remove_dir()` for directories — VFS directory was never actually deleted
+- ClientManager actor death now returns Nfs4errServerfault instead of panicking (upsert_client, confirm_client, renew_leases)
+- Clock backward panics in request.rs, filehandle.rs, FileManager::new() — use unwrap_or_default()
+- READDIR cookieverf conversion panic on malformed verifier — use unwrap_or fallback, truncate oversized verifiers
+- READDIR eof calculation removed unnecessary clone().unwrap()
+- REMOVE path join panic on invalid target — now returns Nfs4errInval
 
 ## [v0.7.0] — 2026-03-25
 
