@@ -124,11 +124,9 @@ impl NfsOperation for Readdir4args {
         if cookieverf.is_empty() {
             cookieverf = [0u8; 8].to_vec();
         } else if cookieverf.len() < 8 {
-            let mut diff = 8 - cookieverf.len();
-            while diff > 0 {
-                cookieverf.push(0);
-                diff -= 1;
-            }
+            cookieverf.resize(8, 0);
+        } else if cookieverf.len() > 8 {
+            cookieverf.truncate(8);
         }
 
         let mut tnextentry = None;
@@ -160,14 +158,9 @@ impl NfsOperation for Readdir4args {
             added_entries += 1;
             tnextentry = Some(entry);
         }
-        let eof = {
-            if tnextentry.is_some()
-                && (tnextentry.clone().unwrap().cookie + added_entries) >= fnames.len() as u64
-            {
-                true
-            } else {
-                tnextentry.is_none()
-            }
+        let eof = match tnextentry {
+            Some(ref entry) => (entry.cookie + added_entries) >= fnames.len() as u64,
+            None => true,
         };
 
         NfsOpResponse {
@@ -177,7 +170,10 @@ impl NfsOperation for Readdir4args {
                     entries: tnextentry.clone(),
                     eof,
                 },
-                cookieverf: cookieverf.as_slice().try_into().unwrap(),
+                cookieverf: cookieverf
+                    .as_slice()
+                    .try_into()
+                    .unwrap_or([0u8; 8]),
             }))),
             status: NfsStat4::Nfs4Ok,
         }

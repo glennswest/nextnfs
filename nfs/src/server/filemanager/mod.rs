@@ -48,7 +48,7 @@ impl FileManager {
         export_root: PathBuf,
     ) -> Self {
         let fsid = fsid.unwrap_or(152);
-        let boot_time = std::time::UNIX_EPOCH.elapsed().unwrap().as_secs();
+        let boot_time = std::time::UNIX_EPOCH.elapsed().unwrap_or_default().as_secs();
         let mut fmanager = FileManager {
             receiver,
             root: root.clone(),

@@ -221,7 +221,7 @@ impl Filehandle {
     pub fn attr_change(file: &VfsPath, default: u64) -> u64 {
         if let Ok(v) = file.metadata() {
             if let Some(v) = v.modified {
-                return v.duration_since(UNIX_EPOCH).unwrap().as_secs();
+                return v.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
             }
         }
         default
@@ -234,7 +234,7 @@ impl Filehandle {
     pub fn current_time() -> Nfstime4 {
         let since_epoch = std::time::SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap();
+            .unwrap_or_default();
         Nfstime4 {
             seconds: since_epoch.as_secs() as i64,
             nseconds: since_epoch.subsec_nanos(),

@@ -49,7 +49,10 @@ impl<'a> NfsRequest<'a> {
         filehandle_cache: Option<&'a mut HashMap<NfsFh4, (SystemTime, Filehandle)>>,
         session_manager: Option<SessionManager>,
     ) -> Self {
-        let request_time = std::time::UNIX_EPOCH.elapsed().unwrap().as_secs();
+        let request_time = std::time::UNIX_EPOCH
+            .elapsed()
+            .unwrap_or_default()
+            .as_secs();
 
         NfsRequest {
             client_addr,
@@ -159,7 +162,9 @@ impl<'a> NfsRequest<'a> {
                     Some(fh) => {
                         let now: SystemTime = SystemTime::now();
                         let (time, filehandle) = fh;
-                        if now.duration_since(*time).unwrap().as_secs() > self.cache_ttl {
+                        if now.duration_since(*time).unwrap_or_default().as_secs()
+                            > self.cache_ttl
+                        {
                             self.drop_filehandle_from_cache(filehandle.id);
                             None
                         } else {

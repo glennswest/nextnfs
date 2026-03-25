@@ -35,7 +35,24 @@ impl NfsOperation for Remove4args {
                 };
             }
             Some(filehandle) => {
-                let path = filehandle.file.join(self.target.clone()).unwrap();
+                let path = match filehandle.file.join(self.target.clone()) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        error!("REMOVE: invalid path join: {:?}", e);
+                        return NfsOpResponse {
+                            request,
+                            result: Some(NfsResOp4::Opremove(Remove4res {
+                                status: NfsStat4::Nfs4errInval,
+                                cinfo: ChangeInfo4 {
+                                    atomic: false,
+                                    before: 0,
+                                    after: 0,
+                                },
+                            })),
+                            status: NfsStat4::Nfs4errInval,
+                        };
+                    }
+                };
                 let res = request.file_manager().remove_file(path).await;
                 match res {
                     Ok(_) => NfsOpResponse {
