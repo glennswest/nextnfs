@@ -13,6 +13,9 @@
 - **feat:** knfsd baseline — run all tests against kernel NFS first for comparison
 - **feat:** Comparison report — side-by-side knfsd vs nextnfs (functional, wire, performance)
 - **chore:** ci-test.sh rewritten as 6-phase unified orchestrator
+- **fix:** Resolve all clippy warnings in nfstest crate (strip_prefix, push_str, redundant cast, auto-deref)
+- **fix:** CI excludes nextnfs-server from cargo test (broken test stubs)
+- **fix:** CI knfsd mount tries export path before fallback to /
 
 ### 2026-03-22
 - **feat:** RPM packaging for Fedora/RHEL (nextnfs.spec + build-rpm.sh)
