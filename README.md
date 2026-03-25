@@ -43,7 +43,7 @@ Container includes [stormd](https://github.com/glennswest/stormd) for process su
 ### RPM (Fedora/RHEL)
 
 ```bash
-sudo rpm -i nextnfs-0.4.0-1.x86_64.rpm
+sudo rpm -i nextnfs-0.5.0-1.x86_64.rpm
 # Installs to /usr/bin/nextnfs, config at /etc/nextnfs/nextnfs.toml
 # Enables and starts nextnfs.service automatically
 
@@ -53,7 +53,7 @@ sudo systemctl status nextnfs
 ### DEB (Debian/Ubuntu)
 
 ```bash
-sudo dpkg -i nextnfs_0.4.0_amd64.deb
+sudo dpkg -i nextnfs_0.5.0_amd64.deb
 # Installs to /usr/bin/nextnfs, config at /etc/nextnfs/nextnfs.toml
 # Enables and starts nextnfs.service automatically
 

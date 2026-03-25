@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [v0.5.0] — 2026-03-25
+
 ### Added
 - Proto XDR roundtrip tests (17 tests: bitmap encoding, attr value roundtrips, FattrRaw parsing, NfsStat4 serialization, OpaqueAuth roundtrips)
 - Compound dispatch tests (11 tests: NULL, PUTROOTFH+GETATTR, error short-circuiting, minor version mismatch, SAVEFH/RESTOREFH, GETFH, create+readdir lifecycle, unsupported ops, empty args)
