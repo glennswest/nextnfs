@@ -3,7 +3,7 @@ pub mod rpc_proto;
 pub mod utils;
 
 use bytes::{Buf, BytesMut};
-use serde_xdr::{from_reader, to_writer, CompatDeserializationError};
+use serde_xdr::{from_reader, to_writer};
 use std::io::Cursor;
 use tokio_util::codec::{Decoder, Encoder};
 // use tracing::trace;
@@ -78,6 +78,27 @@ impl Decoder for XDRProtoCodec {
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
             .map(Some)
     }
+
+    /// Handle EOF on the stream. If we have a complete message, decode it.
+    /// If there are leftover bytes that don't form a complete message,
+    /// silently discard them (client disconnected mid-stream).
+    fn decode_eof(&mut self, buf: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+        match self.decode(buf)? {
+            Some(frame) => Ok(Some(frame)),
+            None => {
+                // Client disconnected — any leftover bytes are from an
+                // incomplete record. This is normal for NFS client teardown.
+                if !buf.is_empty() {
+                    tracing::debug!(
+                        remaining = buf.len(),
+                        "client disconnected with partial record, discarding"
+                    );
+                    buf.clear();
+                }
+                Ok(None)
+            }
+        }
+    }
 }
 
 impl Encoder<Box<RpcReplyMsg>> for XDRProtoCodec {
@@ -98,14 +119,102 @@ impl Encoder<Box<RpcReplyMsg>> for XDRProtoCodec {
     }
 }
 
+/// Parse an RPC call message from raw bytes.
+///
+/// Manually parses the RPC header (RFC 5531) including opaque_auth
+/// credentials and verifier, then uses serde_xdr only for the NFSv4
+/// COMPOUND args. This avoids mismatches between serde_xdr's enum
+/// deserialization and the RFC 5531 opaque_auth wire format.
 pub fn from_bytes(buffer: Vec<u8>) -> Result<RpcCallMsg, anyhow::Error> {
-    let mut cursor = Cursor::new(buffer);
-    let result: Result<RpcCallMsg, CompatDeserializationError> = from_reader(&mut cursor);
-    // todo add proper logging
-    match result {
-        Ok(msg) => Ok(msg),
-        Err(e) => Err(anyhow::anyhow!("Error deserializing message: {:?}", e)),
+    use rpc_proto::{AuthUnix, CallBody, MsgType, OpaqueAuth};
+    use std::io::Read;
+
+    let mut cursor = Cursor::new(&buffer);
+
+    // Helper: read a big-endian u32
+    let read_u32 = |c: &mut Cursor<&Vec<u8>>| -> anyhow::Result<u32> {
+        let mut buf = [0u8; 4];
+        c.read_exact(&mut buf)?;
+        Ok(u32::from_be_bytes(buf))
+    };
+
+    // Helper: read XDR opaque<> (variable-length: u32 length + data + padding)
+    let read_opaque = |c: &mut Cursor<&Vec<u8>>| -> anyhow::Result<Vec<u8>> {
+        let len = {
+            let mut buf = [0u8; 4];
+            c.read_exact(&mut buf)?;
+            u32::from_be_bytes(buf) as usize
+        };
+        let mut data = vec![0u8; len];
+        c.read_exact(&mut data)?;
+        // XDR pads to 4-byte boundary
+        let pad = (4 - (len % 4)) % 4;
+        if pad > 0 {
+            let mut skip = vec![0u8; pad];
+            c.read_exact(&mut skip)?;
+        }
+        Ok(data)
+    };
+
+    // Helper: parse opaque_auth (RFC 5531 §8.2)
+    let read_opaque_auth = |c: &mut Cursor<&Vec<u8>>| -> anyhow::Result<OpaqueAuth> {
+        let flavor = {
+            let mut buf = [0u8; 4];
+            c.read_exact(&mut buf)?;
+            u32::from_be_bytes(buf)
+        };
+        let body = read_opaque(c)?;
+
+        match flavor {
+            0 => Ok(OpaqueAuth::AuthNull(body)),
+            1 => {
+                // AUTH_SYS: parse body as authsys_parms via serde_xdr
+                let mut body_cursor = Cursor::new(body);
+                let auth: AuthUnix = from_reader(&mut body_cursor)?;
+                Ok(OpaqueAuth::AuthUnix(auth))
+            }
+            _ => Ok(OpaqueAuth::AuthNull(body)), // unsupported → treat as opaque
+        }
+    };
+
+    // Parse RPC call header
+    let xid = read_u32(&mut cursor)?;
+    let msg_type = read_u32(&mut cursor)?;
+    if msg_type != 0 {
+        anyhow::bail!("expected CALL (0), got msg_type={}", msg_type);
     }
+
+    let rpcvers = read_u32(&mut cursor)?;
+    let prog = read_u32(&mut cursor)?;
+    let vers = read_u32(&mut cursor)?;
+    let proc_num = read_u32(&mut cursor)?;
+    let cred = read_opaque_auth(&mut cursor)?;
+    let verf = read_opaque_auth(&mut cursor)?;
+
+    // Parse COMPOUND args (if not NULL procedure)
+    let args = if proc_num == 0 {
+        None
+    } else {
+        // Remaining bytes are the COMPOUND args — deserialize via serde_xdr
+        let pos = cursor.position() as usize;
+        let remaining = &buffer[pos..];
+        let mut args_cursor = Cursor::new(remaining.to_vec());
+        let compound: nfs4_proto::Compound4args = from_reader(&mut args_cursor)?;
+        Some(compound)
+    };
+
+    Ok(RpcCallMsg {
+        xid,
+        body: MsgType::Call(CallBody {
+            rpcvers,
+            prog,
+            vers,
+            proc: proc_num,
+            cred,
+            verf,
+            args,
+        }),
+    })
 }
 
 pub fn to_bytes(message: &RpcReplyMsg) -> Result<Vec<u8>, anyhow::Error> {
