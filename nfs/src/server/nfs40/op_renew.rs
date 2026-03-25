@@ -59,10 +59,9 @@ mod integration_tests {
         // setup client
         let res_client1 = client1.execute(request).await;
         let (client1_id, client1_confirm) = match res_client1.result.unwrap() {
-            NfsResOp4::Opsetclientid(res) => match res {
-                SetClientId4res::Resok4(resok) => (resok.clientid, resok.setclientid_confirm),
-                _ => panic!("Unexpected response"),
-            },
+            NfsResOp4::Opsetclientid(SetClientId4res::Resok4(resok)) => {
+                (resok.clientid, resok.setclientid_confirm)
+            }
             _ => panic!("Unexpected response"),
         };
 

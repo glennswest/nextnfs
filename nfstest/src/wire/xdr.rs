@@ -255,7 +255,7 @@ mod tests {
 
         let bytes = enc.finish();
         let mut dec = XdrDecoder::new(&bytes);
-        assert_eq!(dec.get_bool().unwrap(), true);
-        assert_eq!(dec.get_bool().unwrap(), false);
+        assert!(dec.get_bool().unwrap());
+        assert!(!dec.get_bool().unwrap());
     }
 }

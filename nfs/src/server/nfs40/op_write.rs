@@ -79,3 +79,32 @@ impl NfsOperation for Write4args {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        server::{
+            nfs40::{NfsStat4, Stateid4, StableHow4, Write4args},
+            operation::NfsOperation,
+        },
+        test_utils::create_nfs40_server,
+    };
+    use tracing_test::traced_test;
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_write_no_filehandle() {
+        let request = create_nfs40_server(None).await;
+        let args = Write4args {
+            stateid: Stateid4 {
+                seqid: 0,
+                other: [0u8; 12],
+            },
+            offset: 0,
+            stable: StableHow4::FileSync4,
+            data: vec![1, 2, 3, 4],
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4errFhexpired);
+    }
+}

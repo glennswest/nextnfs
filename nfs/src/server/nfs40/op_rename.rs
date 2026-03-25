@@ -132,3 +132,76 @@ impl NfsOperation for Rename4args {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        server::{
+            nfs40::{
+                Attrlist4, Create4args, Createtype4, Fattr4, NfsStat4, Rename4args,
+            },
+            operation::NfsOperation,
+        },
+        test_utils::create_nfs40_server_with_root_fh,
+    };
+    use tracing_test::traced_test;
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_rename_no_saved_fh() {
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let args = Rename4args {
+            oldname: "a".to_string(),
+            newname: "b".to_string(),
+        };
+        let response = args.execute(request).await;
+        // No saved filehandle set → Nfs4errNofilehandle
+        assert_eq!(response.status, NfsStat4::Nfs4errNofilehandle);
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_rename_nonexistent_source() {
+        let mut request = create_nfs40_server_with_root_fh(None).await;
+        // Save the root as the source directory
+        request.save_filehandle();
+
+        let args = Rename4args {
+            oldname: "nonexistent".to_string(),
+            newname: "target".to_string(),
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4errNoent);
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_rename_directory() {
+        let request = create_nfs40_server_with_root_fh(None).await;
+
+        // Create a directory
+        let create_args = Create4args {
+            objtype: Createtype4::Nf4dir,
+            objname: "oldname".to_string(),
+            createattrs: Fattr4 {
+                attrmask: Attrlist4(vec![]),
+                attr_vals: Attrlist4(vec![]),
+            },
+        };
+        let response = create_args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+
+        // Reset to root, save as source, set as current (target)
+        let mut request = response.request;
+        let root_fh = request.file_manager().get_root_filehandle().await.unwrap();
+        request.set_filehandle(root_fh);
+        request.save_filehandle();
+
+        let args = Rename4args {
+            oldname: "oldname".to_string(),
+            newname: "newname".to_string(),
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+    }
+}

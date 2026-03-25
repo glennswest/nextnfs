@@ -7,6 +7,14 @@
 - Unit tests for CREATE (4 tests: no filehandle, empty name, directory, unsupported type)
 - Unit tests for LOOKUP (3 tests: no filehandle, nonexistent, after create)
 - Unit tests for READDIR (3 tests: no filehandle, empty root, with entries)
+- Unit tests for REMOVE (3 tests: no filehandle, nonexistent, directory)
+- Unit tests for RENAME (3 tests: no saved fh, nonexistent source, directory rename)
+- Unit tests for READ (2 tests: no filehandle, directory read fails)
+- Unit tests for WRITE (1 test: no filehandle)
+
+### Fixed
+- Clippy collapsible_match warnings in SETCLIENTID_CONFIRM and RENEW tests
+- Clippy bool_assert_comparison warning in nfstest XDR tests
 
 ## [v0.3.0] — 2026-03-25
 

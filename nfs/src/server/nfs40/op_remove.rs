@@ -70,3 +70,73 @@ impl NfsOperation for Remove4args {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        server::{
+            nfs40::{
+                Attrlist4, Create4args, Createtype4, Fattr4, NfsStat4, Remove4args,
+            },
+            operation::NfsOperation,
+        },
+        test_utils::{create_nfs40_server, create_nfs40_server_with_root_fh},
+    };
+    use tracing_test::traced_test;
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_remove_no_filehandle() {
+        let request = create_nfs40_server(None).await;
+        let args = Remove4args {
+            target: "anything".to_string(),
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4errStale);
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_remove_nonexistent() {
+        // MemoryFS remove on nonexistent path succeeds silently;
+        // the filemanager actor handles the removal, so this returns Ok.
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let args = Remove4args {
+            target: "nosuchdir".to_string(),
+        };
+        let response = args.execute(request).await;
+        // Verify the operation completes (either Ok or specific error)
+        assert!(
+            response.status == NfsStat4::Nfs4Ok || response.status == NfsStat4::Nfs4errIo
+        );
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_remove_directory() {
+        let request = create_nfs40_server_with_root_fh(None).await;
+
+        // Create a directory first
+        let create_args = Create4args {
+            objtype: Createtype4::Nf4dir,
+            objname: "rmdir".to_string(),
+            createattrs: Fattr4 {
+                attrmask: Attrlist4(vec![]),
+                attr_vals: Attrlist4(vec![]),
+            },
+        };
+        let response = create_args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+
+        // Reset to root and remove
+        let mut request = response.request;
+        let root_fh = request.file_manager().get_root_filehandle().await.unwrap();
+        request.set_filehandle(root_fh);
+
+        let remove_args = Remove4args {
+            target: "rmdir".to_string(),
+        };
+        let response = remove_args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+    }
+}

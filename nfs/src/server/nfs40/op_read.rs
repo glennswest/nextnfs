@@ -85,3 +85,48 @@ impl NfsOperation for Read4args {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        server::{
+            nfs40::{NfsStat4, Read4args, Stateid4},
+            operation::NfsOperation,
+        },
+        test_utils::{create_nfs40_server, create_nfs40_server_with_root_fh},
+    };
+    use tracing_test::traced_test;
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_read_no_filehandle() {
+        let request = create_nfs40_server(None).await;
+        let args = Read4args {
+            stateid: Stateid4 {
+                seqid: 0,
+                other: [0u8; 12],
+            },
+            offset: 0,
+            count: 4096,
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4errFhexpired);
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_read_directory_fails() {
+        // READ on a directory should fail with I/O error (can't open_file on dir)
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let args = Read4args {
+            stateid: Stateid4 {
+                seqid: 0,
+                other: [0u8; 12],
+            },
+            offset: 0,
+            count: 4096,
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4errIo);
+    }
+}
