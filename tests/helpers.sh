@@ -343,12 +343,10 @@ nfs_mount() {
 
     mkdir -p "$mount_point"
 
-    # Build mount options
-    local opts="vers=${vers},proto=tcp,port=${NFS_PORT},mountport=${NFS_PORT}"
-    # For v4+, we don't need separate mountd
-    opts="${opts},soft,timeo=50,retrans=2"
+    # Build mount options — nolock avoids NLM/rpcbind dependency
+    local opts="vers=${vers},proto=tcp,port=${NFS_PORT},nolock,soft,timeo=50,retrans=2"
 
-    mount -t nfs4 -o "$opts" "${NFS_HOST}:${export_path}" "$mount_point"
+    timeout 30 mount -t nfs4 -o "$opts" "${NFS_HOST}:${export_path}" "$mount_point"
 }
 
 nfs_unmount() {

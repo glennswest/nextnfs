@@ -308,10 +308,10 @@ start_knfsd() {
         return 1
     fi
 
-    # Mount — use nolock since lockd may not be available in container
+    # Mount — nolock to avoid NLM issues in container, timeout to avoid hanging
     mkdir -p "$KNFSD_MOUNT"
     local mount_out
-    mount_out=$(mount -t nfs4 -o vers=4.0,proto=tcp,soft,timeo=50,retrans=2 \
+    mount_out=$(timeout 30 mount -t nfs4 -o vers=4.0,proto=tcp,nolock,soft,timeo=50,retrans=2 \
         127.0.0.1:/ "$KNFSD_MOUNT" 2>&1) || true
     echo "  mount output: $mount_out"
 
@@ -373,12 +373,13 @@ start_nextnfs() {
         return 1
     fi
 
-    # Mount — use port= for non-standard port, nolock since we handle locking in-server
+    # Mount — nolock avoids NLM/rpcbind dependency, port= for non-standard port
     mkdir -p "$NEXTNFS_MOUNT"
+    echo "  Mounting: mount -t nfs4 -o vers=4.0,proto=tcp,port=${NEXTNFS_PORT},nolock,soft,timeo=50,retrans=2 127.0.0.1:/ $NEXTNFS_MOUNT"
     local mount_out
-    mount_out=$(mount -t nfs4 -o "vers=4.0,proto=tcp,port=${NEXTNFS_PORT},soft,timeo=50,retrans=2" \
+    mount_out=$(timeout 30 mount -t nfs4 -o "vers=4.0,proto=tcp,port=${NEXTNFS_PORT},nolock,soft,timeo=50,retrans=2" \
         "127.0.0.1:/" "$NEXTNFS_MOUNT" 2>&1) || true
-    echo "  mount output: $mount_out"
+    echo "  mount result: $mount_out"
 
     if mountpoint -q "$NEXTNFS_MOUNT"; then
         ok "nextnfs mounted at $NEXTNFS_MOUNT"
