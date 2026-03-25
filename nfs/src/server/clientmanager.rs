@@ -536,6 +536,176 @@ mod tests {
     }
 
     #[test]
+    fn test_renew_leases_valid_client() {
+        let (_, receiver) = mpsc::channel(16);
+        let mut manager = super::ClientManager::new(receiver);
+
+        let verifier = [0; 8];
+        let callback = super::ClientCallback {
+            program: 0,
+            rnetid: "tcp".to_string(),
+            raddr: "".to_string(),
+            callback_ident: 0,
+        };
+
+        let client = manager
+            .upsert_client(verifier, "renew_test".to_string(), callback, None)
+            .unwrap();
+        let result = manager.renew_leases(client.clientid);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_renew_leases_stale_client() {
+        let (_, receiver) = mpsc::channel(16);
+        let mut manager = super::ClientManager::new(receiver);
+        let result = manager.renew_leases(99999);
+        assert_eq!(
+            result.unwrap_err().nfs_error,
+            NfsStat4::Nfs4errStaleClientid
+        );
+    }
+
+    #[test]
+    fn test_set_current_filehandle() {
+        let (_, receiver) = mpsc::channel(16);
+        let mut manager = super::ClientManager::new(receiver);
+        manager.set_current_fh("192.168.1.1:1234".to_string(), vec![1, 2, 3]);
+        // Verify it was stored (no panic)
+        manager.set_current_fh("192.168.1.1:1234".to_string(), vec![4, 5, 6]);
+    }
+
+    #[test]
+    fn test_multiple_clients_unique_ids() {
+        let (_, receiver) = mpsc::channel(16);
+        let mut manager = super::ClientManager::new(receiver);
+        let callback = super::ClientCallback {
+            program: 0,
+            rnetid: "tcp".to_string(),
+            raddr: "".to_string(),
+            callback_ident: 0,
+        };
+
+        let c1 = manager
+            .upsert_client([1; 8], "client1".to_string(), callback.clone(), None)
+            .unwrap();
+        let c2 = manager
+            .upsert_client([2; 8], "client2".to_string(), callback.clone(), None)
+            .unwrap();
+        assert_ne!(c1.clientid, c2.clientid);
+        assert_eq!(manager.get_record_count(), 2);
+    }
+
+    #[test]
+    fn test_confirm_wrong_principal() {
+        let (_, receiver) = mpsc::channel(16);
+        let mut manager = super::ClientManager::new(receiver);
+        let callback = super::ClientCallback {
+            program: 0,
+            rnetid: "tcp".to_string(),
+            raddr: "".to_string(),
+            callback_ident: 0,
+        };
+
+        let client = manager
+            .upsert_client([0; 8], "test".to_string(), callback, Some("Linux".to_string()))
+            .unwrap();
+
+        // Confirm with wrong principal
+        let result = manager.confirm_client(
+            client.clientid,
+            client.setclientid_confirm,
+            Some("FreeBSD".to_string()),
+        );
+        assert_eq!(result.unwrap_err().nfs_error, NfsStat4::Nfs4errClidInuse);
+    }
+
+    #[test]
+    fn test_get_client_confirmed_not_found() {
+        let (_, receiver) = mpsc::channel(16);
+        let mut manager = super::ClientManager::new(receiver);
+        assert!(manager.get_client_confirmed(9999).is_none());
+    }
+
+    #[test]
+    fn test_get_client_unconfirmed_not_returned() {
+        let (_, receiver) = mpsc::channel(16);
+        let mut manager = super::ClientManager::new(receiver);
+        let callback = super::ClientCallback {
+            program: 0,
+            rnetid: "tcp".to_string(),
+            raddr: "".to_string(),
+            callback_ident: 0,
+        };
+
+        let client = manager
+            .upsert_client([0; 8], "unconf".to_string(), callback, None)
+            .unwrap();
+        // Not confirmed yet
+        assert!(manager.get_client_confirmed(client.clientid).is_none());
+    }
+
+    // ── Async handle tests ───────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_handle_upsert_and_confirm() {
+        let handle = super::ClientManagerHandle::new();
+        let callback = super::ClientCallback {
+            program: 0,
+            rnetid: "tcp".to_string(),
+            raddr: "".to_string(),
+            callback_ident: 0,
+        };
+
+        let client = handle
+            .upsert_client([0; 8], "async_test".to_string(), callback, None)
+            .await
+            .unwrap();
+        assert!(!client.confirmed);
+
+        let confirmed = handle
+            .confirm_client(client.clientid, client.setclientid_confirm, None)
+            .await
+            .unwrap();
+        assert!(confirmed.confirmed);
+    }
+
+    #[tokio::test]
+    async fn test_handle_renew_leases() {
+        let handle = super::ClientManagerHandle::new();
+        let callback = super::ClientCallback {
+            program: 0,
+            rnetid: "tcp".to_string(),
+            raddr: "".to_string(),
+            callback_ident: 0,
+        };
+
+        let client = handle
+            .upsert_client([0; 8], "renew_async".to_string(), callback, None)
+            .await
+            .unwrap();
+        let result = handle.renew_leases(client.clientid).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_handle_renew_stale() {
+        let handle = super::ClientManagerHandle::new();
+        let result = handle.renew_leases(999999).await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().nfs_error, NfsStat4::Nfs4errStaleClientid);
+    }
+
+    #[tokio::test]
+    async fn test_handle_set_current_filehandle() {
+        let handle = super::ClientManagerHandle::new();
+        // Should not panic
+        handle
+            .set_current_filehandle("10.0.0.1:2049".to_string(), vec![0xAA; 26])
+            .await;
+    }
+
+    #[test]
     fn test_upsert_clients_principals() {
         let (_, receiver) = mpsc::channel(16);
         let mut manager = super::ClientManager::new(receiver);

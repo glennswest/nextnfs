@@ -47,6 +47,69 @@ mod integration_tests {
 
     #[tokio::test]
     #[traced_test]
+    async fn test_access_single_read_flag() {
+        let request = create_nfs40_server(None).await;
+        let args = Access4args {
+            access: ACCESS4_READ,
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        if let Some(NfsResOp4::OpAccess(Access4res::Resok4(res))) = response.result {
+            assert_eq!(res.access, ACCESS4_READ);
+        } else {
+            panic!("Unexpected response");
+        }
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_access_execute_flag() {
+        let request = create_nfs40_server(None).await;
+        let args = Access4args {
+            access: ACCESS4_EXECUTE,
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        if let Some(NfsResOp4::OpAccess(Access4res::Resok4(res))) = response.result {
+            assert_eq!(res.access, ACCESS4_EXECUTE);
+        } else {
+            panic!("Unexpected response");
+        }
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_access_zero_flags() {
+        let request = create_nfs40_server(None).await;
+        let args = Access4args { access: 0 };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        if let Some(NfsResOp4::OpAccess(Access4res::Resok4(res))) = response.result {
+            assert_eq!(res.access, 0);
+        } else {
+            panic!("Unexpected response");
+        }
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_access_all_flags() {
+        let request = create_nfs40_server(None).await;
+        let all = ACCESS4_READ | ACCESS4_LOOKUP | ACCESS4_MODIFY
+            | ACCESS4_EXTEND | ACCESS4_DELETE | ACCESS4_EXECUTE;
+        let args = Access4args { access: all };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        if let Some(NfsResOp4::OpAccess(Access4res::Resok4(res))) = response.result {
+            assert_eq!(res.access, all);
+            assert_eq!(res.supported, all);
+        } else {
+            panic!("Unexpected response");
+        }
+    }
+
+    #[tokio::test]
+    #[traced_test]
     async fn test_check_access() {
         let request = create_nfs40_server(None).await;
         let args = Access4args {

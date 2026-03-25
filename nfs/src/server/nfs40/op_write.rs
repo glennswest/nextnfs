@@ -139,4 +139,105 @@ mod tests {
         let response = args.execute(request).await;
         assert_eq!(response.status, NfsStat4::Nfs4errFhexpired);
     }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_write_file_sync() {
+        use crate::server::nfs40::{NfsResOp4, Write4res};
+        use crate::test_utils::create_nfs40_server_with_root_fh;
+
+        let mut request = create_nfs40_server_with_root_fh(None).await;
+        let root_file = request.current_filehandle().unwrap().file.clone();
+        root_file.join("wtest.txt").unwrap().create_file().unwrap();
+        let fh = request
+            .file_manager()
+            .get_filehandle_for_path("wtest.txt".to_string())
+            .await
+            .unwrap();
+        request.set_filehandle(fh);
+
+        let args = Write4args {
+            stateid: Stateid4 { seqid: 0, other: [0u8; 12] },
+            offset: 0,
+            stable: StableHow4::FileSync4,
+            data: b"test data".to_vec(),
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        if let Some(NfsResOp4::Opwrite(Write4res::Resok4(resok))) = response.result {
+            assert_eq!(resok.count, 9);
+            assert_eq!(resok.committed, StableHow4::FileSync4);
+            assert_ne!(resok.writeverf, [0u8; 8]);
+        } else {
+            panic!("Expected Write4res::Resok4");
+        }
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_write_unstable() {
+        use crate::server::nfs40::{NfsResOp4, Write4res};
+        use crate::test_utils::create_nfs40_server_with_root_fh;
+
+        let mut request = create_nfs40_server_with_root_fh(None).await;
+        let root_file = request.current_filehandle().unwrap().file.clone();
+        root_file.join("unstable.txt").unwrap().create_file().unwrap();
+        let fh = request
+            .file_manager()
+            .create_file(
+                root_file.join("unstable.txt").unwrap(),
+                1, b"o".to_vec(), 1, 0, None,
+            )
+            .await
+            .unwrap();
+        request.set_filehandle(fh);
+
+        let args = Write4args {
+            stateid: Stateid4 { seqid: 0, other: [0u8; 12] },
+            offset: 0,
+            stable: StableHow4::Unstable4,
+            data: b"cached write".to_vec(),
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        if let Some(NfsResOp4::Opwrite(Write4res::Resok4(resok))) = response.result {
+            assert_eq!(resok.count, 12);
+            assert_eq!(resok.committed, StableHow4::Unstable4);
+        } else {
+            panic!("Expected Write4res::Resok4");
+        }
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_write_verifier_from_boot_time() {
+        use crate::server::nfs40::{NfsResOp4, Write4res};
+        use crate::test_utils::create_nfs40_server_with_root_fh;
+
+        let mut request = create_nfs40_server_with_root_fh(None).await;
+        let boot_time = request.boot_time;
+        let root_file = request.current_filehandle().unwrap().file.clone();
+        root_file.join("verf.txt").unwrap().create_file().unwrap();
+        let fh = request
+            .file_manager()
+            .get_filehandle_for_path("verf.txt".to_string())
+            .await
+            .unwrap();
+        request.set_filehandle(fh);
+
+        let args = Write4args {
+            stateid: Stateid4 { seqid: 0, other: [0u8; 12] },
+            offset: 0,
+            stable: StableHow4::FileSync4,
+            data: b"x".to_vec(),
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        if let Some(NfsResOp4::Opwrite(Write4res::Resok4(resok))) = response.result {
+            let expected_verf = boot_time.to_be_bytes();
+            assert_eq!(resok.writeverf, expected_verf);
+        } else {
+            panic!("Expected Write4res::Resok4");
+        }
+    }
 }

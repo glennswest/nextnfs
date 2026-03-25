@@ -641,12 +641,11 @@ mod tests {
                     assert_eq!(res.status, NfsStat4::Nfs4Ok);
                     assert_eq!(res.resarray.len(), 1);
                     // Verify READDIR returned an entry for "testdir"
-                    if let NfsResOp4::Opreaddir(readdir_res) = &res.resarray[0] {
-                        if let ReadDir4res::Resok4(resok) = readdir_res {
+                    match &res.resarray[0] {
+                        NfsResOp4::Opreaddir(ReadDir4res::Resok4(resok)) => {
                             assert!(resok.reply.entries.is_some());
-                        } else {
-                            panic!("Expected Resok4");
                         }
+                        other => panic!("Expected Opreaddir Resok4, got {:?}", other),
                     }
                 }
                 _ => panic!("Expected Success"),

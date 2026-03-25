@@ -241,3 +241,266 @@ impl Filehandle {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use vfs::MemoryFS;
+
+    fn make_real_meta(mode: u32, size: u64, ino: u64) -> RealMeta {
+        RealMeta {
+            ino,
+            dev: 42,
+            mode,
+            nlink: 1,
+            uid: 1000,
+            gid: 1000,
+            size,
+            blocks: (size + 511) / 512,
+            atime: 1700000000,
+            atime_nsec: 123456,
+            mtime: 1700000100,
+            mtime_nsec: 789012,
+            ctime: 1700000200,
+            ctime_nsec: 345678,
+        }
+    }
+
+    #[test]
+    fn test_new_dir_filehandle() {
+        let vfs = VfsPath::new(MemoryFS::new());
+        let id = [1u8; 26];
+        let fh = Filehandle::new(vfs, id, 10, 20, 0);
+        assert_eq!(fh.attr_type, NfsFtype4::Nf4dir);
+        assert_eq!(fh.attr_mode, 0o755);
+        assert_eq!(fh.path, "/");
+        assert_eq!(fh.version, 1);
+        assert_eq!(fh.attr_fsid.major, 10);
+        assert_eq!(fh.attr_fsid.minor, 20);
+    }
+
+    #[test]
+    fn test_new_file_filehandle() {
+        let vfs = VfsPath::new(MemoryFS::new());
+        // Create a file so it's detected as a file
+        vfs.join("testfile").unwrap().create_file().unwrap();
+        let file_path = vfs.join("testfile").unwrap();
+        let id = [2u8; 26];
+        let fh = Filehandle::new(file_path, id, 5, 5, 0);
+        assert_eq!(fh.attr_type, NfsFtype4::Nf4reg);
+        assert_eq!(fh.attr_mode, 0o644);
+        assert_eq!(fh.path, "/testfile");
+    }
+
+    #[test]
+    fn test_new_empty_path_becomes_root() {
+        let vfs = VfsPath::new(MemoryFS::new());
+        let id = [3u8; 26];
+        let fh = Filehandle::new(vfs, id, 0, 0, 0);
+        assert_eq!(fh.path, "/");
+    }
+
+    #[test]
+    fn test_new_version_increments() {
+        let vfs = VfsPath::new(MemoryFS::new());
+        let id = [4u8; 26];
+        let fh = Filehandle::new(vfs, id, 0, 0, 5);
+        assert_eq!(fh.version, 6);
+    }
+
+    #[test]
+    fn test_new_real_dir_mode() {
+        let vfs = VfsPath::new(MemoryFS::new());
+        let id = [5u8; 26];
+        #[allow(clippy::unnecessary_cast)]
+        let meta = make_real_meta(libc::S_IFDIR as u32 | 0o755, 4096, 100);
+        let fh = Filehandle::new_real(vfs, id, 1, 1, 0, &meta);
+        assert_eq!(fh.attr_type, NfsFtype4::Nf4dir);
+        assert_eq!(fh.attr_mode, 0o755);
+        assert_eq!(fh.attr_size, 4096);
+        assert_eq!(fh.attr_fileid, 100);
+        assert_eq!(fh.attr_owner, "1000");
+        assert_eq!(fh.attr_owner_group, "1000");
+    }
+
+    #[test]
+    fn test_new_real_regular_file_mode() {
+        let vfs = VfsPath::new(MemoryFS::new());
+        let id = [6u8; 26];
+        #[allow(clippy::unnecessary_cast)]
+        let meta = make_real_meta(libc::S_IFREG as u32 | 0o644, 1024, 200);
+        let fh = Filehandle::new_real(vfs, id, 1, 1, 0, &meta);
+        assert_eq!(fh.attr_type, NfsFtype4::Nf4reg);
+        assert_eq!(fh.attr_mode, 0o644);
+    }
+
+    #[test]
+    fn test_new_real_symlink_mode() {
+        let vfs = VfsPath::new(MemoryFS::new());
+        let id = [7u8; 26];
+        #[allow(clippy::unnecessary_cast)]
+        let meta = make_real_meta(libc::S_IFLNK as u32 | 0o777, 0, 300);
+        let fh = Filehandle::new_real(vfs, id, 1, 1, 0, &meta);
+        assert_eq!(fh.attr_type, NfsFtype4::Nf4lnk);
+    }
+
+    #[test]
+    fn test_new_real_block_device() {
+        let vfs = VfsPath::new(MemoryFS::new());
+        let id = [8u8; 26];
+        #[allow(clippy::unnecessary_cast)]
+        let meta = make_real_meta(libc::S_IFBLK as u32 | 0o660, 0, 400);
+        let fh = Filehandle::new_real(vfs, id, 1, 1, 0, &meta);
+        assert_eq!(fh.attr_type, NfsFtype4::Nf4blk);
+    }
+
+    #[test]
+    fn test_new_real_char_device() {
+        let vfs = VfsPath::new(MemoryFS::new());
+        let id = [9u8; 26];
+        #[allow(clippy::unnecessary_cast)]
+        let meta = make_real_meta(libc::S_IFCHR as u32 | 0o666, 0, 500);
+        let fh = Filehandle::new_real(vfs, id, 1, 1, 0, &meta);
+        assert_eq!(fh.attr_type, NfsFtype4::Nf4chr);
+    }
+
+    #[test]
+    fn test_new_real_fifo() {
+        let vfs = VfsPath::new(MemoryFS::new());
+        let id = [10u8; 26];
+        #[allow(clippy::unnecessary_cast)]
+        let meta = make_real_meta(libc::S_IFIFO as u32 | 0o644, 0, 600);
+        let fh = Filehandle::new_real(vfs, id, 1, 1, 0, &meta);
+        assert_eq!(fh.attr_type, NfsFtype4::Nf4fifo);
+    }
+
+    #[test]
+    fn test_new_real_socket() {
+        let vfs = VfsPath::new(MemoryFS::new());
+        let id = [11u8; 26];
+        #[allow(clippy::unnecessary_cast)]
+        let meta = make_real_meta(libc::S_IFSOCK as u32 | 0o755, 0, 700);
+        let fh = Filehandle::new_real(vfs, id, 1, 1, 0, &meta);
+        assert_eq!(fh.attr_type, NfsFtype4::Nf4sock);
+    }
+
+    #[test]
+    fn test_new_real_time_attrs() {
+        let vfs = VfsPath::new(MemoryFS::new());
+        let id = [12u8; 26];
+        #[allow(clippy::unnecessary_cast)]
+        let meta = make_real_meta(libc::S_IFREG as u32 | 0o644, 0, 800);
+        let fh = Filehandle::new_real(vfs, id, 1, 1, 0, &meta);
+        assert_eq!(fh.attr_time_access.seconds, 1700000000);
+        assert_eq!(fh.attr_time_access.nseconds, 123456);
+        assert_eq!(fh.attr_time_modify.seconds, 1700000100);
+        assert_eq!(fh.attr_time_modify.nseconds, 789012);
+        assert_eq!(fh.attr_time_metadata.seconds, 1700000200);
+        assert_eq!(fh.attr_time_metadata.nseconds, 345678);
+    }
+
+    #[test]
+    fn test_new_real_space_used() {
+        let vfs = VfsPath::new(MemoryFS::new());
+        let id = [13u8; 26];
+        #[allow(clippy::unnecessary_cast)]
+        let meta = make_real_meta(libc::S_IFREG as u32 | 0o644, 2048, 900);
+        let fh = Filehandle::new_real(vfs, id, 1, 1, 0, &meta);
+        // blocks * 512
+        assert_eq!(fh.attr_space_used, meta.blocks * 512);
+    }
+
+    #[test]
+    fn test_new_real_nlink() {
+        let vfs = VfsPath::new(MemoryFS::new());
+        let id = [14u8; 26];
+        let mut meta = make_real_meta(libc::S_IFREG as u32 | 0o644, 0, 1000);
+        meta.nlink = 5;
+        let fh = Filehandle::new_real(vfs, id, 1, 1, 0, &meta);
+        assert_eq!(fh.attr_nlink, 5);
+    }
+
+    #[test]
+    fn test_pseudo_root() {
+        let id = [0xFF; 26];
+        let fh = Filehandle::pseudo_root(id);
+        assert_eq!(fh.attr_type, NfsFtype4::Nf4dir);
+        assert_eq!(fh.attr_mode, 0o755);
+        assert_eq!(fh.attr_size, 4096);
+        assert_eq!(fh.attr_nlink, 2);
+        assert_eq!(fh.path, "/");
+        assert_eq!(fh.attr_fsid.major, 0);
+        assert_eq!(fh.attr_fsid.minor, 0);
+        assert!(fh.locks.is_empty());
+        assert!(fh.write_cache.is_none());
+    }
+
+    #[test]
+    fn test_attr_size_empty_file() {
+        let vfs = VfsPath::new(MemoryFS::new());
+        vfs.join("empty").unwrap().create_file().unwrap();
+        let file = vfs.join("empty").unwrap();
+        assert_eq!(Filehandle::attr_size(&file), 0);
+    }
+
+    #[test]
+    fn test_attr_size_with_data() {
+        let vfs = VfsPath::new(MemoryFS::new());
+        vfs.join("data").unwrap().create_file().unwrap();
+        let file = vfs.join("data").unwrap();
+        {
+            use std::io::Write;
+            let mut f = file.append_file().unwrap();
+            f.write_all(b"hello world").unwrap();
+        }
+        assert_eq!(Filehandle::attr_size(&file), 11);
+    }
+
+    #[test]
+    fn test_attr_size_nonexistent() {
+        let vfs = VfsPath::new(MemoryFS::new());
+        let file = vfs.join("nosuch").unwrap();
+        assert_eq!(Filehandle::attr_size(&file), 0);
+    }
+
+    #[test]
+    fn test_current_time_reasonable() {
+        let now = Filehandle::current_time();
+        // Should be after 2020-01-01 (1577836800)
+        assert!(now.seconds > 1577836800);
+    }
+
+    #[test]
+    fn test_real_meta_from_path_tmp() {
+        let meta = RealMeta::from_path(&PathBuf::from("/tmp"));
+        assert!(meta.is_some());
+        let meta = meta.unwrap();
+        assert!(meta.ino > 0);
+        assert!(meta.dev > 0);
+    }
+
+    #[test]
+    fn test_real_meta_from_path_nonexistent() {
+        let meta = RealMeta::from_path(&PathBuf::from("/nonexistent_xyz_abc_123"));
+        assert!(meta.is_none());
+    }
+
+    #[test]
+    fn test_filehandle_initial_no_locks() {
+        let vfs = VfsPath::new(MemoryFS::new());
+        let id = [15u8; 26];
+        let fh = Filehandle::new(vfs, id, 0, 0, 0);
+        assert!(fh.locks.is_empty());
+        assert!(fh.verifier.is_none());
+        assert!(fh.write_cache.is_none());
+    }
+
+    #[test]
+    fn test_fileid_is_hash_based() {
+        let vfs = VfsPath::new(MemoryFS::new());
+        let id = [16u8; 26];
+        let fh = Filehandle::new(vfs, id, 0, 0, 0);
+        // fileid should be nonzero (hash of path)
+        assert!(fh.attr_fileid > 0);
+    }
+}

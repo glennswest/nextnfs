@@ -2120,3 +2120,167 @@ pub struct CbCompound4res {
     tag: Utf8strCs,
     resarray: Vec<NfsCbResOp4>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_xdr::{from_bytes, to_bytes};
+
+    #[test]
+    fn test_stateid4_roundtrip() {
+        let stateid = Stateid4 {
+            seqid: 42,
+            other: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        };
+        let bytes = to_bytes(&stateid).unwrap();
+        let decoded: Stateid4 = from_bytes(&bytes).unwrap();
+        assert_eq!(decoded.seqid, 42);
+        assert_eq!(decoded.other, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+    }
+
+    #[test]
+    fn test_stateid4_zero() {
+        let stateid = Stateid4 {
+            seqid: 0,
+            other: [0u8; 12],
+        };
+        let bytes = to_bytes(&stateid).unwrap();
+        let decoded: Stateid4 = from_bytes(&bytes).unwrap();
+        assert_eq!(decoded.seqid, 0);
+        assert_eq!(decoded.other, [0u8; 12]);
+    }
+
+    #[test]
+    fn test_fsid4_roundtrip() {
+        let fsid = Fsid4 {
+            major: 0xDEADBEEF,
+            minor: 0xCAFEBABE,
+        };
+        let bytes = to_bytes(&fsid).unwrap();
+        let decoded: Fsid4 = from_bytes(&bytes).unwrap();
+        assert_eq!(decoded.major, 0xDEADBEEF);
+        assert_eq!(decoded.minor, 0xCAFEBABE);
+    }
+
+    #[test]
+    fn test_nfstime4_roundtrip() {
+        let time = Nfstime4 {
+            seconds: 1700000000,
+            nseconds: 123456789,
+        };
+        let bytes = to_bytes(&time).unwrap();
+        let decoded: Nfstime4 = from_bytes(&bytes).unwrap();
+        assert_eq!(decoded.seconds, 1700000000);
+        assert_eq!(decoded.nseconds, 123456789);
+    }
+
+    #[test]
+    fn test_nfsftype4_values() {
+        // Verify enum variant discriminants match NFS4 spec
+        assert_eq!(NfsFtype4::Nf4reg as u32, 1);
+        assert_eq!(NfsFtype4::Nf4dir as u32, 2);
+        assert_eq!(NfsFtype4::Nf4blk as u32, 3);
+        assert_eq!(NfsFtype4::Nf4chr as u32, 4);
+        assert_eq!(NfsFtype4::Nf4lnk as u32, 5);
+        assert_eq!(NfsFtype4::Nf4sock as u32, 6);
+        assert_eq!(NfsFtype4::Nf4fifo as u32, 7);
+    }
+
+    #[test]
+    fn test_nfsstat4_common_values() {
+        assert_eq!(NfsStat4::Nfs4Ok as u32, 0);
+        assert_ne!(NfsStat4::Nfs4errNofilehandle as u32, 0);
+        assert_ne!(NfsStat4::Nfs4errStale as u32, 0);
+        assert_ne!(NfsStat4::Nfs4errDenied as u32, 0);
+    }
+
+    #[test]
+    fn test_lock_type_roundtrip() {
+        let lock = NfsLockType4::WriteLt;
+        let bytes = to_bytes(&lock).unwrap();
+        let decoded: NfsLockType4 = from_bytes(&bytes).unwrap();
+        assert_eq!(decoded, NfsLockType4::WriteLt);
+    }
+
+    #[test]
+    fn test_all_lock_types() {
+        for lt in [
+            NfsLockType4::ReadLt,
+            NfsLockType4::WriteLt,
+            NfsLockType4::ReadwLt,
+            NfsLockType4::WritewLt,
+        ] {
+            let bytes = to_bytes(&lt).unwrap();
+            let decoded: NfsLockType4 = from_bytes(&bytes).unwrap();
+            assert_eq!(decoded, lt);
+        }
+    }
+
+    #[test]
+    fn test_stable_how4_roundtrip() {
+        for stable in [
+            StableHow4::Unstable4,
+            StableHow4::DataSync4,
+            StableHow4::FileSync4,
+        ] {
+            let bytes = to_bytes(&stable).unwrap();
+            let decoded: StableHow4 = from_bytes(&bytes).unwrap();
+            assert_eq!(decoded, stable);
+        }
+    }
+
+    #[test]
+    fn test_createtype4_dir_roundtrip() {
+        let ct = Createtype4::Nf4dir;
+        let bytes = to_bytes(&ct).unwrap();
+        let decoded: Createtype4 = from_bytes(&bytes).unwrap();
+        assert_eq!(decoded, Createtype4::Nf4dir);
+    }
+
+    #[test]
+    fn test_nfs_client_id4_roundtrip() {
+        let ncid = NfsClientId4 {
+            verifier: [0xAA; 8],
+            id: "Linux NFSv4.0 client".to_string(),
+        };
+        let bytes = to_bytes(&ncid).unwrap();
+        let decoded: NfsClientId4 = from_bytes(&bytes).unwrap();
+        assert_eq!(decoded.verifier, [0xAA; 8]);
+        assert_eq!(decoded.id, "Linux NFSv4.0 client");
+    }
+
+    #[test]
+    fn test_client_addr4_roundtrip() {
+        let addr = ClientAddr4 {
+            rnetid: "tcp".to_string(),
+            raddr: "192.168.1.1.8.1".to_string(),
+        };
+        let bytes = to_bytes(&addr).unwrap();
+        let decoded: ClientAddr4 = from_bytes(&bytes).unwrap();
+        assert_eq!(decoded.rnetid, "tcp");
+        assert_eq!(decoded.raddr, "192.168.1.1.8.1");
+    }
+
+    #[test]
+    fn test_lock_owner4_roundtrip() {
+        let lo = LockOwner4 {
+            clientid: 12345,
+            owner: b"myowner".to_vec(),
+        };
+        let bytes = to_bytes(&lo).unwrap();
+        let decoded: LockOwner4 = from_bytes(&bytes).unwrap();
+        assert_eq!(decoded.clientid, 12345);
+        assert_eq!(decoded.owner, b"myowner");
+    }
+
+    #[test]
+    fn test_access_flags() {
+        assert_eq!(ACCESS4_READ, 0x00000001);
+        assert_eq!(ACCESS4_LOOKUP, 0x00000002);
+        assert_eq!(ACCESS4_MODIFY, 0x00000004);
+        assert_eq!(ACCESS4_EXTEND, 0x00000008);
+        assert_eq!(ACCESS4_DELETE, 0x00000010);
+        assert_eq!(ACCESS4_EXECUTE, 0x00000020);
+    }
+
+}

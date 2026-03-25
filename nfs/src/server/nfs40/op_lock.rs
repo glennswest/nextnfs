@@ -141,4 +141,70 @@ mod tests {
         // Lock on root should succeed (lock manager accepts any inode)
         assert_eq!(response.status, NfsStat4::Nfs4Ok);
     }
+
+    #[tokio::test]
+    async fn test_lock_returns_stateid() {
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let args = Lock4args {
+            locktype: NfsLockType4::WriteLt,
+            reclaim: false,
+            offset: 0,
+            length: 100,
+            locker: Locker4::OpenOwner(OpenToLockOwner4 {
+                open_seqid: 1,
+                open_stateid: Stateid4 { seqid: 0, other: [0; 12] },
+                lock_seqid: 1,
+                lock_owner: LockOwner4 { clientid: 1, owner: b"owner1".to_vec() },
+            }),
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        if let Some(NfsResOp4::Oplock(Lock4res::Resok4(resok))) = response.result {
+            // stateid should be non-zero
+            assert_ne!(resok.lock_stateid.other, [0u8; 12]);
+        } else {
+            panic!("Expected Lock4res::Resok4");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_lock_conflict_returns_denied() {
+        let request = create_nfs40_server_with_root_fh(None).await;
+        // First lock — write lock from client 1
+        let args1 = Lock4args {
+            locktype: NfsLockType4::WriteLt,
+            reclaim: false,
+            offset: 0,
+            length: 100,
+            locker: Locker4::OpenOwner(OpenToLockOwner4 {
+                open_seqid: 1,
+                open_stateid: Stateid4 { seqid: 0, other: [0; 12] },
+                lock_seqid: 1,
+                lock_owner: LockOwner4 { clientid: 1, owner: b"owner1".to_vec() },
+            }),
+        };
+        let response1 = args1.execute(request).await;
+        assert_eq!(response1.status, NfsStat4::Nfs4Ok);
+
+        // Second lock — conflicting write from client 2
+        let args2 = Lock4args {
+            locktype: NfsLockType4::WriteLt,
+            reclaim: false,
+            offset: 50,
+            length: 100,
+            locker: Locker4::OpenOwner(OpenToLockOwner4 {
+                open_seqid: 1,
+                open_stateid: Stateid4 { seqid: 0, other: [0; 12] },
+                lock_seqid: 1,
+                lock_owner: LockOwner4 { clientid: 2, owner: b"owner2".to_vec() },
+            }),
+        };
+        let response2 = args2.execute(response1.request).await;
+        assert_eq!(response2.status, NfsStat4::Nfs4errDenied);
+        if let Some(NfsResOp4::Oplock(Lock4res::Denied(denied))) = response2.result {
+            assert_eq!(denied.owner.clientid, 1);
+        } else {
+            panic!("Expected Lock4res::Denied");
+        }
+    }
 }

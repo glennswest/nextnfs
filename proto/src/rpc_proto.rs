@@ -137,3 +137,118 @@ impl RpcReplyMsg {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::nfs4_proto::*;
+
+    #[test]
+    fn test_auth_unix_defaults() {
+        let auth = AuthUnix::default();
+        assert_eq!(auth.stamp, 0);
+        assert_eq!(auth.machinename, "");
+        assert_eq!(auth.uid, 0);
+        assert_eq!(auth.gid, 0);
+        assert!(auth.gids.is_empty());
+    }
+
+    #[test]
+    fn test_auth_unix_roundtrip() {
+        let auth = AuthUnix {
+            stamp: 12345,
+            machinename: "testhost".to_string(),
+            uid: 1000,
+            gid: 1000,
+            gids: vec![1000, 100, 10],
+        };
+        let bytes = serde_xdr::to_bytes(&auth).unwrap();
+        let decoded: AuthUnix = serde_xdr::from_bytes(&bytes).unwrap();
+        assert_eq!(decoded.stamp, 12345);
+        assert_eq!(decoded.machinename, "testhost");
+        assert_eq!(decoded.uid, 1000);
+        assert_eq!(decoded.gid, 1000);
+        assert_eq!(decoded.gids, vec![1000, 100, 10]);
+    }
+
+    #[test]
+    fn test_rpc_reply_success_serializes() {
+        let reply = RpcReplyMsg {
+            xid: 42,
+            body: MsgType::Reply(ReplyBody::MsgAccepted(AcceptedReply {
+                verf: OpaqueAuth::AuthNull(vec![]),
+                reply_data: AcceptBody::Success(Compound4res {
+                    status: NfsStat4::Nfs4Ok,
+                    tag: "test".to_string(),
+                    resarray: vec![],
+                }),
+            })),
+        };
+        let bytes = reply.to_bytes();
+        assert!(bytes.is_ok());
+        assert!(!bytes.unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_rpc_reply_proc_unavail_serializes() {
+        let reply = RpcReplyMsg {
+            xid: 99,
+            body: MsgType::Reply(ReplyBody::MsgAccepted(AcceptedReply {
+                verf: OpaqueAuth::AuthNull(vec![]),
+                reply_data: AcceptBody::ProcUnavail,
+            })),
+        };
+        let bytes = reply.to_bytes();
+        assert!(bytes.is_ok());
+    }
+
+    #[test]
+    fn test_rpc_reply_garbage_args_serializes() {
+        let reply = RpcReplyMsg {
+            xid: 100,
+            body: MsgType::Reply(ReplyBody::MsgAccepted(AcceptedReply {
+                verf: OpaqueAuth::AuthNull(vec![]),
+                reply_data: AcceptBody::GarbageArgs,
+            })),
+        };
+        let bytes = reply.to_bytes();
+        assert!(bytes.is_ok());
+    }
+
+    #[test]
+    fn test_rpc_reply_xid_in_bytes() {
+        let reply = RpcReplyMsg {
+            xid: 0xDEADBEEF,
+            body: MsgType::Reply(ReplyBody::MsgAccepted(AcceptedReply {
+                verf: OpaqueAuth::AuthNull(vec![]),
+                reply_data: AcceptBody::ProcUnavail,
+            })),
+        };
+        let bytes = reply.to_bytes().unwrap();
+        // XID should be the first 4 bytes in big-endian
+        assert_eq!(&bytes[0..4], &[0xDE, 0xAD, 0xBE, 0xEF]);
+    }
+
+    #[test]
+    fn test_auth_stat_default() {
+        let stat = AuthStat::default();
+        assert!(matches!(stat, AuthStat::AuthBadCred));
+    }
+
+    #[test]
+    fn test_call_body_fields() {
+        let cb = CallBody {
+            rpcvers: 2,
+            prog: 100003,
+            vers: 4,
+            proc: 1,
+            cred: OpaqueAuth::AuthNull(vec![]),
+            verf: OpaqueAuth::AuthNull(vec![]),
+            args: None,
+        };
+        assert_eq!(cb.rpcvers, 2);
+        assert_eq!(cb.prog, 100003);
+        assert_eq!(cb.vers, 4);
+        assert_eq!(cb.proc, 1);
+    }
+}

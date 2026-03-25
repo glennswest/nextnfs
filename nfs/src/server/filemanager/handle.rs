@@ -743,10 +743,8 @@ mod tests {
     #[tokio::test]
     async fn test_create_and_get_file() {
         let fm = make_fm();
-        let vfs_root = VfsPath::new(MemoryFS::new());
-        // We need to use the same VFS that fm uses — so go through the actor
-        // Create a file via the handle
-        let fh = fm
+        // Create a file via the handle — uses the FM's internal VFS
+        let _fh = fm
             .create_file(
                 VfsPath::new(MemoryFS::new()).join("testfile").unwrap(),
                 1,
@@ -756,9 +754,6 @@ mod tests {
                 None,
             )
             .await;
-        // MemoryFS instances are separate — this tests the actor pathway
-        // The create_file creates on the FM's internal VFS
-        // We can't easily cross VFS boundaries, but we can test the root fh
         let root = fm.get_root_filehandle().await.unwrap();
         assert!(root.file.is_dir().unwrap());
     }
