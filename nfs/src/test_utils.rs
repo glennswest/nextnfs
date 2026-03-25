@@ -36,6 +36,15 @@ pub async fn create_nfs40_server(_principal: Option<String>) -> NfsRequest<'stat
     )
 }
 
+/// Create an NfsRequest with the root filehandle already set.
+/// This simulates the state after PUTROOTFH in single-export mode.
+pub async fn create_nfs40_server_with_root_fh(_principal: Option<String>) -> NfsRequest<'static> {
+    let mut request = create_nfs40_server(_principal).await;
+    let root_fh = request.file_manager().get_root_filehandle().await.unwrap();
+    request.set_filehandle(root_fh);
+    request
+}
+
 /// Create a SetClientId4args for testing SETCLIENTID / SETCLIENTID_CONFIRM.
 pub fn create_client(verifier: [u8; 8], id: String) -> SetClientId4args {
     SetClientId4args {

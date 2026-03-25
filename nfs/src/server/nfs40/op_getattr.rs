@@ -82,3 +82,65 @@ impl NfsOperation for Getattr4args {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        server::{
+            nfs40::{Attrlist4, FileAttr, Getattr4args, Getattr4resok, NfsResOp4, NfsStat4},
+            operation::NfsOperation,
+        },
+        test_utils::{create_nfs40_server, create_nfs40_server_with_root_fh},
+    };
+    use tracing_test::traced_test;
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_getattr_no_filehandle() {
+        let request = create_nfs40_server(None).await;
+        let args = Getattr4args {
+            attr_request: Attrlist4(vec![FileAttr::Type]),
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4errStale);
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_getattr_root_type() {
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let args = Getattr4args {
+            attr_request: Attrlist4(vec![FileAttr::Type]),
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        if let Some(NfsResOp4::Opgetattr(Getattr4resok { obj_attributes: Some(fattr), .. })) = response.result {
+            assert!(!fattr.attrmask.is_empty());
+        } else {
+            panic!("Expected Opgetattr with attributes");
+        }
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_getattr_multiple_attrs() {
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let args = Getattr4args {
+            attr_request: Attrlist4(vec![
+                FileAttr::Type,
+                FileAttr::Size,
+                FileAttr::Fsid,
+                FileAttr::Fileid,
+                FileAttr::Mode,
+            ]),
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        if let Some(NfsResOp4::Opgetattr(Getattr4resok { obj_attributes: Some(fattr), .. })) = response.result {
+            assert_eq!(fattr.attrmask.len(), 5);
+            assert_eq!(fattr.attr_vals.len(), 5);
+        } else {
+            panic!("Expected Opgetattr with 5 attributes");
+        }
+    }
+}

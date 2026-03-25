@@ -101,3 +101,87 @@ impl NfsOperation for Create4args {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        server::{
+            nfs40::{
+                Attrlist4, Create4args, Create4res, Createtype4, Fattr4, NfsResOp4,
+                NfsStat4,
+            },
+            operation::NfsOperation,
+        },
+        test_utils::{create_nfs40_server, create_nfs40_server_with_root_fh},
+    };
+    use tracing_test::traced_test;
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_create_no_filehandle() {
+        let request = create_nfs40_server(None).await;
+        let args = Create4args {
+            objtype: Createtype4::Nf4dir,
+            objname: "testdir".to_string(),
+            createattrs: Fattr4 {
+                attrmask: Attrlist4(vec![]),
+                attr_vals: Attrlist4(vec![]),
+            },
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4errFhexpired);
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_create_empty_name() {
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let args = Create4args {
+            objtype: Createtype4::Nf4dir,
+            objname: "".to_string(),
+            createattrs: Fattr4 {
+                attrmask: Attrlist4(vec![]),
+                attr_vals: Attrlist4(vec![]),
+            },
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4errInval);
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_create_directory() {
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let args = Create4args {
+            objtype: Createtype4::Nf4dir,
+            objname: "newdir".to_string(),
+            createattrs: Fattr4 {
+                attrmask: Attrlist4(vec![]),
+                attr_vals: Attrlist4(vec![]),
+            },
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        if let Some(NfsResOp4::Opcreate(Create4res::Resok4(resok))) = response.result {
+            assert!(resok.cinfo.atomic);
+        } else {
+            panic!("Expected Opcreate Resok4");
+        }
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_create_unsupported_type() {
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let args = Create4args {
+            objtype: Createtype4::Nf4sock,
+            objname: "testsock".to_string(),
+            createattrs: Fattr4 {
+                attrmask: Attrlist4(vec![]),
+                attr_vals: Attrlist4(vec![]),
+            },
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4errBadtype);
+    }
+}

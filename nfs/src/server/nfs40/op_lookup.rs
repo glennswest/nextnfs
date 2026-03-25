@@ -111,3 +111,76 @@ impl NfsOperation for Lookup4args {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        server::{
+            nfs40::{
+                Attrlist4, Create4args, Createtype4, Fattr4, Lookup4args, Lookup4res,
+                NfsResOp4, NfsStat4,
+            },
+            operation::NfsOperation,
+        },
+        test_utils::{create_nfs40_server, create_nfs40_server_with_root_fh},
+    };
+    use tracing_test::traced_test;
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_lookup_no_filehandle() {
+        let request = create_nfs40_server(None).await;
+        let args = Lookup4args {
+            objname: "anything".to_string(),
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4errFhexpired);
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_lookup_nonexistent() {
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let args = Lookup4args {
+            objname: "nosuchfile".to_string(),
+        };
+        let response = args.execute(request).await;
+        // Should fail — file doesn't exist
+        assert_ne!(response.status, NfsStat4::Nfs4Ok);
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_lookup_after_create() {
+        let request = create_nfs40_server_with_root_fh(None).await;
+
+        // Create a directory first
+        let create_args = Create4args {
+            objtype: Createtype4::Nf4dir,
+            objname: "lookupdir".to_string(),
+            createattrs: Fattr4 {
+                attrmask: Attrlist4(vec![]),
+                attr_vals: Attrlist4(vec![]),
+            },
+        };
+        let response = create_args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+
+        // Chain the same request — CREATE set fh to the new dir,
+        // so we need to reset to root for the lookup.
+        let mut request = response.request;
+        let root_fh = request.file_manager().get_root_filehandle().await.unwrap();
+        request.set_filehandle(root_fh);
+
+        let lookup_args = Lookup4args {
+            objname: "lookupdir".to_string(),
+        };
+        let response = lookup_args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        if let Some(NfsResOp4::Oplookup(Lookup4res { status })) = response.result {
+            assert_eq!(status, NfsStat4::Nfs4Ok);
+        } else {
+            panic!("Expected Oplookup result");
+        }
+    }
+}

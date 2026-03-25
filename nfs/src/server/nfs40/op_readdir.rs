@@ -173,3 +173,108 @@ impl NfsOperation for Readdir4args {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        server::{
+            nfs40::{
+                Attrlist4, Create4args, Createtype4, Fattr4, FileAttr, NfsResOp4,
+                NfsStat4, ReadDir4res, Readdir4args,
+            },
+            operation::NfsOperation,
+        },
+        test_utils::{create_nfs40_server, create_nfs40_server_with_root_fh},
+    };
+    use tracing_test::traced_test;
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_readdir_no_filehandle() {
+        let request = create_nfs40_server(None).await;
+        let args = Readdir4args {
+            cookie: 0,
+            cookieverf: [0u8; 8],
+            dircount: 4096,
+            maxcount: 8192,
+            attr_request: Attrlist4(vec![FileAttr::Type]),
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4errFhexpired);
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_readdir_empty_root() {
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let args = Readdir4args {
+            cookie: 0,
+            cookieverf: [0u8; 8],
+            dircount: 4096,
+            maxcount: 8192,
+            attr_request: Attrlist4(vec![FileAttr::Type]),
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        if let Some(NfsResOp4::Opreaddir(ReadDir4res::Resok4(resok))) = response.result {
+            // Empty directory — should have no entries and eof=true
+            assert!(resok.reply.eof);
+        } else {
+            panic!("Expected Opreaddir Resok4");
+        }
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_readdir_with_entries() {
+        // Create some directories, chaining through the same request/VFS
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let create1 = Create4args {
+            objtype: Createtype4::Nf4dir,
+            objname: "dir_a".to_string(),
+            createattrs: Fattr4 {
+                attrmask: Attrlist4(vec![]),
+                attr_vals: Attrlist4(vec![]),
+            },
+        };
+        let response = create1.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+
+        // Chain request — reset to root for second create
+        let mut request = response.request;
+        let root_fh = request.file_manager().get_root_filehandle().await.unwrap();
+        request.set_filehandle(root_fh);
+
+        let create2 = Create4args {
+            objtype: Createtype4::Nf4dir,
+            objname: "dir_b".to_string(),
+            createattrs: Fattr4 {
+                attrmask: Attrlist4(vec![]),
+                attr_vals: Attrlist4(vec![]),
+            },
+        };
+        let response = create2.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+
+        // Chain again — reset to root for readdir
+        let mut request = response.request;
+        let root_fh = request.file_manager().get_root_filehandle().await.unwrap();
+        request.set_filehandle(root_fh);
+
+        let readdir_args = Readdir4args {
+            cookie: 0,
+            cookieverf: [0u8; 8],
+            dircount: 4096,
+            maxcount: 8192,
+            attr_request: Attrlist4(vec![FileAttr::Type]),
+        };
+        let response = readdir_args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        if let Some(NfsResOp4::Opreaddir(ReadDir4res::Resok4(resok))) = response.result {
+            // Should have entries
+            assert!(resok.reply.entries.is_some());
+        } else {
+            panic!("Expected Opreaddir Resok4 with entries");
+        }
+    }
+}
