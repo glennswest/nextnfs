@@ -4,7 +4,7 @@ set -euo pipefail
 ARCH="${1:-x86}"
 REGISTRY="${REGISTRY:-registry.gt.lo:5000}"
 IMAGE="${REGISTRY}/nextnfs"
-VERSION="0.6.0"
+VERSION="0.7.0"
 
 echo "Building nextnfs ${VERSION} for ${ARCH}"
 

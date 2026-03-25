@@ -2,13 +2,15 @@
 
 ## [Unreleased]
 
-### 2026-03-25
-- **test:** FileManager direct tests (28 tests: new/defaults, root_fh, create_file, filehandle lookups, lockingstate_id, attr_supported_attrs, real_path, lock/unlock/test_lock/release, touch/update/attach_locks, filehandle_attrs, volatile handle, drop_cache)
-- **test:** WriteCache tests (4 tests: valid/invalid path, dirty flag, VFS fallback)
-- **test:** NFSv4.1 session tests (10 new: client_id incrementing, session unique IDs, get/destroy nonexistent, channel/slot defaults, SessionManager::default, slot count, preserve others)
-- **test:** NFSv4.2 enum tests (4 tests: op values, data_content, equality, clone)
-- **test:** NfsOpResponse tests (2 tests: ok/error construction)
-- **test:** Expanded all thin-coverage ops: op_locku (+1), op_close (+1), op_commit (+2), op_putfh (+1), op_openconfirm (+1), op_release_lockowner (+1), op_getattr (+3), op_setattr (+1), op_open (+3), op_create (+1), op_rename (+2), op_remove (+1), op_readdir (+2)
+## [v0.7.0] — 2026-03-25
+
+### Added
+- FileManager direct tests (28 tests: new/defaults, root_fh, create_file, filehandle lookups, lockingstate_id, attr_supported_attrs, real_path, lock/unlock/test_lock/release, touch/update/attach_locks, filehandle_attrs, volatile handle, drop_cache)
+- WriteCache tests (4 tests: valid/invalid path, dirty flag, VFS fallback)
+- NFSv4.1 session tests (10 new: client_id incrementing, session unique IDs, get/destroy nonexistent, channel/slot defaults, SessionManager::default, slot count, preserve others)
+- NFSv4.2 enum tests (4 tests: op values, data_content, equality, clone)
+- NfsOpResponse tests (2 tests: ok/error construction)
+- Expanded all thin-coverage ops: op_locku (+1), op_close (+1), op_commit (+2), op_putfh (+1), op_openconfirm (+1), op_release_lockowner (+1), op_getattr (+3), op_setattr (+1), op_open (+3), op_create (+1), op_rename (+2), op_remove (+1), op_readdir (+2)
 - Every .rs file in the server crate now has test coverage
 - Total workspace tests: 299 (39 proto + 254 server + 6 nfstest), 0 clippy warnings
 
