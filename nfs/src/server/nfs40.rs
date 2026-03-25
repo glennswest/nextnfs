@@ -1450,4 +1450,54 @@ mod tests {
             other => panic!("Expected Opreaddir Resok4, got {:?}", other),
         }
     }
+
+    #[tokio::test]
+    async fn test_workflow_remove_directory_verify_gone() {
+        use crate::server::nfs40::{Lookup4args, Remove4args};
+        use crate::server::operation::NfsOperation;
+
+        let request = create_nfs40_server_with_root_fh(None).await;
+
+        // CREATE directory
+        let create_args = Create4args {
+            objtype: Createtype4::Nf4dir,
+            objname: "rmdir_test".to_string(),
+            createattrs: Fattr4 {
+                attrmask: Attrlist4(vec![]),
+                attr_vals: Attrlist4(vec![]),
+            },
+        };
+        let response = create_args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+
+        // Reset to root
+        let mut request = response.request;
+        let root_fh = request.file_manager().get_root_filehandle().await.unwrap();
+        request.set_filehandle(root_fh);
+
+        // Verify dir exists via LOOKUP
+        let lookup_args = Lookup4args { objname: "rmdir_test".to_string() };
+        let response = lookup_args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+
+        // Reset to root
+        let mut request = response.request;
+        let root_fh = request.file_manager().get_root_filehandle().await.unwrap();
+        request.set_filehandle(root_fh);
+
+        // REMOVE directory
+        let remove_args = Remove4args { target: "rmdir_test".to_string() };
+        let response = remove_args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+
+        // Reset to root
+        let mut request = response.request;
+        let root_fh = request.file_manager().get_root_filehandle().await.unwrap();
+        request.set_filehandle(root_fh);
+
+        // LOOKUP — should fail since directory was removed from VFS
+        let lookup_args = Lookup4args { objname: "rmdir_test".to_string() };
+        let response = lookup_args.execute(request).await;
+        assert_ne!(response.status, NfsStat4::Nfs4Ok);
+    }
 }

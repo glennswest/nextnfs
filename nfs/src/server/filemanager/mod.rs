@@ -171,7 +171,7 @@ impl FileManager {
                 match filehandle {
                     Some(filehandle) => {
                         if req.path.is_dir().unwrap_or(false) {
-                            let _ = req.path.read_dir();
+                            let _ = req.path.remove_dir();
                         } else {
                             let _ = req.path.remove_file();
                         }
@@ -179,7 +179,7 @@ impl FileManager {
                     }
                     None => {
                         if req.path.is_dir().unwrap_or(false) {
-                            let _ = req.path.read_dir();
+                            let _ = req.path.remove_dir();
                         } else {
                             let _ = req.path.remove_file();
                         }
