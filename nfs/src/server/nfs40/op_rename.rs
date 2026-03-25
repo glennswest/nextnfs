@@ -83,11 +83,21 @@ impl NfsOperation for Rename4args {
         }
 
         // Perform the rename via VFS
+        let dst_vfs = match current_fh.file.join(&self.newname) {
+            Ok(p) => p,
+            Err(_) => {
+                return NfsOpResponse {
+                    request,
+                    result: None,
+                    status: NfsStat4::Nfs4errInval,
+                };
+            }
+        };
         let is_dir = src_vfs.is_dir().unwrap_or(false);
         let result = if is_dir {
-            src_vfs.move_dir(&current_fh.file.join(&self.newname).unwrap())
+            src_vfs.move_dir(&dst_vfs)
         } else {
-            src_vfs.move_file(&current_fh.file.join(&self.newname).unwrap())
+            src_vfs.move_file(&dst_vfs)
         };
 
         match result {

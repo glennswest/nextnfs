@@ -33,12 +33,21 @@ impl NfsOperation for Commit4args {
 
         // unlock write cache & write file
 
-        let write_cache = &request
+        let write_cache = match request
             .file_manager()
             .get_write_cache_handle(filehandle.clone())
             .await
-            .unwrap();
-        // // TODO: this commits the whole cache, we should only commit the data up to the offset
+        {
+            Ok(wc) => wc,
+            Err(e) => {
+                error!("COMMIT: failed to get write cache: {:?}", e);
+                return NfsOpResponse {
+                    request,
+                    result: None,
+                    status: NfsStat4::Nfs4errServerfault,
+                };
+            }
+        };
         write_cache.commit().await;
 
         request

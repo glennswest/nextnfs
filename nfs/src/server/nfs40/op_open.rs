@@ -15,8 +15,18 @@ use nextnfs_proto::nfs4_proto::{
 };
 
 async fn open_for_reading<'a>(file: &String, mut request: NfsRequest<'a>) -> NfsOpResponse<'a> {
-    let filehandle = request.current_filehandle();
-    let path = &filehandle.unwrap().path;
+    let filehandle = match request.current_filehandle() {
+        Some(fh) => fh,
+        None => {
+            error!("OPEN read: no current filehandle");
+            return NfsOpResponse {
+                request,
+                result: None,
+                status: NfsStat4::Nfs4errNofilehandle,
+            };
+        }
+    };
+    let path = &filehandle.path;
 
     let fh_path = {
         if path == "/" {
@@ -86,14 +96,24 @@ async fn open_for_writing<'a>(
 
     debug!("open_for_writing {:?}", fh_path);
 
-    let newfile_op = filehandle.file.join(file);
+    let newfile = match filehandle.file.join(file) {
+        Ok(p) => p,
+        Err(e) => {
+            error!("OPEN write: invalid path join: {:?}", e);
+            return NfsOpResponse {
+                request,
+                result: None,
+                status: NfsStat4::Nfs4errInval,
+            };
+        }
+    };
 
     let filehandle = match how {
         CreateHow4::UNCHECKED4(_fattr) => {
             match request
                 .file_manager()
                 .create_file(
-                    newfile_op.unwrap(),
+                    newfile.clone(),
                     args.owner.clientid,
                     args.owner.owner.clone(),
                     args.share_access,
@@ -117,7 +137,7 @@ async fn open_for_writing<'a>(
             match request
                 .file_manager()
                 .create_file(
-                    newfile_op.unwrap(),
+                    newfile,
                     args.owner.clientid,
                     args.owner.owner.clone(),
                     args.share_access,
@@ -197,7 +217,7 @@ impl NfsOperation for Open4args {
 
         // If the current filehandle is not a directory, the error
         // NFS4ERR_NOTDIR will be returned.
-        if !filehandle.file.is_dir().unwrap() {
+        if !filehandle.file.is_dir().unwrap_or(false) {
             error!("Not a directory");
             return NfsOpResponse {
                 request,

@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use tracing::debug;
+use tracing::{debug, error};
 
 use crate::server::{operation::NfsOperation, request::NfsRequest, response::NfsOpResponse};
 
@@ -14,9 +14,31 @@ impl NfsOperation for OpenConfirm4args {
             "Operation 20: OPEN_CONFIRM - Confirm Open {:?}, with request {:?}",
             self, request
         );
-        // we expect filehandle to have one lock (for the shared reservation)
-        let lock = request.current_filehandle().unwrap().locks[0].clone();
-        // TODO check if the stateid is correct
+
+        let fh = match request.current_filehandle() {
+            Some(fh) => fh,
+            None => {
+                error!("OPEN_CONFIRM: no current filehandle");
+                return NfsOpResponse {
+                    request,
+                    result: None,
+                    status: NfsStat4::Nfs4errNofilehandle,
+                };
+            }
+        };
+
+        let lock = match fh.locks.first() {
+            Some(lock) => lock.clone(),
+            None => {
+                error!("OPEN_CONFIRM: no locks on filehandle");
+                return NfsOpResponse {
+                    request,
+                    result: None,
+                    status: NfsStat4::Nfs4errBadStateid,
+                };
+            }
+        };
+
         NfsOpResponse {
             request,
             result: Some(NfsResOp4::OpopenConfirm(OpenConfirm4res::Resok4(

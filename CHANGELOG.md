@@ -13,6 +13,17 @@
 - Unit tests for WRITE (1 test: no filehandle)
 
 ### Fixed
+- CLOSE panics if no current filehandle — now returns Nfs4errNofilehandle
+- OPEN_CONFIRM panics if no filehandle or empty locks — now returns proper NFS errors
+- OPEN read path panics if no filehandle — now returns Nfs4errNofilehandle
+- OPEN write path panics on invalid path join — now returns Nfs4errInval
+- OPEN is_dir() panic on VFS error — now uses unwrap_or(false)
+- COMMIT panics on write cache actor failure — now returns Nfs4errServerfault
+- WRITE panics on write cache, append, write, and flush failures — now returns proper NFS errors
+- READDIR panics on read_dir() VFS failure — now returns Nfs4errIo
+- CREATE is_file() panic on VFS error — now uses unwrap_or(false)
+- CREATE panics on invalid path join — now returns Nfs4errInval
+- RENAME panics on invalid destination path join — now returns Nfs4errInval
 - Clippy collapsible_match warnings in SETCLIENTID_CONFIRM and RENEW tests
 - Clippy bool_assert_comparison warning in nfstest XDR tests
 

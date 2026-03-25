@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use tracing::debug;
+use tracing::{debug, error};
 
 use crate::server::{operation::NfsOperation, request::NfsRequest, response::NfsOpResponse};
 
@@ -13,7 +13,17 @@ impl NfsOperation for Close4args {
             self, request
         );
 
-        let current_filehandle = request.current_filehandle().unwrap();
+        let current_filehandle = match request.current_filehandle() {
+            Some(fh) => fh,
+            None => {
+                error!("CLOSE: no current filehandle");
+                return NfsOpResponse {
+                    request,
+                    result: None,
+                    status: NfsStat4::Nfs4errNofilehandle,
+                };
+            }
+        };
         request.drop_filehandle_from_cache(current_filehandle.id);
 
         NfsOpResponse {

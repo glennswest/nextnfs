@@ -41,11 +41,21 @@ impl NfsOperation for Write4args {
             let write_cache = match &filehandle.write_cache {
                 Some(write_cache) => write_cache,
                 None => {
-                    let write_cache = request
+                    let write_cache = match request
                         .file_manager()
                         .get_write_cache_handle(filehandle.clone())
                         .await
-                        .unwrap();
+                    {
+                        Ok(wc) => wc,
+                        Err(e) => {
+                            error!("WRITE: failed to get write cache: {:?}", e);
+                            return NfsOpResponse {
+                                request,
+                                result: None,
+                                status: NfsStat4::Nfs4errServerfault,
+                            };
+                        }
+                    };
                     request.drop_filehandle_from_cache(filehandle.id);
                     &write_cache.clone()
                 }
@@ -56,13 +66,35 @@ impl NfsOperation for Write4args {
                 .await;
         } else {
             // write to file
-            let mut file = filehandle.file.append_file().unwrap();
+            let mut file = match filehandle.file.append_file() {
+                Ok(f) => f,
+                Err(e) => {
+                    error!("WRITE: append_file failed: {:?}", e);
+                    return NfsOpResponse {
+                        request,
+                        result: None,
+                        status: NfsStat4::Nfs4errIo,
+                    };
+                }
+            };
             let _ = file.seek(SeekFrom::Start(self.offset));
-            count = file.write(&self.data).unwrap() as u32;
+            count = match file.write(&self.data) {
+                Ok(n) => n as u32,
+                Err(e) => {
+                    error!("WRITE: write failed: {:?}", e);
+                    return NfsOpResponse {
+                        request,
+                        result: None,
+                        status: NfsStat4::Nfs4errIo,
+                    };
+                }
+            };
             stable = StableHow4::FileSync4;
 
             if count > 0 {
-                file.flush().unwrap();
+                if let Err(e) = file.flush() {
+                    error!("WRITE: flush failed: {:?}", e);
+                }
                 request.file_manager().touch_file(filehandle.id).await;
             }
         }

@@ -44,12 +44,22 @@ impl NfsOperation for Create4args {
             // TODO support links
             // LinkData(vec) => todo!(),
             Createtype4::Nf4dir => {
-                let current_dir = if filehandle.file.is_file().unwrap() {
+                let current_dir = if filehandle.file.is_file().unwrap_or(false) {
                     &filehandle.file.parent()
                 } else {
                     &filehandle.file
                 };
-                let new_dir = current_dir.join(self.objname.clone()).unwrap();
+                let new_dir = match current_dir.join(self.objname.clone()) {
+                    Ok(d) => d,
+                    Err(e) => {
+                        error!("CREATE: invalid path join: {:?}", e);
+                        return NfsOpResponse {
+                            request,
+                            result: None,
+                            status: NfsStat4::Nfs4errInval,
+                        };
+                    }
+                };
                 let _ = new_dir.create_dir();
 
                 request.file_manager().touch_file(filehandle.id).await;

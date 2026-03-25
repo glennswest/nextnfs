@@ -56,7 +56,17 @@ impl NfsOperation for Readdir4args {
                 };
             }
         };
-        let dir = dir_fh.file.read_dir().unwrap();
+        let dir = match dir_fh.file.read_dir() {
+            Ok(d) => d,
+            Err(e) => {
+                error!("READDIR: read_dir failed: {:?}", e);
+                return NfsOpResponse {
+                    request,
+                    result: None,
+                    status: NfsStat4::Nfs4errIo,
+                };
+            }
+        };
 
         let mut fnames = Vec::new();
         let mut filehandles = Vec::new();
