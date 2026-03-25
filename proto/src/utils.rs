@@ -50,10 +50,15 @@ impl Serialize for Getattr4resok {
             let mut seq = serializer.serialize_struct("Getattr4resok", 1)?;
             seq.serialize_field("status", &ToPrimitive::to_u32(&self.status).unwrap())?;
             seq.end()
-        } else {
+        } else if let Some(ref attrs) = self.obj_attributes {
             let mut seq = serializer.serialize_struct("Getattr4resok", 2)?;
             seq.serialize_field("status", &ToPrimitive::to_u32(&self.status).unwrap())?;
-            seq.serialize_field("obj_attributes", &self.obj_attributes.as_ref().unwrap())?;
+            seq.serialize_field("obj_attributes", attrs)?;
+            seq.end()
+        } else {
+            // Status is Ok but no attributes — serialize as empty response
+            let mut seq = serializer.serialize_struct("Getattr4resok", 1)?;
+            seq.serialize_field("status", &ToPrimitive::to_u32(&self.status).unwrap())?;
             seq.end()
         }
     }
@@ -571,7 +576,7 @@ impl<'de> Deserialize<'de> for Attrlist4<FileAttr> {
     where
         D: serde::Deserializer<'de>,
     {
-        let attrs_raw = <Vec<u32> as serde::Deserialize>::deserialize(deserializer).unwrap();
+        let attrs_raw = <Vec<u32> as serde::Deserialize>::deserialize(deserializer)?;
         let attrs_list = Attrlist4::from_u32(attrs_raw);
         Ok(attrs_list)
     }
