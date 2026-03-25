@@ -89,8 +89,8 @@ impl FileManager {
                             req.respond_to.send(None).unwrap();
                         }
                     }
-                } else if req.path.is_some() {
-                    let path = self.root.join(req.path.unwrap()).unwrap();
+                } else if let Some(req_path) = req.path {
+                    let path = self.root.join(req_path).unwrap();
                     if path.exists().unwrap() {
                         let fh_wo_locks = self.get_filehandle(&path);
                         let fh = self.attach_locks(fh_wo_locks);
