@@ -13,7 +13,9 @@ use async_trait::async_trait;
 use request::NfsRequest;
 use tracing::debug;
 
-use nextnfs_proto::rpc_proto::{CallBody, MsgType, ReplyBody, RpcCallMsg, RpcReplyMsg};
+use nextnfs_proto::rpc_proto::{
+    AcceptBody, AcceptedReply, CallBody, MsgType, OpaqueAuth, ReplyBody, RpcCallMsg, RpcReplyMsg,
+};
 
 #[async_trait]
 pub trait NfsProtoImpl: Sync {
@@ -58,12 +60,19 @@ where
 
         match rpc_call_message.body {
             MsgType::Call(call_body) => {
-                // TODO: check nfs protocol version
                 let (request, body) = match call_body.proc {
                     0 => self.server.null(call_body, request).await,
                     1 => self.server.compound(call_body, request).await,
                     _ => {
-                        todo!("Invalid procedure")
+                        debug!("unknown RPC procedure {}", call_body.proc);
+                        request.close().await;
+                        return Box::new(RpcReplyMsg {
+                            xid: rpc_call_message.xid,
+                            body: MsgType::Reply(ReplyBody::MsgAccepted(AcceptedReply {
+                                verf: OpaqueAuth::AuthNull(Vec::new()),
+                                reply_data: AcceptBody::ProcUnavail,
+                            })),
+                        });
                     }
                 };
 
@@ -77,7 +86,14 @@ where
                 Box::new(rpc_reply_message)
             }
             _ => {
-                todo!("Invalid message type")
+                debug!("received non-Call RPC message, returning GarbageArgs");
+                Box::new(RpcReplyMsg {
+                    xid: rpc_call_message.xid,
+                    body: MsgType::Reply(ReplyBody::MsgAccepted(AcceptedReply {
+                        verf: OpaqueAuth::AuthNull(Vec::new()),
+                        reply_data: AcceptBody::GarbageArgs,
+                    })),
+                })
             }
         }
     }
