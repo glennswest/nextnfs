@@ -32,3 +32,29 @@ impl NfsOperation for Locku4args {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::server::operation::NfsOperation;
+    use crate::test_utils::*;
+    use nextnfs_proto::nfs4_proto::{NfsLockType4, Stateid4};
+
+    #[tokio::test]
+    async fn test_locku_nonexistent_lock() {
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let args = Locku4args {
+            locktype: NfsLockType4::ReadLt,
+            seqid: 1,
+            lock_stateid: Stateid4 {
+                seqid: 0,
+                other: [0; 12],
+            },
+            offset: 0,
+            length: 100,
+        };
+        let response = args.execute(request).await;
+        // Unlocking a nonexistent lock — should error
+        assert_ne!(response.status, NfsStat4::Nfs4Ok);
+    }
+}

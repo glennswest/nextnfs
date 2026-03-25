@@ -74,3 +74,44 @@ impl NfsOperation for Lockt4args {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::server::operation::NfsOperation;
+    use crate::test_utils::*;
+    use nextnfs_proto::nfs4_proto::NfsLockType4;
+
+    #[tokio::test]
+    async fn test_lockt_no_filehandle() {
+        let request = create_nfs40_server(None).await;
+        let args = Lockt4args {
+            locktype: NfsLockType4::ReadLt,
+            offset: 0,
+            length: 100,
+            owner: LockOwner4 {
+                clientid: 1,
+                owner: b"test".to_vec(),
+            },
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4errNofilehandle);
+    }
+
+    #[tokio::test]
+    async fn test_lockt_no_conflict() {
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let args = Lockt4args {
+            locktype: NfsLockType4::ReadLt,
+            offset: 0,
+            length: 100,
+            owner: LockOwner4 {
+                clientid: 1,
+                owner: b"test".to_vec(),
+            },
+        };
+        let response = args.execute(request).await;
+        // No existing locks, so test should succeed (Nfs4Ok)
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+    }
+}

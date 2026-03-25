@@ -10,6 +10,12 @@
 - Unit tests for OPEN_CONFIRM (2 tests: no filehandle, no locks)
 - Unit tests for READLINK (1 test: returns NOTSUPP)
 - Unit tests for LINK (2 tests: no saved fh, no current fh)
+- Unit tests for LOCK (2 tests: no filehandle, lock on root directory)
+- Unit tests for LOCKT (2 tests: no filehandle, no conflict)
+- Unit tests for LOCKU (1 test: nonexistent lock)
+- Unit tests for RELEASE_LOCKOWNER (1 test: no locks)
+- Unit tests for pseudo-fs (6 tests: fh structure, is_pseudo_root, export_id, stamp, getattr type/multiple)
+- Unit tests for PUTFH (2 tests: pseudo root, invalid handle)
 - Make Commit4args and OpenConfirm4args fields public for testability
 
 ### Fixed

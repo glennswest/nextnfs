@@ -67,3 +67,30 @@ impl NfsOperation for PutFh4args {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::server::operation::NfsOperation;
+    use crate::test_utils::*;
+
+    #[tokio::test]
+    async fn test_putfh_pseudo_root() {
+        let request = create_nfs40_server(None).await;
+        let pseudo_fh = op_pseudo::pseudo_root_fh();
+        let args = PutFh4args { object: pseudo_fh };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+    }
+
+    #[tokio::test]
+    async fn test_putfh_invalid_handle() {
+        let request = create_nfs40_server(None).await;
+        let args = PutFh4args {
+            object: [0xFF; 26],
+        };
+        let response = args.execute(request).await;
+        // Invalid filehandle should fail (stale or bad handle)
+        assert_ne!(response.status, NfsStat4::Nfs4Ok);
+    }
+}

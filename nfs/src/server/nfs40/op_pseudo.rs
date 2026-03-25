@@ -326,3 +326,63 @@ fn current_time() -> Nfstime4 {
         nseconds: since_epoch.subsec_nanos(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_pseudo_root_fh_structure() {
+        let fh = pseudo_root_fh();
+        assert_eq!(fh[0], 0x02);
+        assert_eq!(fh[1], PSEUDO_ROOT_EXPORT_ID);
+        // Rest should be zero
+        for &byte in &fh[2..] {
+            assert_eq!(byte, 0);
+        }
+    }
+
+    #[test]
+    fn test_is_pseudo_root() {
+        let fh = pseudo_root_fh();
+        assert!(is_pseudo_root(&fh));
+
+        // Regular filehandle should not be pseudo-root
+        let regular = [0u8; 26];
+        assert!(!is_pseudo_root(&regular));
+    }
+
+    #[test]
+    fn test_export_id_from_fh() {
+        let pseudo_fh = pseudo_root_fh();
+        assert_eq!(export_id_from_fh(&pseudo_fh), PSEUDO_ROOT_EXPORT_ID);
+
+        // Regular fh returns fh[1]
+        let mut regular = [0u8; 26];
+        regular[1] = 5;
+        assert_eq!(export_id_from_fh(&regular), 5);
+    }
+
+    #[test]
+    fn test_stamp_export_id() {
+        let mut fh = [0u8; 26];
+        stamp_export_id(&mut fh, 42);
+        assert_eq!(fh[1], 42);
+    }
+
+    #[test]
+    fn test_pseudo_root_getattr_type() {
+        let (answer_attrs, attrs) = pseudo_root_getattr(&[FileAttr::Type]);
+        assert_eq!(answer_attrs.len(), 1);
+        assert_eq!(attrs.len(), 1);
+        assert_eq!(attrs[0], FileAttrValue::Type(NfsFtype4::Nf4dir));
+    }
+
+    #[test]
+    fn test_pseudo_root_getattr_multiple() {
+        let (answer_attrs, attrs) =
+            pseudo_root_getattr(&[FileAttr::Type, FileAttr::Mode, FileAttr::Size]);
+        assert_eq!(answer_attrs.len(), 3);
+        assert_eq!(attrs.len(), 3);
+    }
+}
