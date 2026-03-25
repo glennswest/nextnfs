@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+- Getattr4resok serializer panics on None obj_attributes — now uses if-let pattern
+- Attrlist4<FileAttr> deserializer panics on malformed input — now propagates errors
+
 ## [v0.3.1] — 2026-03-25
 
 ### Added
