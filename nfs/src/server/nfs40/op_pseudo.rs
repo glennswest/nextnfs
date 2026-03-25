@@ -320,7 +320,7 @@ fn pseudo_supported_attrs() -> Attrlist4<FileAttr> {
 fn current_time() -> Nfstime4 {
     let since_epoch = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap();
+        .unwrap_or_default();
     Nfstime4 {
         seconds: since_epoch.as_secs() as i64,
         nseconds: since_epoch.subsec_nanos(),
