@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Added
+- Proto XDR roundtrip tests (17 tests: bitmap encoding, attr value roundtrips, FattrRaw parsing, NfsStat4 serialization, OpaqueAuth roundtrips)
+- Compound dispatch tests (11 tests: NULL, PUTROOTFH+GETATTR, error short-circuiting, minor version mismatch, SAVEFH/RESTOREFH, GETFH, create+readdir lifecycle, unsupported ops, empty args)
+- FileManager actor tests (10 tests: root fh, nonexistent path/id, attrs, stable id, create/remove/touch lifecycle)
+- Lock conflict detection unit tests (14 tests: write-vs-write, read-vs-read, read-vs-write, same-owner, non-overlapping, adjacent, zero-length-to-EOF, WritewLt, lock/unlock/test_lock/release via actor)
+- ExportManager tests (11 tests: empty list, add/remove, duplicate, nonexistent path, get by id/name, sequential IDs, initial stats)
+- RPC dispatch tests (5 tests: NULL, COMPOUND, ProcUnavail, GarbageArgs, XID preservation)
+- NfsRequest edge case tests (13 tests: initial state, save/restore, unset fh, client addr, export id, pseudo root, bad fh id, boot/request time, close, set_filehandle_with_export)
+- Total workspace tests: 160 (17 proto + 137 server + 6 nfstest)
+
 ## [v0.4.0] — 2026-03-25
 
 ### Added
