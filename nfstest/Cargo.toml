@@ -1,0 +1,52 @@
+[package]
+name = "nextnfstest"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Comprehensive NFS protocol test suite (v3, v4.0, v4.1, v4.2)"
+
+[[bin]]
+name = "nextnfstest"
+path = "src/main.rs"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Network / RPC
+bytes = "1"
+byteorder = "1"
+
+# Serialization for reports
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Time and date for reports
+chrono = { version = "0.4", features = ["serde"] }
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# UUID for test run IDs
+uuid = { version = "1", features = ["v4"] }
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Colored terminal output
+colored = "2"
+
+# Report templating
+minijinja = "2"
+
+# Web server
+axum = "0.8"
+tower-http = { version = "0.6", features = ["cors"] }
+tokio-stream = { version = "0.1", features = ["sync"] }

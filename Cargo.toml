@@ -2,6 +2,7 @@
 members = [
     "proto",
     "nfs",
+    "nfstest",
     ".",
 ]
 resolver = "2"

@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### 2026-03-25
+- **feat:** Unified CI test suite — wire-level + shell functional + performance benchmarks
+- **feat:** nextnfstest wire-level protocol tester integrated as workspace member (nfstest/)
+- **feat:** NFSv4.0 basic functional tests — 35 cases (file ops, attrs, symlinks, hardlinks, read/write)
+- **feat:** NFSv4.0 edge case tests — 19 cases (error conditions, filehandle stability, concurrency, locking)
+- **feat:** NFSv4.0 stress tests — 9 cases (10K files, parallel workers, deep paths, mount cycling)
+- **feat:** NFSv4.1 session tests — 6 cases (mount, I/O, clean unmount, recovery, multi-session)
+- **feat:** Performance benchmarks — fio throughput/latency, metadata ops/sec, concurrency scaling
+- **feat:** knfsd baseline — run all tests against kernel NFS first for comparison
+- **feat:** Comparison report — side-by-side knfsd vs nextnfs (functional, wire, performance)
+- **chore:** ci-test.sh rewritten as 6-phase unified orchestrator
+
 ### 2026-03-22
 - **feat:** RPM packaging for Fedora/RHEL (nextnfs.spec + build-rpm.sh)
 - **feat:** DEB packaging for Debian/Ubuntu (control files + build-deb.sh)

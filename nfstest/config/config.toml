@@ -1,0 +1,15 @@
+[general]
+name = "nextnfstest"
+
+[api]
+bind = "0.0.0.0:9080"
+
+[[process]]
+name = "nextnfstest"
+command = "/nextnfstest"
+args = ["serve", "--bind", "0.0.0.0:3000", "--data-dir", "/data/reports"]
+on_failure = "restart"
+
+[process.ui]
+label = "NFS Tests"
+proxy = "http://127.0.0.1:3000"
