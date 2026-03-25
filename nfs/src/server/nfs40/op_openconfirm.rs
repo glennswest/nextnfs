@@ -53,3 +53,39 @@ impl NfsOperation for OpenConfirm4args {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::server::operation::NfsOperation;
+    use crate::test_utils::*;
+
+    #[tokio::test]
+    async fn test_openconfirm_no_filehandle() {
+        let request = create_nfs40_server(None).await;
+        let args = OpenConfirm4args {
+            open_stateid: Stateid4 {
+                seqid: 0,
+                other: [0; 12],
+            },
+            seqid: 1,
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4errNofilehandle);
+    }
+
+    #[tokio::test]
+    async fn test_openconfirm_no_locks() {
+        // Root filehandle has no locks, so OPEN_CONFIRM should fail
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let args = OpenConfirm4args {
+            open_stateid: Stateid4 {
+                seqid: 0,
+                other: [0; 12],
+            },
+            seqid: 1,
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4errBadStateid);
+    }
+}

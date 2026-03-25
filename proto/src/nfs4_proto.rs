@@ -525,8 +525,8 @@ pub enum Close4res {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Commit4args {
     /* CURRENT_FH: file */
-    offset: Offset4,
-    count: Count4,
+    pub offset: Offset4,
+    pub count: Count4,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1125,8 +1125,8 @@ pub struct OpenAttr4res {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct OpenConfirm4args {
     /* CURRENT_FH: opened file */
-    open_stateid: Stateid4,
-    seqid: Seqid4,
+    pub open_stateid: Stateid4,
+    pub seqid: Seqid4,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

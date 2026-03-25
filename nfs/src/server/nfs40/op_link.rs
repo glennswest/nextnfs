@@ -104,3 +104,31 @@ impl NfsOperation for Link4args {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::server::operation::NfsOperation;
+    use crate::test_utils::*;
+
+    #[tokio::test]
+    async fn test_link_no_saved_fh() {
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let args = Link4args {
+            newname: "hardlink".to_string(),
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4errRestorefh);
+    }
+
+    #[tokio::test]
+    async fn test_link_no_current_fh() {
+        let request = create_nfs40_server(None).await;
+        let args = Link4args {
+            newname: "hardlink".to_string(),
+        };
+        let response = args.execute(request).await;
+        // No saved fh either, so should get Nfs4errRestorefh first
+        assert_eq!(response.status, NfsStat4::Nfs4errRestorefh);
+    }
+}

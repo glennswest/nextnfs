@@ -68,3 +68,45 @@ impl NfsOperation for SetAttr4args {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::server::operation::NfsOperation;
+    use crate::test_utils::*;
+    use nextnfs_proto::nfs4_proto::{Fattr4, Stateid4};
+
+    #[tokio::test]
+    async fn test_setattr_no_filehandle() {
+        let request = create_nfs40_server(None).await;
+        let args = SetAttr4args {
+            stateid: Stateid4 {
+                seqid: 0,
+                other: [0; 12],
+            },
+            obj_attributes: Fattr4 {
+                attrmask: Attrlist4(vec![]),
+                attr_vals: Attrlist4(vec![]),
+            },
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4errStale);
+    }
+
+    #[tokio::test]
+    async fn test_setattr_empty_attrs() {
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let args = SetAttr4args {
+            stateid: Stateid4 {
+                seqid: 0,
+                other: [0; 12],
+            },
+            obj_attributes: Fattr4 {
+                attrmask: Attrlist4(vec![]),
+                attr_vals: Attrlist4(vec![]),
+            },
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+    }
+}

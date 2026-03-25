@@ -66,3 +66,28 @@ impl NfsOperation for Commit4args {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::server::operation::NfsOperation;
+    use crate::test_utils::*;
+
+    #[tokio::test]
+    async fn test_commit_no_filehandle() {
+        let request = create_nfs40_server(None).await;
+        let args = Commit4args {
+            offset: 0,
+            count: 0,
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4errFhexpired);
+    }
+
+    #[test]
+    fn test_verifier_from_boot() {
+        let boot_time: u64 = 0x0102030405060708;
+        let verifier = verifier_from_boot(&boot_time);
+        assert_eq!(verifier, [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]);
+    }
+}

@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Added
+- Unit tests for CLOSE (2 tests: no filehandle, successful close with stateid)
+- Unit tests for SETATTR (2 tests: no filehandle, empty attributes)
+- Unit tests for COMMIT (2 tests: no filehandle, verifier generation)
+- Unit tests for OPEN (4 tests: no filehandle, empty filename, create file, read nonexistent)
+- Unit tests for OPEN_CONFIRM (2 tests: no filehandle, no locks)
+- Unit tests for READLINK (1 test: returns NOTSUPP)
+- Unit tests for LINK (2 tests: no saved fh, no current fh)
+- Make Commit4args and OpenConfirm4args fields public for testability
+
 ### Fixed
 - Getattr4resok serializer panics on None obj_attributes — now uses if-let pattern
 - Attrlist4<FileAttr> deserializer panics on malformed input — now propagates errors

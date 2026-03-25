@@ -30,3 +30,25 @@ impl NfsOperation for Readlink4args {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::server::operation::NfsOperation;
+    use crate::test_utils::*;
+
+    #[tokio::test]
+    async fn test_readlink_returns_notsupp() {
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let args = Readlink4args;
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4errNotsupp);
+        match response.result {
+            Some(NfsResOp4::Opreadlink(res)) => {
+                assert_eq!(res.status, NfsStat4::Nfs4errNotsupp);
+                assert!(res.link.is_empty());
+            }
+            other => panic!("Expected Opreadlink, got {:?}", other),
+        }
+    }
+}

@@ -266,3 +266,70 @@ impl NfsOperation for Open4args {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::server::operation::NfsOperation;
+    use crate::test_utils::*;
+    use nextnfs_proto::nfs4_proto::{Fattr4, OpenOwner4};
+
+    fn make_open_args(file: &str, how: OpenFlag4) -> Open4args {
+        Open4args {
+            seqid: 1,
+            share_access: 1, // OPEN4_SHARE_ACCESS_READ
+            share_deny: 0,   // OPEN4_SHARE_DENY_NONE
+            owner: OpenOwner4 {
+                clientid: 1,
+                owner: b"test_owner".to_vec(),
+            },
+            openhow: how,
+            claim: OpenClaim4::ClaimNull(file.to_string()),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_open_no_filehandle() {
+        let request = create_nfs40_server(None).await;
+        let args = make_open_args("testfile", OpenFlag4::Open4Nocreate);
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4errFhexpired);
+    }
+
+    #[tokio::test]
+    async fn test_open_empty_filename() {
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let args = make_open_args("", OpenFlag4::Open4Nocreate);
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4errInval);
+    }
+
+    #[tokio::test]
+    async fn test_open_create_file() {
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let args = make_open_args(
+            "newfile.txt",
+            OpenFlag4::How(CreateHow4::UNCHECKED4(Fattr4 {
+                attrmask: Attrlist4(vec![]),
+                attr_vals: Attrlist4(vec![]),
+            })),
+        );
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        match &response.result {
+            Some(NfsResOp4::Opopen(Open4res::Resok4(resok))) => {
+                assert_eq!(resok.rflags, OPEN4_RESULT_CONFIRM);
+            }
+            other => panic!("Expected Opopen Resok4, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_open_read_nonexistent() {
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let args = make_open_args("nonexistent.txt", OpenFlag4::Open4Nocreate);
+        let response = args.execute(request).await;
+        // Should fail since the file doesn't exist
+        assert_ne!(response.status, NfsStat4::Nfs4Ok);
+    }
+}
