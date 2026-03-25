@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [v0.3.1] — 2026-03-25
+
 ### Added
 - Unit tests for GETATTR (3 tests: no filehandle, root type, multiple attrs)
 - Unit tests for CREATE (4 tests: no filehandle, empty name, directory, unsupported type)
