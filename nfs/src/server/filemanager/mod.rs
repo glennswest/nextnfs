@@ -74,7 +74,7 @@ impl FileManager {
             FileManagerMessage::GetRootFilehandle(req) => {
                 let fh_wo_locks = self.root_fh();
                 let fh = self.attach_locks(fh_wo_locks);
-                req.respond_to.send(fh).unwrap();
+                let _ = req.respond_to.send(fh);
             }
             FileManagerMessage::GetFilehandle(req) => {
                 if let Some(fh_id) = req.filehandle {
@@ -82,11 +82,11 @@ impl FileManager {
                     match fh {
                         Some(fh_wo_locks) => {
                             let fh = self.attach_locks(fh_wo_locks);
-                            req.respond_to.send(Some(fh)).unwrap();
+                            let _ = req.respond_to.send(Some(fh));
                         }
                         None => {
                             debug!("Filehandle not found");
-                            req.respond_to.send(None).unwrap();
+                            let _ = req.respond_to.send(None);
                         }
                     }
                 } else if let Some(req_path) = req.path {
@@ -94,21 +94,20 @@ impl FileManager {
                     if path.exists().unwrap() {
                         let fh_wo_locks = self.get_filehandle(&path);
                         let fh = self.attach_locks(fh_wo_locks);
-                        req.respond_to.send(Some(fh)).unwrap();
+                        let _ = req.respond_to.send(Some(fh));
                     } else {
                         debug!("File not found {:?}", path);
-                        req.respond_to.send(None).unwrap();
+                        let _ = req.respond_to.send(None);
                     }
                 } else {
                     let fh_wo_locks = self.root_fh();
                     let fh = self.attach_locks(fh_wo_locks);
-                    req.respond_to.send(Some(fh)).unwrap();
+                    let _ = req.respond_to.send(Some(fh));
                 }
             }
             FileManagerMessage::GetFilehandleAttrs(req) => {
-                req.respond_to
-                    .send(self.filehandle_attrs(&req.attrs_request, &req.filehandle_id))
-                    .unwrap();
+                let _ = req.respond_to
+                    .send(self.filehandle_attrs(&req.attrs_request, &req.filehandle_id));
             }
             FileManagerMessage::CreateFile(req) => {
                 let fh = self.create_file(&req.path);
@@ -124,9 +123,9 @@ impl FileManager {
                     );
                     self.lockdb.insert(lock.clone());
                     fh.locks = vec![lock];
-                    req.respond_to.send(Some(fh)).unwrap();
+                    let _ = req.respond_to.send(Some(fh));
                 } else {
-                    req.respond_to.send(None).unwrap();
+                    let _ = req.respond_to.send(None);
                 }
             }
             FileManagerMessage::LockFile(req) => {
@@ -138,11 +137,11 @@ impl FileManager {
                     req.offset,
                     req.length,
                 );
-                req.respond_to.send(result).unwrap();
+                let _ = req.respond_to.send(result);
             }
             FileManagerMessage::UnlockFile(req) => {
                 let result = self.handle_unlock(&req.lock_stateid, req.offset, req.length);
-                req.respond_to.send(result).unwrap();
+                let _ = req.respond_to.send(result);
             }
             FileManagerMessage::TestLock(req) => {
                 let result = self.handle_test_lock(
@@ -153,11 +152,11 @@ impl FileManager {
                     req.offset,
                     req.length,
                 );
-                req.respond_to.send(result).unwrap();
+                let _ = req.respond_to.send(result);
             }
             FileManagerMessage::ReleaseLockOwner(req) => {
                 let result = self.handle_release_lock_owner(req.client_id, &req.owner);
-                req.respond_to.send(result).unwrap();
+                let _ = req.respond_to.send(result);
             }
             FileManagerMessage::CloseFile() => {},
             FileManagerMessage::RemoveFile(req) => {
@@ -165,7 +164,7 @@ impl FileManager {
                 let mut parent_path = req.path.parent().as_str().to_string();
                 match filehandle {
                     Some(filehandle) => {
-                        if req.path.is_dir().unwrap() {
+                        if req.path.is_dir().unwrap_or(false) {
                             let _ = req.path.read_dir();
                         } else {
                             let _ = req.path.remove_file();
@@ -173,7 +172,7 @@ impl FileManager {
                         self.fhdb.remove_by_id(&filehandle.id);
                     }
                     None => {
-                        if req.path.is_dir().unwrap() {
+                        if req.path.is_dir().unwrap_or(false) {
                             let _ = req.path.read_dir();
                         } else {
                             let _ = req.path.remove_file();
@@ -185,9 +184,10 @@ impl FileManager {
                     parent_path = "/".to_string();
                 }
 
-                let parent_filehandle = self.get_filehandle_by_path(&parent_path).unwrap();
-                self.touch_filehandle(parent_filehandle);
-                req.respond_to.send(()).unwrap()
+                if let Some(parent_filehandle) = self.get_filehandle_by_path(&parent_path) {
+                    self.touch_filehandle(parent_filehandle);
+                }
+                let _ = req.respond_to.send(());
             }
             FileManagerMessage::TouchFile(req) => {
                 let filehandle = self.get_filehandle_by_id(&req.id);
@@ -197,7 +197,7 @@ impl FileManager {
             }
             FileManagerMessage::GetWriteCacheHandle(req) => {
                 let handle = self.get_cache_handle(req.filehandle, req.filemanager);
-                req.respond_to.send(handle).unwrap();
+                let _ = req.respond_to.send(handle);
             }
             FileManagerMessage::DropWriteCacheHandle(req) => {
                 self.drop_cache_handle(&req.filehandle_id);
@@ -262,8 +262,9 @@ impl FileManager {
         if path.is_empty() {
             path = "/".to_string();
         }
-        let parent_filehandle = self.get_filehandle_by_path(&path).unwrap();
-        self.touch_filehandle(parent_filehandle);
+        if let Some(parent_filehandle) = self.get_filehandle_by_path(&path) {
+            self.touch_filehandle(parent_filehandle);
+        }
         Some(fh)
     }
 

@@ -3,6 +3,10 @@
 ## [Unreleased]
 
 ### 2026-03-25
+- **fix:** REMOVE operation returned Nfs4errStale on success instead of Nfs4Ok, and panicked on error (todo!())
+- **fix:** Replace all unwrap() panics in filemanager actor channels with proper error handling
+- **fix:** Parent filehandle lookup in create_file/remove_file no longer panics on missing parent
+- **fix:** SETATTR size truncation no longer panics on I/O errors
 - **fix:** Create test_utils module for nextnfs-server — enables all workspace tests (was --exclude workaround)
 - **fix:** Re-enable SETCLIENTID and RENEW integration tests (fix request chaining, no Clone)
 - **feat:** Unified CI test suite — wire-level + shell functional + performance benchmarks

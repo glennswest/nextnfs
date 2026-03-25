@@ -1,5 +1,5 @@
 use tokio::sync::{mpsc, oneshot};
-use tracing::debug;
+use tracing::{debug, error};
 use vfs::VfsPath;
 
 use std::path::PathBuf;
@@ -182,10 +182,10 @@ impl FileManagerHandle {
             filehandle,
             respond_to: tx,
         };
-        self.sender
-            .send(FileManagerMessage::GetFilehandle(req))
-            .await
-            .unwrap();
+        if let Err(e) = self.sender.send(FileManagerMessage::GetFilehandle(req)).await {
+            error!("filemanager actor gone: {}", e);
+            return Err(FileManagerError { nfs_error: NfsStat4::Nfs4errServerfault });
+        }
         match rx.await {
             Ok(fh) => {
                 if let Some(fh) = fh {
@@ -246,10 +246,10 @@ impl FileManagerHandle {
             attrs_request,
             respond_to: tx,
         };
-        self.sender
-            .send(FileManagerMessage::GetFilehandleAttrs(req))
-            .await
-            .unwrap();
+        if let Err(e) = self.sender.send(FileManagerMessage::GetFilehandleAttrs(req)).await {
+            error!("filemanager actor gone: {}", e);
+            return Err(FileManagerError { nfs_error: NfsStat4::Nfs4errServerfault });
+        }
         match rx.await {
             Ok(attrs) => {
                 if let Some(attrs) = attrs {
@@ -284,10 +284,10 @@ impl FileManagerHandle {
             verifier,
             respond_to: tx,
         };
-        self.sender
-            .send(FileManagerMessage::CreateFile(req))
-            .await
-            .unwrap();
+        if let Err(e) = self.sender.send(FileManagerMessage::CreateFile(req)).await {
+            error!("filemanager actor gone: {}", e);
+            return Err(FileManagerError { nfs_error: NfsStat4::Nfs4errServerfault });
+        }
         match rx.await {
             Ok(fh) => {
                 if let Some(fh) = fh {
@@ -306,13 +306,13 @@ impl FileManagerHandle {
 
     pub async fn remove_file(&self, path: VfsPath) -> Result<(), FileManagerError> {
         let (tx, rx) = oneshot::channel();
-        self.sender
-            .send(FileManagerMessage::RemoveFile(RemoveFileRequest {
-                path,
-                respond_to: tx,
-            }))
-            .await
-            .unwrap();
+        if let Err(e) = self.sender.send(FileManagerMessage::RemoveFile(RemoveFileRequest {
+            path,
+            respond_to: tx,
+        })).await {
+            error!("filemanager actor gone: {}", e);
+            return Err(FileManagerError { nfs_error: NfsStat4::Nfs4errServerfault });
+        }
         match rx.await {
             Ok(_) => Ok(()),
             Err(_) => Err(FileManagerError {
@@ -322,17 +322,15 @@ impl FileManagerHandle {
     }
 
     pub async fn touch_file(&self, id: NfsFh4) {
-        self.sender
-            .send(FileManagerMessage::TouchFile(TouchFileRequest { id }))
-            .await
-            .unwrap();
+        if let Err(e) = self.sender.send(FileManagerMessage::TouchFile(TouchFileRequest { id })).await {
+            error!("filemanager actor gone: {}", e);
+        }
     }
 
     pub async fn update_filehandle(&self, filehandle: Filehandle) {
-        self.sender
-            .send(FileManagerMessage::UpdateFilehandle(filehandle))
-            .await
-            .unwrap();
+        if let Err(e) = self.sender.send(FileManagerMessage::UpdateFilehandle(filehandle)).await {
+            error!("filemanager actor gone: {}", e);
+        }
     }
 
     pub async fn get_write_cache_handle(
@@ -340,16 +338,16 @@ impl FileManagerHandle {
         filehandle: Filehandle,
     ) -> Result<WriteCacheHandle, FileManagerError> {
         let (tx, rx) = oneshot::channel();
-        self.sender
-            .send(FileManagerMessage::GetWriteCacheHandle(
-                WriteCacheHandleRequest {
-                    filemanager: self.clone(),
-                    filehandle,
-                    respond_to: tx,
-                },
-            ))
-            .await
-            .unwrap();
+        if let Err(e) = self.sender.send(FileManagerMessage::GetWriteCacheHandle(
+            WriteCacheHandleRequest {
+                filemanager: self.clone(),
+                filehandle,
+                respond_to: tx,
+            },
+        )).await {
+            error!("filemanager actor gone: {}", e);
+            return Err(FileManagerError { nfs_error: NfsStat4::Nfs4errServerfault });
+        }
         match rx.await {
             Ok(handle) => Ok(handle),
             Err(_) => Err(FileManagerError {
@@ -359,12 +357,11 @@ impl FileManagerHandle {
     }
 
     pub async fn drop_write_cache_handle(&self, filehandle_id: NfsFh4) {
-        self.sender
-            .send(FileManagerMessage::DropWriteCacheHandle(
-                DropCacheHandleRequest { filehandle_id },
-            ))
-            .await
-            .unwrap();
+        if let Err(e) = self.sender.send(FileManagerMessage::DropWriteCacheHandle(
+            DropCacheHandleRequest { filehandle_id },
+        )).await {
+            error!("filemanager actor gone: {}", e);
+        }
     }
 
     pub async fn lock_file(
@@ -386,11 +383,11 @@ impl FileManagerHandle {
             length,
             respond_to: tx,
         };
-        self.sender
-            .send(FileManagerMessage::LockFile(req))
-            .await
-            .unwrap();
-        rx.await.unwrap()
+        if let Err(e) = self.sender.send(FileManagerMessage::LockFile(req)).await {
+            error!("filemanager actor gone: {}", e);
+            return LockResult::Error(NfsStat4::Nfs4errServerfault);
+        }
+        rx.await.unwrap_or(LockResult::Error(NfsStat4::Nfs4errServerfault))
     }
 
     pub async fn unlock_file(
@@ -406,11 +403,11 @@ impl FileManagerHandle {
             length,
             respond_to: tx,
         };
-        self.sender
-            .send(FileManagerMessage::UnlockFile(req))
-            .await
-            .unwrap();
-        rx.await.unwrap()
+        if let Err(e) = self.sender.send(FileManagerMessage::UnlockFile(req)).await {
+            error!("filemanager actor gone: {}", e);
+            return UnlockResult::Error(NfsStat4::Nfs4errServerfault);
+        }
+        rx.await.unwrap_or(UnlockResult::Error(NfsStat4::Nfs4errServerfault))
     }
 
     pub async fn test_lock(
@@ -432,11 +429,19 @@ impl FileManagerHandle {
             length,
             respond_to: tx,
         };
-        self.sender
-            .send(FileManagerMessage::TestLock(req))
-            .await
-            .unwrap();
-        rx.await.unwrap()
+        if let Err(e) = self.sender.send(FileManagerMessage::TestLock(req)).await {
+            error!("filemanager actor gone: {}", e);
+            return TestLockResult::Denied {
+                offset: 0, length: 0,
+                lock_type: NfsLockType4::ReadLt,
+                owner_clientid: 0, owner: vec![],
+            };
+        }
+        rx.await.unwrap_or(TestLockResult::Denied {
+            offset: 0, length: 0,
+            lock_type: NfsLockType4::ReadLt,
+            owner_clientid: 0, owner: vec![],
+        })
     }
 
     pub async fn release_lock_owner(&self, client_id: u64, owner: Vec<u8>) -> NfsStat4 {
@@ -446,11 +451,11 @@ impl FileManagerHandle {
             owner,
             respond_to: tx,
         };
-        self.sender
-            .send(FileManagerMessage::ReleaseLockOwner(req))
-            .await
-            .unwrap();
-        rx.await.unwrap()
+        if let Err(e) = self.sender.send(FileManagerMessage::ReleaseLockOwner(req)).await {
+            error!("filemanager actor gone: {}", e);
+            return NfsStat4::Nfs4errServerfault;
+        }
+        rx.await.unwrap_or(NfsStat4::Nfs4errServerfault)
     }
 
     pub fn filehandle_attrs(
@@ -576,15 +581,21 @@ impl FileManagerHandle {
                 FileAttrValue::Size(args) => {
                     debug!("Set size to: {:?}", args);
                     let mut buf = vec![0_u8; *args as usize];
-                    let mut file = filehandle.file.open_file().unwrap();
-                    let _ = file.rewind();
-                    file.read_exact(&mut buf).unwrap();
+                    let result = (|| -> Result<(), Box<dyn std::error::Error>> {
+                        let mut file = filehandle.file.open_file()?;
+                        let _ = file.rewind();
+                        file.read_exact(&mut buf)?;
 
-                    let mut file = filehandle.file.append_file().unwrap();
-                    let _ = file.rewind();
-                    file.write_all(&buf).unwrap();
-                    file.flush().unwrap();
-                    attrsset.push(FileAttr::Size);
+                        let mut file = filehandle.file.append_file()?;
+                        let _ = file.rewind();
+                        file.write_all(&buf)?;
+                        file.flush()?;
+                        Ok(())
+                    })();
+                    match result {
+                        Ok(_) => attrsset.push(FileAttr::Size),
+                        Err(e) => error!("SETATTR size failed: {}", e),
+                    }
                 }
                 _ => {
                     debug!("Not supported set attr requested for: {:?}", attr);
@@ -674,13 +685,14 @@ impl WriteCacheHandle {
     }
 
     pub async fn write_bytes(&self, offset: u64, data: Vec<u8>) {
-        self.sender
-            .send(WriteCacheMessage::Write(WriteBytesRequest { offset, data }))
-            .await
-            .unwrap();
+        if let Err(e) = self.sender.send(WriteCacheMessage::Write(WriteBytesRequest { offset, data })).await {
+            error!("write cache actor gone: {}", e);
+        }
     }
 
     pub async fn commit(&self) {
-        self.sender.send(WriteCacheMessage::Commit).await.unwrap();
+        if let Err(e) = self.sender.send(WriteCacheMessage::Commit).await {
+            error!("write cache actor gone: {}", e);
+        }
     }
 }
