@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [v0.8.0] — 2026-03-25
+
 ### Added
 - Functional workflow tests (16 tests: write→read roundtrip, write→overwrite→read, open→write→close lifecycle, create→lookup→getattr chain, nested dir readdir, create→remove→lookup, rename verify, multi-file readdir, lock→unlock→relock, partial read, setattr→getattr, compound CREATE→GETFH, compound CREATE→LOOKUP→GETATTR, compound SAVEFH→RENAME, open→read existing, create/remove/readdir)
 - Directory removal verification test (CREATE→LOOKUP→REMOVE→LOOKUP fails)
@@ -10,10 +12,11 @@
 ### Fixed
 - FileManager RemoveFile handler was calling `read_dir()` (listing) instead of `remove_dir()` for directories — VFS directory was never actually deleted
 - ClientManager actor death now returns Nfs4errServerfault instead of panicking (upsert_client, confirm_client, renew_leases)
-- Clock backward panics in request.rs, filehandle.rs, FileManager::new() — use unwrap_or_default()
+- Clock backward panics in request.rs, filehandle.rs, FileManager::new(), op_pseudo — use unwrap_or_default()
 - READDIR cookieverf conversion panic on malformed verifier — use unwrap_or fallback, truncate oversized verifiers
 - READDIR eof calculation removed unnecessary clone().unwrap()
 - REMOVE path join panic on invalid target — now returns Nfs4errInval
+- All dangerous unwrap() calls in production server code eliminated
 
 ## [v0.7.0] — 2026-03-25
 
