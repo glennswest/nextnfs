@@ -2286,4 +2286,92 @@ mod tests {
         assert_eq!(ACCESS4_EXECUTE, 0x00000020);
     }
 
+    /// Verify that hand-built SETCLIENTID XDR bytes (as sent by nextnfstest)
+    /// deserialize correctly as Compound4args.
+    #[test]
+    fn test_setclientid_wire_encoding_roundtrip() {
+        // Build the compound args the same way the wire tester does
+        let client_name = "nextnfstest-12345678-abcd-efgh-ijkl-123456789012";
+        let verifier: [u8; 8] = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08];
+
+        let mut compound = Vec::new();
+        // tag: XDR string "setcid"
+        let tag = b"setcid";
+        compound.extend_from_slice(&(tag.len() as u32).to_be_bytes());
+        compound.extend_from_slice(tag);
+        // pad to 4-byte boundary (6 bytes → 2 padding)
+        compound.extend_from_slice(&[0, 0]);
+        // minor_version: 0
+        compound.extend_from_slice(&0u32.to_be_bytes());
+        // num_ops: 1
+        compound.extend_from_slice(&1u32.to_be_bytes());
+
+        // Op: SETCLIENTID (opcode 35)
+        compound.extend_from_slice(&35u32.to_be_bytes());
+        // verifier: 8 bytes fixed (no length prefix)
+        compound.extend_from_slice(&verifier);
+        // client id: opaque (length + data + padding)
+        compound.extend_from_slice(&(client_name.len() as u32).to_be_bytes());
+        compound.extend_from_slice(client_name.as_bytes());
+        // pad: client_name is 48 bytes → no padding needed (48 % 4 == 0)
+        // cb_program: 0
+        compound.extend_from_slice(&0u32.to_be_bytes());
+        // r_netid: "tcp"
+        compound.extend_from_slice(&3u32.to_be_bytes());
+        compound.extend_from_slice(b"tcp");
+        compound.push(0); // pad to 4
+        // r_addr: "0.0.0.0.0.0"
+        let addr = b"0.0.0.0.0.0";
+        compound.extend_from_slice(&(addr.len() as u32).to_be_bytes());
+        compound.extend_from_slice(addr);
+        compound.push(0); // pad to 4 (11 → 12)
+        // callback_ident: 0
+        compound.extend_from_slice(&0u32.to_be_bytes());
+
+        // Deserialize as Compound4args
+        let args: Compound4args = from_bytes(&compound).unwrap();
+        assert_eq!(args.tag, "setcid");
+        assert_eq!(args.minor_version, 0);
+        assert_eq!(args.argarray.len(), 1);
+
+        match &args.argarray[0] {
+            NfsArgOp::Opsetclientid(scid) => {
+                assert_eq!(scid.client.verifier, verifier);
+                assert_eq!(scid.client.id, client_name);
+                assert_eq!(scid.callback.cb_program, 0);
+                assert_eq!(scid.callback.cb_location.rnetid, "tcp");
+                assert_eq!(scid.callback.cb_location.raddr, "0.0.0.0.0.0");
+                assert_eq!(scid.callback_ident, 0);
+            }
+            other => panic!("Expected Opsetclientid, got {:?}", other),
+        }
+    }
+
+    /// Verify SETCLIENTID round-trip through serde_xdr.
+    #[test]
+    fn test_setclientid_args_roundtrip() {
+        let args = SetClientId4args {
+            client: NfsClientId4 {
+                verifier: [1, 2, 3, 4, 5, 6, 7, 8],
+                id: "Linux NFSv4.0 client/127.0.0.1".to_string(),
+            },
+            callback: CbClient4 {
+                cb_program: 0,
+                cb_location: ClientAddr4 {
+                    rnetid: "tcp".to_string(),
+                    raddr: "0.0.0.0.0.0".to_string(),
+                },
+            },
+            callback_ident: 0,
+        };
+        let bytes = to_bytes(&args).unwrap();
+        let decoded: SetClientId4args = from_bytes(&bytes).unwrap();
+        assert_eq!(decoded.client.verifier, args.client.verifier);
+        assert_eq!(decoded.client.id, args.client.id);
+        assert_eq!(decoded.callback.cb_program, 0);
+        assert_eq!(decoded.callback.cb_location.rnetid, "tcp");
+        assert_eq!(decoded.callback.cb_location.raddr, "0.0.0.0.0.0");
+        assert_eq!(decoded.callback_ident, 0);
+    }
+
 }

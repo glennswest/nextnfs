@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use tracing::debug;
+use tracing::{debug, error};
 
 use crate::server::{
     clientmanager::ClientCallback, operation::NfsOperation, request::NfsRequest,
@@ -45,11 +45,19 @@ impl NfsOperation for SetClientId4args {
                 ))),
                 status: NfsStat4::Nfs4Ok,
             },
-            Err(_e) => NfsOpResponse {
-                request,
-                result: None,
-                status: NfsStat4::Nfs4errServerfault,
-            },
+            Err(e) => {
+                error!(
+                    client_id = %self.client.id,
+                    verifier = ?self.client.verifier,
+                    error = %e,
+                    "SETCLIENTID failed"
+                );
+                NfsOpResponse {
+                    request,
+                    result: None,
+                    status: e.nfs_error,
+                }
+            }
         }
     }
 }
