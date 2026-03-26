@@ -3,8 +3,10 @@
 ## [Unreleased]
 
 ### 2026-03-25
+- **test:** 5 new compound edge-case tests: LOOKUPP (no fh, from root, from subdir), empty compound, multiple PUTROOTFH
 - **test:** 15 new error-branch and edge-case tests: op_read (+2: read at exact EOF, zero count), op_write (+4: empty data, DataSync4, write at offset, no fh), op_lock (+2: concurrent read locks, LockOwner locker), op_locku (+1: bad stateid returns Nfs4errBadStateid), op_readdir (+1: stale cookieverf), op_rename (+2: no fh, cross-directory), op_renew (+1: unknown client), op_set_clientid (+1: different verifier same id), op_set_clientid_confirm (+2: wrong verifier, zero clientid)
-- Total workspace tests: 355 (52 proto + 297 server + 6 nfstest)
+- **fix:** removed 11 unused import warnings in test modules
+- Total workspace tests: 360 (52 proto + 302 server + 6 nfstest), 0 warnings, 0 clippy
 
 ## [v0.8.0] — 2026-03-25
 

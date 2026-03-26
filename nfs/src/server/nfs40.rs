@@ -706,6 +706,124 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn test_compound_lookupp_no_filehandle() {
+        let server = NFS40Server::new();
+        let request = create_nfs40_server(None).await;
+        let msg = make_compound(vec![NfsArgOp::Oplookupp(())]);
+        let (_request, reply) = server.compound(msg, request).await;
+        match reply {
+            ReplyBody::MsgAccepted(accepted) => match accepted.reply_data {
+                AcceptBody::Success(res) => {
+                    assert_eq!(res.status, NfsStat4::Nfs4errNofilehandle);
+                }
+                _ => panic!("Expected Success"),
+            },
+            _ => panic!("Expected MsgAccepted"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_compound_lookupp_from_root() {
+        // LOOKUPP from root — should still work (parent of "/" is "/")
+        let server = NFS40Server::new();
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let msg = make_compound(vec![NfsArgOp::Oplookupp(())]);
+        let (_request, reply) = server.compound(msg, request).await;
+        match reply {
+            ReplyBody::MsgAccepted(accepted) => match accepted.reply_data {
+                AcceptBody::Success(res) => {
+                    assert_eq!(res.status, NfsStat4::Nfs4Ok);
+                }
+                _ => panic!("Expected Success"),
+            },
+            _ => panic!("Expected MsgAccepted"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_compound_lookupp_from_subdir() {
+        use crate::server::operation::NfsOperation;
+
+        // Create a subdirectory, then LOOKUPP should navigate to root
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let create_args = Create4args {
+            objtype: Createtype4::Nf4dir,
+            objname: "lookupp_parent".to_string(),
+            createattrs: Fattr4 {
+                attrmask: Attrlist4(vec![]),
+                attr_vals: Attrlist4(vec![]),
+            },
+        };
+        let response = create_args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        // Current fh is now the subdir
+
+        let server = NFS40Server::new();
+        let msg = make_compound(vec![
+            NfsArgOp::Oplookupp(()),
+            NfsArgOp::Opgetfh(()),
+        ]);
+        let (_request, reply) = server.compound(msg, response.request).await;
+        match reply {
+            ReplyBody::MsgAccepted(accepted) => match accepted.reply_data {
+                AcceptBody::Success(res) => {
+                    assert_eq!(res.status, NfsStat4::Nfs4Ok);
+                    assert_eq!(res.resarray.len(), 2);
+                    // GETFH should return root's filehandle
+                    match &res.resarray[1] {
+                        NfsResOp4::Opgetfh(GetFh4res::Resok4(_resok)) => {}
+                        other => panic!("Expected Opgetfh Resok4, got {:?}", other),
+                    }
+                }
+                _ => panic!("Expected Success"),
+            },
+            _ => panic!("Expected MsgAccepted"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_compound_empty_argarray() {
+        // Empty compound — should succeed with no results
+        let server = NFS40Server::new();
+        let request = create_nfs40_server(None).await;
+        let msg = make_compound(vec![]);
+        let (_request, reply) = server.compound(msg, request).await;
+        match reply {
+            ReplyBody::MsgAccepted(accepted) => match accepted.reply_data {
+                AcceptBody::Success(res) => {
+                    assert_eq!(res.status, NfsStat4::Nfs4Ok);
+                    assert!(res.resarray.is_empty());
+                }
+                _ => panic!("Expected Success"),
+            },
+            _ => panic!("Expected MsgAccepted"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_compound_multiple_putfh() {
+        // Multiple PUTROOTFH in same compound — each should succeed
+        let server = NFS40Server::new();
+        let request = create_nfs40_server(None).await;
+        let msg = make_compound(vec![
+            NfsArgOp::Opputrootfh(()),
+            NfsArgOp::Opputrootfh(()),
+            NfsArgOp::Opgetfh(()),
+        ]);
+        let (_request, reply) = server.compound(msg, request).await;
+        match reply {
+            ReplyBody::MsgAccepted(accepted) => match accepted.reply_data {
+                AcceptBody::Success(res) => {
+                    assert_eq!(res.status, NfsStat4::Nfs4Ok);
+                    assert_eq!(res.resarray.len(), 3);
+                }
+                _ => panic!("Expected Success"),
+            },
+            _ => panic!("Expected MsgAccepted"),
+        }
+    }
+
     // ===== Functional Workflow Tests =====
     // These tests exercise multi-operation sequences that simulate real NFS client workflows.
 
