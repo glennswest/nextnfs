@@ -2,11 +2,19 @@
 
 ## [Unreleased]
 
-### 2026-03-25
-- **test:** 3 new workflow tests: unstable write→commit lifecycle, create→lookup→remove→verify, open→close→reopen persistence
-- **test:** 5 new compound edge-case tests: LOOKUPP (no fh, from root, from subdir), empty compound, multiple PUTROOTFH
-- **test:** 15 new error-branch and edge-case tests: op_read (+2: read at exact EOF, zero count), op_write (+4: empty data, DataSync4, write at offset, no fh), op_lock (+2: concurrent read locks, LockOwner locker), op_locku (+1: bad stateid returns Nfs4errBadStateid), op_readdir (+1: stale cookieverf), op_rename (+2: no fh, cross-directory), op_renew (+1: unknown client), op_set_clientid (+1: different verifier same id), op_set_clientid_confirm (+2: wrong verifier, zero clientid)
-- **fix:** removed 11 unused import warnings in test modules
+## [v0.8.1] — 2026-03-25
+
+### Added
+- 47 new tests across proto codec, operations, and workflow lifecycles
+- Proto codec edge-case tests (+13): decode/encode, multi-fragment reassembly, oversized frame rejection, EOF handling, from_bytes edge cases
+- Compound workflow tests (+6): create→write→read→close, lock→write→unlock, savefh→lookup→restorefh, readdir cookie continuation, overwrite→read, getattr size verification
+- Operation error-branch tests (+15): op_read (EOF, zero count), op_write (empty data, DataSync4, offset), op_lock (concurrent reads, LockOwner), op_locku (bad stateid), op_readdir (stale cookieverf), op_rename (no fh, cross-dir), op_renew (unknown client), op_set_clientid (different verifier), op_set_clientid_confirm (wrong verifier, zero clientid)
+- LOOKUPP tests (+3): no filehandle, from root, from subdirectory
+- Compound edge-case tests (+5): empty argarray, multiple PUTROOTFH, op_link (+2), op_open (+1), op_lookup (+2)
+- Workflow lifecycle tests (+3): unstable write→commit, create→lookup→remove→verify, open→close→reopen
+
+### Fixed
+- Removed 11 unused import warnings in test modules
 - Total workspace tests: 363 (52 proto + 305 server + 6 nfstest), 0 warnings, 0 clippy
 
 ## [v0.8.0] — 2026-03-25
