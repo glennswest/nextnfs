@@ -69,6 +69,8 @@ impl NFSServer {
         info!(%self.bind, "nextnfs NFSv4 server listening");
 
         let client_manager_handle = ClientManagerHandle::new();
+        // Start background lease sweep for courteous server behavior
+        ClientManagerHandle::start_lease_sweeper(client_manager_handle.clone());
         let export_manager = self.export_manager.clone();
 
         // Pre-resolve default file manager (first export) for the accept loop

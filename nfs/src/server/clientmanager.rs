@@ -4,8 +4,9 @@ use rand::Rng;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::{mpsc, oneshot};
-use tracing::error;
+use tracing::{error, debug};
 
 use nextnfs_proto::nfs4_proto::NfsStat4;
 
@@ -17,6 +18,8 @@ pub struct ClientManager {
     db: Arc<ClientDb>,
     client_id_seq: u64,
     filehandles: HashMap<String, Vec<u8>>,
+    /// NFSv4 lease time in seconds (default 90)
+    lease_time: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
@@ -44,6 +47,10 @@ pub struct ClientEntry {
     #[multi_index(hashed_unique)]
     pub setclientid_confirm: [u8; 8],
     pub confirmed: bool,
+    /// Last time this client's lease was renewed (RENEW, OPEN, CLOSE, etc.)
+    pub last_renewed: Instant,
+    /// Whether the client's lease has expired but state is preserved (courteous server)
+    pub courtesy: bool,
 }
 
 struct UpsertClientRequest {
@@ -66,11 +73,28 @@ struct RenewLeasesRequest {
     pub respond_to: oneshot::Sender<Result<(), ClientManagerError>>,
 }
 
+struct SweepLeasesRequest {
+    pub respond_to: oneshot::Sender<Vec<u64>>,
+}
+
+struct IsCourtesyClientRequest {
+    pub client_id: u64,
+    pub respond_to: oneshot::Sender<bool>,
+}
+
+struct RevokeCourtesyClientRequest {
+    pub client_id: u64,
+    pub respond_to: oneshot::Sender<()>,
+}
+
 enum ClientManagerMessage {
     UpsertClient(UpsertClientRequest),
     ConfirmClient(ConfirmClientRequest),
     SetCurrentFilehandle(SetCurrentFilehandleRequest),
     RenewLeases(RenewLeasesRequest),
+    SweepLeases(SweepLeasesRequest),
+    IsCourtesyClient(IsCourtesyClientRequest),
+    RevokeCourtesyClient(RevokeCourtesyClientRequest),
 }
 
 pub struct SetCurrentFilehandleRequest {
@@ -85,6 +109,7 @@ impl ClientManager {
             db: ClientDb::default().into(),
             client_id_seq: 0,
             filehandles: HashMap::new(),
+            lease_time: 90,
         }
     }
 
@@ -114,6 +139,18 @@ impl ClientManager {
             ClientManagerMessage::RenewLeases(request) => {
                 let result = self.renew_leases(request.client_id);
                 let _ = request.respond_to.send(result);
+            }
+            ClientManagerMessage::SweepLeases(request) => {
+                let expired = self.sweep_leases();
+                let _ = request.respond_to.send(expired);
+            }
+            ClientManagerMessage::IsCourtesyClient(request) => {
+                let is_courtesy = self.is_courtesy_client(request.client_id);
+                let _ = request.respond_to.send(is_courtesy);
+            }
+            ClientManagerMessage::RevokeCourtesyClient(request) => {
+                self.revoke_courtesy_client(request.client_id);
+                let _ = request.respond_to.send(());
             }
         }
     }
@@ -185,6 +222,8 @@ impl ClientManager {
             callback,
             setclientid_confirm,
             confirmed: false,
+            last_renewed: Instant::now(),
+            courtesy: false,
         };
 
         let db = Arc::get_mut(&mut self.db).unwrap();
@@ -254,8 +293,92 @@ impl ClientManager {
                 nfs_error: NfsStat4::Nfs4errStaleClientid,
             });
         }
-        // todo: implement lease renewal
+
+        // Check if any confirmed entry has its lease expired beyond courtesy threshold
+        let now = Instant::now();
+        for entry in entries.clone() {
+            if entry.confirmed && entry.courtesy {
+                let elapsed = now.duration_since(entry.last_renewed).as_secs();
+                // Courteous: allow renewal if within 2x lease_time (grace window)
+                if elapsed > self.lease_time * 2 {
+                    debug!(
+                        clientid = client_id,
+                        elapsed_secs = elapsed,
+                        "client exceeded courtesy window, rejecting renewal"
+                    );
+                    return Err(ClientManagerError {
+                        nfs_error: NfsStat4::Nfs4errExpired,
+                    });
+                }
+            }
+        }
+
+        // Renew: update last_renewed and clear courtesy flag
+        db.modify_by_clientid(&client_id, |c| {
+            c.last_renewed = Instant::now();
+            c.courtesy = false;
+        });
+
         Ok(())
+    }
+
+    /// Check all clients for expired leases and mark them as courtesy clients.
+    /// Called periodically by the background sweep task.
+    fn sweep_leases(&mut self) -> Vec<u64> {
+        let db = Arc::get_mut(&mut self.db).unwrap();
+        let now = Instant::now();
+        let lease_time = self.lease_time;
+        let mut courtesy_clients = Vec::new();
+        let mut expired_clients = Vec::new();
+
+        // Collect all confirmed client IDs
+        let all_entries: Vec<ClientEntry> = db.iter().map(|(_, e)| e.clone()).collect();
+
+        for entry in &all_entries {
+            if !entry.confirmed {
+                continue;
+            }
+            let elapsed = now.duration_since(entry.last_renewed).as_secs();
+            if elapsed >= lease_time && !entry.courtesy {
+                // Mark as courtesy — don't purge yet
+                courtesy_clients.push(entry.clientid);
+            } else if entry.courtesy && elapsed >= lease_time * 2 {
+                // Past courtesy window — purge
+                expired_clients.push(entry.clientid);
+            }
+        }
+
+        // Mark courtesy clients
+        for cid in &courtesy_clients {
+            db.modify_by_clientid(cid, |c| {
+                c.courtesy = true;
+            });
+            debug!(clientid = cid, "client lease expired, entering courtesy state");
+        }
+
+        // Purge clients past the courtesy window
+        for cid in &expired_clients {
+            db.remove_by_clientid(cid);
+            debug!(clientid = cid, "client removed after courtesy window expired");
+        }
+
+        expired_clients
+    }
+
+    /// Check if a client is in courtesy state (lease expired but state preserved).
+    /// Returns true if the client is a courtesy client — callers with conflicting
+    /// requests may force-revoke.
+    fn is_courtesy_client(&mut self, client_id: u64) -> bool {
+        let db = Arc::get_mut(&mut self.db).unwrap();
+        let entries = db.get_by_clientid(&client_id);
+        entries.iter().any(|e| e.courtesy)
+    }
+
+    /// Force-revoke a courtesy client (when there's a conflicting lock request).
+    fn revoke_courtesy_client(&mut self, client_id: u64) {
+        let db = Arc::get_mut(&mut self.db).unwrap();
+        db.remove_by_clientid(&client_id);
+        debug!(clientid = client_id, "courtesy client forcibly revoked due to conflict");
     }
 
     pub fn get_record_count(&mut self) -> usize {
@@ -428,6 +551,63 @@ impl ClientManagerHandle {
             }
         }
     }
+
+    /// Run a lease sweep — marks expired leases as courtesy, purges past-courtesy clients.
+    /// Returns list of client IDs that were fully purged.
+    pub async fn sweep_leases(&self) -> Vec<u64> {
+        let (tx, rx) = oneshot::channel();
+        let _ = self
+            .sender
+            .send(ClientManagerMessage::SweepLeases(SweepLeasesRequest {
+                respond_to: tx,
+            }))
+            .await;
+        rx.await.unwrap_or_default()
+    }
+
+    /// Check if a client is in courtesy state.
+    pub async fn is_courtesy_client(&self, client_id: u64) -> bool {
+        let (tx, rx) = oneshot::channel();
+        let _ = self
+            .sender
+            .send(ClientManagerMessage::IsCourtesyClient(
+                IsCourtesyClientRequest {
+                    client_id,
+                    respond_to: tx,
+                },
+            ))
+            .await;
+        rx.await.unwrap_or(false)
+    }
+
+    /// Force-revoke a courtesy client due to conflicting lock request.
+    pub async fn revoke_courtesy_client(&self, client_id: u64) {
+        let (tx, rx) = oneshot::channel();
+        let _ = self
+            .sender
+            .send(ClientManagerMessage::RevokeCourtesyClient(
+                RevokeCourtesyClientRequest {
+                    client_id,
+                    respond_to: tx,
+                },
+            ))
+            .await;
+        let _ = rx.await;
+    }
+
+    /// Start a background lease sweep task that runs every 30 seconds.
+    pub fn start_lease_sweeper(handle: ClientManagerHandle) {
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+            loop {
+                interval.tick().await;
+                let expired = handle.sweep_leases().await;
+                if !expired.is_empty() {
+                    debug!(count = expired.len(), "lease sweep purged expired courtesy clients");
+                }
+            }
+        });
+    }
 }
 
 /// ClientManager is run as with the actor pattern
@@ -597,6 +777,110 @@ mod tests {
         manager.set_current_fh("192.168.1.1:1234".to_string(), vec![1, 2, 3]);
         // Verify it was stored (no panic)
         manager.set_current_fh("192.168.1.1:1234".to_string(), vec![4, 5, 6]);
+    }
+
+    #[test]
+    fn test_sweep_no_clients() {
+        let (_, receiver) = mpsc::channel(16);
+        let mut manager = super::ClientManager::new(receiver);
+        let expired = manager.sweep_leases();
+        assert!(expired.is_empty());
+    }
+
+    #[test]
+    fn test_sweep_fresh_client_not_expired() {
+        let (_, receiver) = mpsc::channel(16);
+        let mut manager = super::ClientManager::new(receiver);
+        let callback = super::ClientCallback {
+            program: 0,
+            rnetid: "tcp".to_string(),
+            raddr: "".to_string(),
+            callback_ident: 0,
+        };
+        let client = manager
+            .upsert_client([0; 8], "fresh".to_string(), callback, None)
+            .unwrap();
+        manager
+            .confirm_client(client.clientid, client.setclientid_confirm, None)
+            .unwrap();
+        let expired = manager.sweep_leases();
+        assert!(expired.is_empty());
+        // Client should not be in courtesy state
+        assert!(!manager.is_courtesy_client(client.clientid));
+    }
+
+    #[test]
+    fn test_courtesy_client_flag() {
+        let (_, receiver) = mpsc::channel(16);
+        let mut manager = super::ClientManager::new(receiver);
+        // Set lease time to 0 so it expires immediately
+        manager.lease_time = 0;
+        let callback = super::ClientCallback {
+            program: 0,
+            rnetid: "tcp".to_string(),
+            raddr: "".to_string(),
+            callback_ident: 0,
+        };
+        let client = manager
+            .upsert_client([0; 8], "courtesy".to_string(), callback, None)
+            .unwrap();
+        manager
+            .confirm_client(client.clientid, client.setclientid_confirm, None)
+            .unwrap();
+        // First sweep marks as courtesy
+        let expired = manager.sweep_leases();
+        assert!(expired.is_empty()); // not purged yet
+        assert!(manager.is_courtesy_client(client.clientid));
+    }
+
+    #[test]
+    fn test_revoke_courtesy_client() {
+        let (_, receiver) = mpsc::channel(16);
+        let mut manager = super::ClientManager::new(receiver);
+        manager.lease_time = 0;
+        let callback = super::ClientCallback {
+            program: 0,
+            rnetid: "tcp".to_string(),
+            raddr: "".to_string(),
+            callback_ident: 0,
+        };
+        let client = manager
+            .upsert_client([0; 8], "revoke".to_string(), callback, None)
+            .unwrap();
+        manager
+            .confirm_client(client.clientid, client.setclientid_confirm, None)
+            .unwrap();
+        manager.sweep_leases(); // mark courtesy
+        assert!(manager.is_courtesy_client(client.clientid));
+        manager.revoke_courtesy_client(client.clientid);
+        assert_eq!(manager.get_record_count(), 0);
+    }
+
+    #[test]
+    fn test_renew_clears_courtesy() {
+        let (_, receiver) = mpsc::channel(16);
+        let mut manager = super::ClientManager::new(receiver);
+        manager.lease_time = 0;
+        let callback = super::ClientCallback {
+            program: 0,
+            rnetid: "tcp".to_string(),
+            raddr: "".to_string(),
+            callback_ident: 0,
+        };
+        let client = manager
+            .upsert_client([0; 8], "renew_courtesy".to_string(), callback, None)
+            .unwrap();
+        manager
+            .confirm_client(client.clientid, client.setclientid_confirm, None)
+            .unwrap();
+        // Make courtesy
+        manager.sweep_leases();
+        assert!(manager.is_courtesy_client(client.clientid));
+        // Renew should clear courtesy and succeed
+        manager.lease_time = 90; // restore normal lease time
+        let result = manager.renew_leases(client.clientid);
+        assert!(result.is_ok());
+        assert!(!manager.is_courtesy_client(client.clientid));
     }
 
     #[test]
