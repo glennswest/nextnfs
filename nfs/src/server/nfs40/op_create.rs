@@ -41,8 +41,70 @@ impl NfsOperation for Create4args {
         }
 
         let (cinfo, attrset) = match self.objtype {
-            // TODO support links
-            // LinkData(vec) => todo!(),
+            Createtype4::Nf4lnk(ref linkdata) => {
+                // Symlink creation: linkdata is the target path
+                let current_dir = if filehandle.file.is_file().unwrap_or(false) {
+                    &filehandle.file.parent()
+                } else {
+                    &filehandle.file
+                };
+                let link_path = match current_dir.join(self.objname.clone()) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        error!("CREATE symlink: invalid path join: {:?}", e);
+                        return NfsOpResponse {
+                            request,
+                            result: None,
+                            status: NfsStat4::Nfs4errInval,
+                        };
+                    }
+                };
+
+                let link_real = link_path.as_str().to_string();
+                match std::os::unix::fs::symlink(linkdata, &link_real) {
+                    Ok(_) => {
+                        request.file_manager().touch_file(filehandle.id).await;
+                        let resp = request
+                            .file_manager()
+                            .get_filehandle_for_path(link_real)
+                            .await;
+                        let new_fh = match resp {
+                            Ok(fh) => fh,
+                            Err(e) => {
+                                debug!("FileManagerError {:?}", e);
+                                request.unset_filehandle();
+                                return NfsOpResponse {
+                                    request,
+                                    result: None,
+                                    status: e.nfs_error,
+                                };
+                            }
+                        };
+                        request.set_filehandle(new_fh.clone());
+                        (
+                            ChangeInfo4 {
+                                atomic: true,
+                                before: new_fh.attr_change,
+                                after: new_fh.attr_change,
+                            },
+                            Attrlist4::<FileAttr>::new(None),
+                        )
+                    }
+                    Err(e) => {
+                        error!("CREATE symlink failed: {:?}", e);
+                        let status = match e.kind() {
+                            std::io::ErrorKind::PermissionDenied => NfsStat4::Nfs4errAccess,
+                            std::io::ErrorKind::AlreadyExists => NfsStat4::Nfs4errExist,
+                            _ => NfsStat4::Nfs4errIo,
+                        };
+                        return NfsOpResponse {
+                            request,
+                            result: None,
+                            status,
+                        };
+                    }
+                }
+            }
             Createtype4::Nf4dir => {
                 let current_dir = if filehandle.file.is_file().unwrap_or(false) {
                     &filehandle.file.parent()

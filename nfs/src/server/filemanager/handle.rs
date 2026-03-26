@@ -294,8 +294,7 @@ impl FileManagerHandle {
                     return Ok(fh);
                 }
                 Err(FileManagerError {
-                    // TODO: check if this is the correct error
-                    nfs_error: NfsStat4::Nfs4errBadhandle,
+                    nfs_error: NfsStat4::Nfs4errNoent,
                 })
             }
             Err(_) => Err(FileManagerError {

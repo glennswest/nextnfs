@@ -66,12 +66,6 @@ impl Decoder for XDRProtoCodec {
             src.advance(4 + length);
 
             message_data.extend_from_slice(&fragment[..]);
-            // TODO remove due to performance reasons
-            // trace!(
-            //     length = length,
-            //     is_last = is_last,
-            //     "Finishing Reading fragment"
-            // );
         }
 
         RpcCallMsg::from_bytes(message_data)
