@@ -220,9 +220,11 @@ run_wire_tests() {
     mkdir -p "$output_dir"
 
     local rc=0
+    # Run NFSv4.0 wire tests (nextnfs is NFSv4-only; v3 tests need mountd)
     "$NEXTNFSTEST_BIN" run \
         --server "$host" \
         --port "$port" \
+        --version 4.0 \
         --output "$output_dir" \
         2>&1 || rc=$?
 

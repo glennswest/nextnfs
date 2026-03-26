@@ -46,6 +46,11 @@ pub struct CallBody {
 pub enum MsgType {
     Call(CallBody) = 0,
     Reply(ReplyBody) = 1,
+    /// Parse error — the RPC message could not be decoded.
+    /// Contains the error message. XID is preserved in the parent RpcCallMsg
+    /// when the header was partially readable, or 0 if not.
+    #[serde(skip)]
+    ParseError(String) = 99,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

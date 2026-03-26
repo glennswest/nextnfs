@@ -176,11 +176,29 @@ impl NFSServer {
                             let msg = nfs_transport.next().await;
                             match msg {
                                 Some(Ok(msg)) => {
-                                    let proc = match &msg.body {
-                                        nextnfs_proto::rpc_proto::MsgType::Call(cb) => cb.proc,
-                                        _ => u32::MAX,
-                                    };
-                                    info!(%addr, xid = msg.xid, proc, "RPC message received");
+                                    // Handle parse errors delivered as ParseError variant
+                                    // (codec never returns Err to avoid Framed stream termination)
+                                    if let nextnfs_proto::rpc_proto::MsgType::ParseError(ref reason) = msg.body {
+                                        warn!(%addr, xid = msg.xid, %reason, "RPC parse error");
+                                        let resp = Box::new(nextnfs_proto::rpc_proto::RpcReplyMsg {
+                                            xid: msg.xid,
+                                            body: nextnfs_proto::rpc_proto::MsgType::Reply(
+                                                ReplyBody::MsgAccepted(AcceptedReply {
+                                                    verf: OpaqueAuth::AuthNull(Vec::<u8>::new()),
+                                                    reply_data: AcceptBody::GarbageArgs,
+                                                }),
+                                            ),
+                                        });
+                                        match nfs_transport.send(resp).await {
+                                            Ok(_) => {}
+                                            Err(e) => {
+                                                error!(%addr, "couldn't send GarbageArgs: {:?}", e);
+                                                break;
+                                            }
+                                        }
+                                        continue;
+                                    }
+
                                     let request = NfsRequest::new(
                                         addr.to_string(),
                                         cm.clone(),
@@ -194,11 +212,8 @@ impl NFSServer {
                                     let service = NFSService::new(nfs_protocol.clone());
 
                                     let resp = service.call(msg, request).await;
-                                    info!(%addr, xid = resp.xid, "RPC response sending");
                                     match nfs_transport.send(resp).await {
-                                        Ok(_) => {
-                                            info!(%addr, "RPC response sent");
-                                        }
+                                        Ok(_) => {}
                                         Err(e) => {
                                             error!(%addr, "couldn't send response: {:?}", e);
                                             break;
@@ -206,26 +221,9 @@ impl NFSServer {
                                     }
                                 }
                                 Some(Err(e)) => {
-                                    error!(%addr, "couldn't get message: {:?}", e);
-                                    // Send GarbageArgs but don't break — let the client retry
-                                    let resp = Box::new(nextnfs_proto::rpc_proto::RpcReplyMsg {
-                                        xid: 0,
-                                        body: nextnfs_proto::rpc_proto::MsgType::Reply(
-                                            ReplyBody::MsgAccepted(AcceptedReply {
-                                                verf: OpaqueAuth::AuthNull(Vec::<u8>::new()),
-                                                reply_data: AcceptBody::GarbageArgs,
-                                            }),
-                                        ),
-                                    });
-                                    match nfs_transport.send(resp).await {
-                                        Ok(_) => {
-                                            info!(%addr, "GarbageArgs response sent");
-                                        }
-                                        Err(e) => {
-                                            error!(%addr, "couldn't send GarbageArgs: {:?}", e);
-                                            break;
-                                        }
-                                    }
+                                    // This should rarely happen now — codec wraps errors in ParseError
+                                    error!(%addr, "codec error: {:?}", e);
+                                    break;
                                 }
                                 None => {
                                     info!(%addr, "NFS client disconnected");

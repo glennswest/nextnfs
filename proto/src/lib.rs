@@ -68,14 +68,25 @@ impl Decoder for XDRProtoCodec {
             message_data.extend_from_slice(&fragment[..]);
         }
 
-        tracing::info!(
+        tracing::debug!(
             total_len = message_data.len(),
             is_last = is_last,
             "RPC record assembled"
         );
-        RpcCallMsg::from_bytes(message_data)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
-            .map(Some)
+        // Never return Err from decode — tokio-util's Framed terminates the
+        // stream after the first error (sets has_errored=true). Instead, wrap
+        // parse failures in MsgType::ParseError so the server can send
+        // GarbageArgs while keeping the TCP connection alive.
+        match RpcCallMsg::from_bytes(message_data) {
+            Ok(msg) => Ok(Some(msg)),
+            Err(e) => {
+                tracing::warn!("RPC parse error (returning ParseError): {}", e);
+                Ok(Some(RpcCallMsg {
+                    xid: 0,
+                    body: rpc_proto::MsgType::ParseError(e.to_string()),
+                }))
+            }
+        }
     }
 
     /// Handle EOF on the stream. If we have a complete message, decode it.
@@ -203,7 +214,7 @@ pub fn from_bytes(buffer: Vec<u8>) -> Result<RpcCallMsg, anyhow::Error> {
             Err(e) => {
                 let hex_preview: String = remaining.iter().take(64)
                     .map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(" ");
-                tracing::error!(
+                tracing::warn!(
                     proc = proc_num,
                     prog = prog,
                     vers = vers,
@@ -211,7 +222,14 @@ pub fn from_bytes(buffer: Vec<u8>) -> Result<RpcCallMsg, anyhow::Error> {
                     hex = %hex_preview,
                     "compound deserialization failed: {}", e
                 );
-                anyhow::bail!("failed to deserialize compound args: {}", e);
+                // Return ParseError with preserved XID so server can send
+                // GarbageArgs with the correct XID and keep connection alive
+                return Ok(RpcCallMsg {
+                    xid,
+                    body: MsgType::ParseError(format!(
+                        "prog={} vers={} proc={}: {}", prog, vers, proc_num, e
+                    )),
+                });
             }
         }
     };
