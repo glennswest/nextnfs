@@ -2,12 +2,114 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, Mutex};
 use tracing::info;
 use vfs::{AltrootFS, PhysicalFS, VfsPath};
 
 use super::filemanager::FileManagerHandle;
+
+/// Per-export QoS configuration.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct QosConfig {
+    /// Maximum operations per second (0 = unlimited)
+    pub max_ops_per_sec: u64,
+    /// Maximum bytes per second for reads+writes (0 = unlimited)
+    pub max_bytes_per_sec: u64,
+}
+
+impl Default for QosConfig {
+    fn default() -> Self {
+        Self {
+            max_ops_per_sec: 0,
+            max_bytes_per_sec: 0,
+        }
+    }
+}
+
+/// Token bucket rate limiter for QoS enforcement.
+#[derive(Debug)]
+pub struct RateLimiter {
+    /// Tokens for operations
+    ops_tokens: f64,
+    /// Tokens for bytes
+    bytes_tokens: f64,
+    /// Last refill time
+    last_refill: Instant,
+    /// Configuration
+    config: QosConfig,
+}
+
+impl RateLimiter {
+    pub fn new(config: QosConfig) -> Self {
+        Self {
+            ops_tokens: config.max_ops_per_sec as f64,
+            bytes_tokens: config.max_bytes_per_sec as f64,
+            last_refill: Instant::now(),
+            config,
+        }
+    }
+
+    /// Refill tokens based on elapsed time since last refill.
+    fn refill(&mut self) {
+        let now = Instant::now();
+        let elapsed = now.duration_since(self.last_refill).as_secs_f64();
+        self.last_refill = now;
+
+        if self.config.max_ops_per_sec > 0 {
+            self.ops_tokens += elapsed * self.config.max_ops_per_sec as f64;
+            if self.ops_tokens > self.config.max_ops_per_sec as f64 {
+                self.ops_tokens = self.config.max_ops_per_sec as f64;
+            }
+        }
+        if self.config.max_bytes_per_sec > 0 {
+            self.bytes_tokens += elapsed * self.config.max_bytes_per_sec as f64;
+            if self.bytes_tokens > self.config.max_bytes_per_sec as f64 {
+                self.bytes_tokens = self.config.max_bytes_per_sec as f64;
+            }
+        }
+    }
+
+    /// Try to consume one operation token. Returns true if allowed.
+    pub fn try_consume_op(&mut self) -> bool {
+        if self.config.max_ops_per_sec == 0 {
+            return true; // unlimited
+        }
+        self.refill();
+        if self.ops_tokens >= 1.0 {
+            self.ops_tokens -= 1.0;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Try to consume byte tokens. Returns true if allowed.
+    pub fn try_consume_bytes(&mut self, bytes: u64) -> bool {
+        if self.config.max_bytes_per_sec == 0 {
+            return true; // unlimited
+        }
+        self.refill();
+        let needed = bytes as f64;
+        if self.bytes_tokens >= needed {
+            self.bytes_tokens -= needed;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Update the QoS configuration.
+    pub fn update_config(&mut self, config: QosConfig) {
+        self.config = config;
+    }
+
+    /// Get the current QoS configuration.
+    pub fn config(&self) -> &QosConfig {
+        &self.config
+    }
+}
 
 /// Per-export statistics.
 #[derive(Debug)]
@@ -58,6 +160,8 @@ pub struct ExportInfo {
     pub path: PathBuf,
     pub read_only: bool,
     pub stats: Arc<ExportStats>,
+    /// Per-export rate limiter for QoS enforcement (shared via Arc<Mutex>)
+    pub rate_limiter: Arc<Mutex<RateLimiter>>,
 }
 
 /// Full export state including the FileManagerHandle.
@@ -74,6 +178,19 @@ enum ExportManagerMessage {
     ListExports(ListExportsRequest),
     GetExportById(GetExportByIdRequest),
     GetExportByName(GetExportByNameRequest),
+    SetQos(SetQosRequest),
+    GetQos(GetQosRequest),
+}
+
+struct SetQosRequest {
+    name: String,
+    config: QosConfig,
+    respond_to: oneshot::Sender<Result<(), String>>,
+}
+
+struct GetQosRequest {
+    name: String,
+    respond_to: oneshot::Sender<Option<QosConfig>>,
 }
 
 struct AddExportRequest {
@@ -148,6 +265,32 @@ impl ExportManager {
                 });
                 let _ = req.respond_to.send(result);
             }
+            ExportManagerMessage::SetQos(req) => {
+                let result = if let Some(state) = self.exports.get(&req.name) {
+                    // Update the rate limiter config (will take effect on next lock acquisition)
+                    let rl = state.info.rate_limiter.clone();
+                    // We can't await inside this sync handler, so spawn a task
+                    tokio::spawn(async move {
+                        let mut limiter = rl.lock().await;
+                        limiter.update_config(req.config);
+                    });
+                    Ok(())
+                } else {
+                    Err(format!("export '{}' not found", req.name))
+                };
+                let _ = req.respond_to.send(result);
+            }
+            ExportManagerMessage::GetQos(req) => {
+                if let Some(state) = self.exports.get(&req.name) {
+                    let rl = state.info.rate_limiter.clone();
+                    tokio::spawn(async move {
+                        let limiter = rl.lock().await;
+                        let _ = req.respond_to.send(Some(limiter.config().clone()));
+                    });
+                } else {
+                    let _ = req.respond_to.send(None);
+                }
+            }
         }
     }
 
@@ -180,12 +323,14 @@ impl ExportManager {
             FileManagerHandle::new(vfs_root.clone(), Some(export_id as u64), canonical.clone());
 
         let stats = ExportStats::new();
+        let rate_limiter = Arc::new(Mutex::new(RateLimiter::new(QosConfig::default())));
         let info = ExportInfo {
             export_id,
             name: name.clone(),
             path: canonical.clone(),
             read_only,
             stats,
+            rate_limiter,
         };
 
         let state = ExportState {
@@ -308,6 +453,33 @@ impl ExportManagerHandle {
                     respond_to: tx,
                 },
             ))
+            .await;
+        rx.await.ok().flatten()
+    }
+
+    /// Set QoS rate limiting configuration for an export.
+    pub async fn set_qos(&self, name: &str, config: QosConfig) -> Result<(), String> {
+        let (tx, rx) = oneshot::channel();
+        self.sender
+            .send(ExportManagerMessage::SetQos(SetQosRequest {
+                name: name.to_string(),
+                config,
+                respond_to: tx,
+            }))
+            .await
+            .map_err(|_| "export manager gone".to_string())?;
+        rx.await.map_err(|_| "export manager gone".to_string())?
+    }
+
+    /// Get the current QoS config for an export.
+    pub async fn get_qos(&self, name: &str) -> Option<QosConfig> {
+        let (tx, rx) = oneshot::channel();
+        let _ = self
+            .sender
+            .send(ExportManagerMessage::GetQos(GetQosRequest {
+                name: name.to_string(),
+                respond_to: tx,
+            }))
             .await;
         rx.await.ok().flatten()
     }
@@ -456,5 +628,110 @@ mod tests {
         assert_eq!(snap.bytes_read, 0);
         assert_eq!(snap.bytes_written, 0);
         assert_eq!(snap.ops, 0);
+    }
+
+    // ── Rate limiter unit tests ─────────────────────────────────────
+
+    #[test]
+    fn test_rate_limiter_unlimited() {
+        let mut rl = RateLimiter::new(QosConfig::default());
+        // Unlimited — always allowed
+        for _ in 0..1000 {
+            assert!(rl.try_consume_op());
+            assert!(rl.try_consume_bytes(1_000_000));
+        }
+    }
+
+    #[test]
+    fn test_rate_limiter_ops_limit() {
+        let mut rl = RateLimiter::new(QosConfig {
+            max_ops_per_sec: 10,
+            max_bytes_per_sec: 0,
+        });
+        // Should allow 10 ops initially (bucket starts full)
+        for _ in 0..10 {
+            assert!(rl.try_consume_op());
+        }
+        // 11th should be denied (no time to refill)
+        assert!(!rl.try_consume_op());
+    }
+
+    #[test]
+    fn test_rate_limiter_bytes_limit() {
+        let mut rl = RateLimiter::new(QosConfig {
+            max_ops_per_sec: 0,
+            max_bytes_per_sec: 1000,
+        });
+        // Should allow 1000 bytes initially
+        assert!(rl.try_consume_bytes(500));
+        assert!(rl.try_consume_bytes(500));
+        // 1001th byte should be denied
+        assert!(!rl.try_consume_bytes(1));
+    }
+
+    #[test]
+    fn test_rate_limiter_config_update() {
+        let mut rl = RateLimiter::new(QosConfig::default());
+        assert_eq!(rl.config().max_ops_per_sec, 0);
+        rl.update_config(QosConfig {
+            max_ops_per_sec: 100,
+            max_bytes_per_sec: 50000,
+        });
+        assert_eq!(rl.config().max_ops_per_sec, 100);
+        assert_eq!(rl.config().max_bytes_per_sec, 50000);
+    }
+
+    #[test]
+    fn test_qos_config_default() {
+        let config = QosConfig::default();
+        assert_eq!(config.max_ops_per_sec, 0);
+        assert_eq!(config.max_bytes_per_sec, 0);
+    }
+
+    #[tokio::test]
+    async fn test_set_qos_nonexistent_export() {
+        let em = ExportManagerHandle::new();
+        let result = em
+            .set_qos(
+                "nosuch",
+                QosConfig {
+                    max_ops_per_sec: 100,
+                    max_bytes_per_sec: 0,
+                },
+            )
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_get_qos_nonexistent_export() {
+        let em = ExportManagerHandle::new();
+        let result = em.get_qos("nosuch").await;
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_set_and_get_qos() {
+        let em = ExportManagerHandle::new();
+        em.add_export("qos_test".to_string(), PathBuf::from("/tmp"), false)
+            .await
+            .unwrap();
+        let result = em
+            .set_qos(
+                "qos_test",
+                QosConfig {
+                    max_ops_per_sec: 500,
+                    max_bytes_per_sec: 10_000_000,
+                },
+            )
+            .await;
+        assert!(result.is_ok());
+        // Give the spawn a moment to update
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let qos = em.get_qos("qos_test").await;
+        assert!(qos.is_some());
+        let qos = qos.unwrap();
+        assert_eq!(qos.max_ops_per_sec, 500);
+        assert_eq!(qos.max_bytes_per_sec, 10_000_000);
     }
 }

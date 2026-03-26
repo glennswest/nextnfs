@@ -4,10 +4,10 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
     response::{Html, IntoResponse, Json},
-    routing::{delete, get, post},
+    routing::{delete, get, post, put},
     Router,
 };
-use nextnfs_server::export_manager::{ExportManagerHandle, ExportStatsSnapshot};
+use nextnfs_server::export_manager::{ExportManagerHandle, ExportStatsSnapshot, QosConfig};
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
 use tracing::{error, info};
@@ -65,6 +65,8 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v1/exports/{name}", delete(remove_export))
         .route("/api/v1/stats", get(server_stats))
         .route("/api/v1/stats/{name}", get(export_stats))
+        .route("/api/v1/qos/{name}", get(get_qos))
+        .route("/api/v1/qos/{name}", put(set_qos))
         .with_state(state)
 }
 
@@ -206,6 +208,37 @@ async fn export_stats(
         None => (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({ "error": format!("export '{}' not found", name) })),
+        )
+            .into_response(),
+    }
+}
+
+// --- QoS handlers ---
+
+async fn get_qos(
+    State(state): State<ApiState>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    match state.export_manager.get_qos(&name).await {
+        Some(config) => (StatusCode::OK, Json(serde_json::json!(config))).into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": format!("export '{}' not found", name) })),
+        )
+            .into_response(),
+    }
+}
+
+async fn set_qos(
+    State(state): State<ApiState>,
+    Path(name): Path<String>,
+    Json(config): Json<QosConfig>,
+) -> impl IntoResponse {
+    match state.export_manager.set_qos(&name, config).await {
+        Ok(()) => StatusCode::OK.into_response(),
+        Err(e) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": e })),
         )
             .into_response(),
     }

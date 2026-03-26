@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-use nextnfs_server::export_manager::ExportManagerHandle;
+use nextnfs_server::export_manager::{ExportManagerHandle, QosConfig};
 use nextnfs_server::NFSServer;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
@@ -187,6 +187,8 @@ async fn run_server(
                             name,
                             path: export_path.display().to_string(),
                             read_only: false,
+                            max_ops_per_sec: 0,
+                            max_bytes_per_sec: 0,
                         }],
                         listen,
                         api,
@@ -210,6 +212,8 @@ async fn run_server(
                 name,
                 path: export_path.display().to_string(),
                 read_only: false,
+                max_ops_per_sec: 0,
+                max_bytes_per_sec: 0,
             }],
             listen_addr,
             api_listen_addr,
@@ -248,6 +252,20 @@ async fn run_server(
                     read_only = info.read_only,
                     "export registered"
                 );
+                // Apply QoS config from TOML if specified
+                if entry.max_ops_per_sec > 0 || entry.max_bytes_per_sec > 0 {
+                    let qos = QosConfig {
+                        max_ops_per_sec: entry.max_ops_per_sec,
+                        max_bytes_per_sec: entry.max_bytes_per_sec,
+                    };
+                    let _ = export_manager.set_qos(&entry.name, qos).await;
+                    info!(
+                        name = %entry.name,
+                        max_ops_per_sec = entry.max_ops_per_sec,
+                        max_bytes_per_sec = entry.max_bytes_per_sec,
+                        "QoS rate limiting configured"
+                    );
+                }
             }
             Err(e) => {
                 error!("Failed to add export '{}': {}", entry.name, e);

@@ -349,6 +349,29 @@ impl NfsProtoImpl for NFS40Server {
                 let mut resarray = Vec::with_capacity(args.argarray.len());
                 for arg in args.argarray {
                     let operation = op_name(&arg);
+
+                    // QoS rate limit check — if rate exceeded, return NFS4ERR_DELAY
+                    let rate_limited = if let Some(rl) = request.rate_limiter() {
+                        let rl = rl.clone();
+                        let mut limiter = rl.lock().await;
+                        !limiter.try_consume_op()
+                    } else {
+                        false
+                    };
+                    if rate_limited {
+                        return (
+                            request,
+                            ReplyBody::MsgAccepted(AcceptedReply {
+                                verf: OpaqueAuth::AuthNull(Vec::<u8>::new()),
+                                reply_data: AcceptBody::Success(Compound4res {
+                                    status: NfsStat4::Nfs4errDelay,
+                                    tag: "".to_string(),
+                                    resarray,
+                                }),
+                            }),
+                        );
+                    }
+
                     let response = match arg {
                         // undefined ops
                         NfsArgOp::OpUndef0 | NfsArgOp::OpUndef1 | NfsArgOp::OpUndef2 => {

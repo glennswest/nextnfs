@@ -36,6 +36,12 @@ pub struct ExportEntry {
     pub path: String,
     #[serde(default)]
     pub read_only: bool,
+    /// Maximum operations per second (0 = unlimited)
+    #[serde(default)]
+    pub max_ops_per_sec: u64,
+    /// Maximum bytes per second for reads+writes (0 = unlimited)
+    #[serde(default)]
+    pub max_bytes_per_sec: u64,
 }
 
 fn default_listen() -> String {
@@ -92,6 +98,8 @@ impl Config {
                         name,
                         path: single.path.clone(),
                         read_only: single.read_only,
+                        max_ops_per_sec: 0,
+                        max_bytes_per_sec: 0,
                     },
                 );
             }

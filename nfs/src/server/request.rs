@@ -3,9 +3,11 @@ use std::{collections::HashMap, sync::Arc, time::SystemTime};
 use nextnfs_proto::nfs4_proto::{NfsFh4, NfsStat4};
 use tracing::error;
 
+use tokio::sync::Mutex;
+
 use super::{
     clientmanager::ClientManagerHandle,
-    export_manager::{ExportManagerHandle, ExportStats},
+    export_manager::{ExportManagerHandle, ExportStats, RateLimiter},
     filemanager::{FileManagerHandle, Filehandle},
     nfs40::op_pseudo,
     nfs41::SessionManager,
@@ -25,6 +27,8 @@ pub struct NfsRequest<'a> {
     cached_fmanager: Option<FileManagerHandle>,
     // cached export stats for zero-cost counter updates
     export_stats: Option<Arc<ExportStats>>,
+    // cached per-export rate limiter for QoS enforcement
+    rate_limiter: Option<Arc<Mutex<RateLimiter>>>,
     // current export id (extracted from filehandle)
     current_export_id: Option<u8>,
     // time the server was booted
@@ -64,6 +68,7 @@ impl<'a> NfsRequest<'a> {
             export_manager,
             cached_fmanager: default_fmanager,
             export_stats: None,
+            rate_limiter: None,
             current_export_id: None,
             boot_time,
             request_time,
@@ -116,11 +121,13 @@ impl<'a> NfsRequest<'a> {
             // Pseudo-root doesn't have a real file manager
             self.cached_fmanager = None;
             self.export_stats = None;
+            self.rate_limiter = None;
             return;
         }
         if let Some((info, fm)) = self.export_manager.get_export_by_id(export_id).await {
             self.cached_fmanager = Some(fm);
             self.export_stats = Some(info.stats);
+            self.rate_limiter = Some(info.rate_limiter);
         }
     }
 
@@ -136,6 +143,11 @@ impl<'a> NfsRequest<'a> {
     /// Get cached export stats for zero-cost counter updates.
     pub fn export_stats(&self) -> Option<&Arc<ExportStats>> {
         self.export_stats.as_ref()
+    }
+
+    /// Get the cached per-export rate limiter for QoS enforcement.
+    pub fn rate_limiter(&self) -> Option<&Arc<Mutex<RateLimiter>>> {
+        self.rate_limiter.as_ref()
     }
 
     pub fn set_filehandle(&mut self, filehandle: Filehandle) {
