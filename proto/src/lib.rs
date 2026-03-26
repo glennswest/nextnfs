@@ -226,3 +226,234 @@ pub fn to_bytes(message: &RpcReplyMsg) -> Result<Vec<u8>, anyhow::Error> {
         Err(e) => Err(anyhow::anyhow!("Error serializing message: {:?}", e)),
     }
 }
+
+#[cfg(test)]
+mod codec_tests {
+    use super::*;
+    use bytes::BytesMut;
+    use tokio_util::codec::{Decoder, Encoder};
+
+    fn make_codec() -> XDRProtoCodec {
+        XDRProtoCodec::new()
+    }
+
+    #[test]
+    fn test_codec_default() {
+        let codec = XDRProtoCodec::default();
+        // Just ensure it creates without panic
+        let _ = format!("{:?}", codec);
+    }
+
+    #[test]
+    fn test_decode_empty_buffer() {
+        let mut codec = make_codec();
+        let mut buf = BytesMut::new();
+        let result = codec.decode(&mut buf).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_decode_incomplete_header() {
+        let mut codec = make_codec();
+        let mut buf = BytesMut::from(&[0x80, 0x00][..]);
+        let result = codec.decode(&mut buf).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_decode_incomplete_fragment() {
+        let mut codec = make_codec();
+        // Header says 100 bytes, but we only provide 10
+        let header = (100u32 | (1 << 31)).to_be_bytes();
+        let mut buf = BytesMut::new();
+        buf.extend_from_slice(&header);
+        buf.extend_from_slice(&[0u8; 10]); // only 10 of 100 bytes
+        let result = codec.decode(&mut buf).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_decode_oversized_frame_rejected() {
+        let mut codec = make_codec();
+        // MAX is 8MB — try 9MB
+        let length = 9 * 1024 * 1024;
+        let header = (length as u32 | (1 << 31)).to_be_bytes();
+        let mut buf = BytesMut::new();
+        buf.extend_from_slice(&header);
+        let result = codec.decode(&mut buf);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn test_decode_eof_empty_buffer() {
+        let mut codec = make_codec();
+        let mut buf = BytesMut::new();
+        let result = codec.decode_eof(&mut buf).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_decode_eof_partial_record_discarded() {
+        let mut codec = make_codec();
+        let mut buf = BytesMut::from(&[0x80, 0x00, 0x00, 0x10, 0x01, 0x02][..]);
+        // Header says 16 bytes, but only 2 bytes of data — incomplete
+        let result = codec.decode_eof(&mut buf).unwrap();
+        assert!(result.is_none());
+        // Buffer should be cleared
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn test_encode_reply() {
+        use rpc_proto::{AcceptBody, AcceptedReply, MsgType, OpaqueAuth, ReplyBody, RpcReplyMsg};
+        use nfs4_proto::{Compound4res, NfsStat4};
+
+        let mut codec = make_codec();
+        let reply = Box::new(RpcReplyMsg {
+            xid: 42,
+            body: MsgType::Reply(ReplyBody::MsgAccepted(AcceptedReply {
+                verf: OpaqueAuth::AuthNull(vec![]),
+                reply_data: AcceptBody::Success(Compound4res {
+                    status: NfsStat4::Nfs4Ok,
+                    tag: "".to_string(),
+                    resarray: vec![],
+                }),
+            })),
+        });
+        let mut buf = BytesMut::new();
+        codec.encode(reply, &mut buf).unwrap();
+
+        // Buffer should have 4-byte header + serialized payload
+        assert!(buf.len() > 4);
+        // First 4 bytes: header with last-fragment bit set
+        let header = u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]);
+        assert!(header & (1 << 31) != 0);
+        let payload_len = (header & ((1 << 31) - 1)) as usize;
+        assert_eq!(payload_len, buf.len() - 4);
+    }
+
+    #[test]
+    fn test_decode_multi_fragment() {
+        // Build a valid RPC NULL call split into two fragments
+        // Build RPC CALL: xid=1, msg_type=0(CALL), rpcvers=2, prog=100003, vers=4, proc=0
+        // cred = AUTH_NULL, verf = AUTH_NULL
+        let mut rpc_body = Vec::new();
+        rpc_body.extend_from_slice(&1u32.to_be_bytes()); // xid
+        rpc_body.extend_from_slice(&0u32.to_be_bytes()); // CALL
+        rpc_body.extend_from_slice(&2u32.to_be_bytes()); // rpcvers
+        rpc_body.extend_from_slice(&100003u32.to_be_bytes()); // prog
+        rpc_body.extend_from_slice(&4u32.to_be_bytes()); // vers
+        rpc_body.extend_from_slice(&0u32.to_be_bytes()); // proc 0 (NULL)
+        // AUTH_NULL cred: flavor=0, len=0
+        rpc_body.extend_from_slice(&0u32.to_be_bytes());
+        rpc_body.extend_from_slice(&0u32.to_be_bytes());
+        // AUTH_NULL verf: flavor=0, len=0
+        rpc_body.extend_from_slice(&0u32.to_be_bytes());
+        rpc_body.extend_from_slice(&0u32.to_be_bytes());
+
+        // Split into 2 fragments: first 20 bytes, then the rest
+        let split_at = 20;
+        let frag1 = &rpc_body[..split_at];
+        let frag2 = &rpc_body[split_at..];
+
+        let mut buf = BytesMut::new();
+        // Fragment 1: NOT last (bit 31 = 0)
+        let header1 = (frag1.len() as u32).to_be_bytes();
+        buf.extend_from_slice(&header1);
+        buf.extend_from_slice(frag1);
+        // Fragment 2: last (bit 31 = 1)
+        let header2 = (frag2.len() as u32 | (1 << 31)).to_be_bytes();
+        buf.extend_from_slice(&header2);
+        buf.extend_from_slice(frag2);
+
+        let mut codec = make_codec();
+        let result = codec.decode(&mut buf).unwrap();
+        assert!(result.is_some());
+        let msg = result.unwrap();
+        assert_eq!(msg.xid, 1);
+    }
+
+    #[test]
+    fn test_from_bytes_invalid_msg_type() {
+        // msg_type = 1 (REPLY, not CALL) should fail
+        let mut data = Vec::new();
+        data.extend_from_slice(&1u32.to_be_bytes()); // xid
+        data.extend_from_slice(&1u32.to_be_bytes()); // msg_type = REPLY (not CALL)
+        let result = from_bytes(data);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_from_bytes_truncated_header() {
+        // Only 8 bytes — not enough for full RPC header
+        let mut data = Vec::new();
+        data.extend_from_slice(&1u32.to_be_bytes()); // xid
+        data.extend_from_slice(&0u32.to_be_bytes()); // CALL
+        // Missing rpcvers, prog, vers, proc, cred, verf
+        let result = from_bytes(data);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_from_bytes_null_procedure() {
+        // Valid NULL call (proc=0) — args should be None
+        let mut data = Vec::new();
+        data.extend_from_slice(&42u32.to_be_bytes()); // xid
+        data.extend_from_slice(&0u32.to_be_bytes()); // CALL
+        data.extend_from_slice(&2u32.to_be_bytes()); // rpcvers
+        data.extend_from_slice(&100003u32.to_be_bytes()); // prog
+        data.extend_from_slice(&4u32.to_be_bytes()); // vers
+        data.extend_from_slice(&0u32.to_be_bytes()); // proc 0
+        // AUTH_NULL cred
+        data.extend_from_slice(&0u32.to_be_bytes());
+        data.extend_from_slice(&0u32.to_be_bytes());
+        // AUTH_NULL verf
+        data.extend_from_slice(&0u32.to_be_bytes());
+        data.extend_from_slice(&0u32.to_be_bytes());
+
+        let result = from_bytes(data).unwrap();
+        assert_eq!(result.xid, 42);
+        match result.body {
+            rpc_proto::MsgType::Call(body) => {
+                assert_eq!(body.proc, 0);
+                assert!(body.args.is_none());
+            }
+            _ => panic!("Expected Call"),
+        }
+    }
+
+    #[test]
+    fn test_from_bytes_unsupported_auth_flavor() {
+        // Auth flavor 99 should be treated as AuthNull with opaque body
+        let mut data = Vec::new();
+        data.extend_from_slice(&1u32.to_be_bytes()); // xid
+        data.extend_from_slice(&0u32.to_be_bytes()); // CALL
+        data.extend_from_slice(&2u32.to_be_bytes()); // rpcvers
+        data.extend_from_slice(&100003u32.to_be_bytes());
+        data.extend_from_slice(&4u32.to_be_bytes());
+        data.extend_from_slice(&0u32.to_be_bytes()); // proc 0
+        // Unknown auth cred: flavor=99, len=4, body=[1,2,3,4]
+        data.extend_from_slice(&99u32.to_be_bytes());
+        data.extend_from_slice(&4u32.to_be_bytes());
+        data.extend_from_slice(&[1, 2, 3, 4]);
+        // AUTH_NULL verf
+        data.extend_from_slice(&0u32.to_be_bytes());
+        data.extend_from_slice(&0u32.to_be_bytes());
+
+        let result = from_bytes(data).unwrap();
+        match result.body {
+            rpc_proto::MsgType::Call(body) => {
+                // Unknown flavor treated as AuthNull with opaque body preserved
+                match &body.cred {
+                    rpc_proto::OpaqueAuth::AuthNull(body) => {
+                        assert_eq!(body, &[1, 2, 3, 4]);
+                    }
+                    other => panic!("Expected AuthNull fallback, got {:?}", other),
+                }
+            }
+            _ => panic!("Expected Call"),
+        }
+    }
+}

@@ -7,7 +7,10 @@
 ### Added
 - Functional workflow tests (16 tests: write→read roundtrip, write→overwrite→read, open→write→close lifecycle, create→lookup→getattr chain, nested dir readdir, create→remove→lookup, rename verify, multi-file readdir, lock→unlock→relock, partial read, setattr→getattr, compound CREATE→GETFH, compound CREATE→LOOKUP→GETATTR, compound SAVEFH→RENAME, open→read existing, create/remove/readdir)
 - Directory removal verification test (CREATE→LOOKUP→REMOVE→LOOKUP fails)
-- Total workspace tests: 316 (39 proto + 271 server + 6 nfstest), 0 clippy warnings
+- Proto codec edge-case tests (+13: decode empty/incomplete/oversized frames, EOF handling, encode reply, multi-fragment reassembly, from_bytes invalid/truncated/null-proc/unsupported-auth)
+- Compound workflow tests (+6: create→write→read→close, lock→write→unlock, savefh→lookup→restorefh, readdir cookie continuation, open→write→overwrite→read, getattr-after-write size verification)
+- Operation error-branch tests: op_link (+2: root source rejected, MemoryFS hard_link), op_open (+1: unsupported claim type), op_lookup (+2: subdirectory lookup, miss unsets filehandle)
+- Total workspace tests: 340 (52 proto + 282 server + 6 nfstest)
 
 ### Fixed
 - FileManager RemoveFile handler was calling `read_dir()` (listing) instead of `remove_dir()` for directories — VFS directory was never actually deleted

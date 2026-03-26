@@ -183,4 +183,61 @@ mod tests {
             panic!("Expected Oplookup result");
         }
     }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_lookup_in_subdirectory() {
+        let request = create_nfs40_server_with_root_fh(None).await;
+
+        // Create parent dir
+        let create_parent = Create4args {
+            objtype: Createtype4::Nf4dir,
+            objname: "parent".to_string(),
+            createattrs: Fattr4 {
+                attrmask: Attrlist4(vec![]),
+                attr_vals: Attrlist4(vec![]),
+            },
+        };
+        let response = create_parent.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+
+        // Current fh is now "parent" — create child inside it
+        let request = response.request;
+        let create_child = Create4args {
+            objtype: Createtype4::Nf4dir,
+            objname: "child".to_string(),
+            createattrs: Fattr4 {
+                attrmask: Attrlist4(vec![]),
+                attr_vals: Attrlist4(vec![]),
+            },
+        };
+        let response = create_child.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+
+        // Reset to parent for lookup
+        let mut request = response.request;
+        let parent_fh = request.file_manager()
+            .get_filehandle_for_path("parent".to_string())
+            .await.unwrap();
+        request.set_filehandle(parent_fh);
+
+        let lookup_args = Lookup4args {
+            objname: "child".to_string(),
+        };
+        let response = lookup_args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_lookup_miss_unsets_filehandle() {
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let lookup_args = Lookup4args {
+            objname: "missing_file".to_string(),
+        };
+        let response = lookup_args.execute(request).await;
+        assert_ne!(response.status, NfsStat4::Nfs4Ok);
+        // After a failed lookup, current filehandle should be unset
+        assert!(response.request.current_filehandle().is_none());
+    }
 }

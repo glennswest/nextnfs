@@ -373,6 +373,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_open_unsupported_claim_type() {
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let args = Open4args {
+            seqid: 1,
+            share_access: 1,
+            share_deny: 0,
+            owner: OpenOwner4 {
+                clientid: 1,
+                owner: b"test".to_vec(),
+            },
+            openhow: OpenFlag4::Open4Nocreate,
+            claim: OpenClaim4::ClaimPrevious(nextnfs_proto::nfs4_proto::OpenDelegationType4::OpenDelegateNone),
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4errNotsupp);
+    }
+
+    #[tokio::test]
     async fn test_open_read_existing_file() {
         let mut request = create_nfs40_server_with_root_fh(None).await;
         // Create file first

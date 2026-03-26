@@ -131,4 +131,52 @@ mod tests {
         // No saved fh either, so should get Nfs4errRestorefh first
         assert_eq!(response.status, NfsStat4::Nfs4errRestorefh);
     }
+
+    #[tokio::test]
+    async fn test_link_root_source_rejected() {
+        // Saving the root fh then trying to hard-link it should fail with Nfs4errInval
+        let mut request = create_nfs40_server_with_root_fh(None).await;
+        request.save_filehandle();
+        let args = Link4args {
+            newname: "root_link".to_string(),
+        };
+        let response = args.execute(request).await;
+        // Root source path is "/" — cannot hard-link root
+        assert_eq!(response.status, NfsStat4::Nfs4errInval);
+    }
+
+    #[tokio::test]
+    async fn test_link_source_file_on_memoryfs() {
+        use crate::server::operation::NfsOperation as _;
+        use crate::server::nfs40::{Create4args, Createtype4, Fattr4, Attrlist4};
+        // Create a file so we have a non-root saved fh
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let create_args = Create4args {
+            objtype: Createtype4::Nf4dir,
+            objname: "srcdir".to_string(),
+            createattrs: Fattr4 {
+                attrmask: Attrlist4(vec![]),
+                attr_vals: Attrlist4(vec![]),
+            },
+        };
+        let response = create_args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        // srcdir is now current fh — save it
+        let mut request = response.request;
+        request.save_filehandle();
+        // Reset to root as target directory
+        let root_fh = request.file_manager().get_root_filehandle().await.unwrap();
+        request.set_filehandle(root_fh);
+
+        let args = Link4args {
+            newname: "linked_dir".to_string(),
+        };
+        let response = args.execute(request).await;
+        // MemoryFS paths don't map to real filesystem — hard_link will fail with Io error
+        assert!(
+            response.status == NfsStat4::Nfs4errIo
+            || response.status == NfsStat4::Nfs4errAccess
+            || response.status == NfsStat4::Nfs4errExist
+        );
+    }
 }
