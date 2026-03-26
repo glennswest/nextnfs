@@ -92,10 +92,10 @@ mod tests {
     #[tokio::test]
     async fn test_openconfirm_after_open() {
         use nextnfs_proto::nfs4_proto::{
-            Attrlist4, CreateHow4, Fattr4, FileAttr, Open4args, Open4res, OpenClaim4,
+            Attrlist4, CreateHow4, Fattr4, Open4args, OpenClaim4,
             OpenFlag4, OpenOwner4, NfsResOp4,
         };
-        let mut request = create_nfs40_server_with_root_fh(None).await;
+        let request = create_nfs40_server_with_root_fh(None).await;
 
         // OPEN (create) a file to get a stateid
         let open_args = Open4args {

@@ -711,7 +711,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_workflow_write_read_roundtrip() {
-        use crate::server::nfs40::{Read4args, Read4res, Write4args, Write4res};
+        use crate::server::nfs40::{Read4args, Read4res, Write4args};
         use crate::server::operation::NfsOperation;
 
         let mut request = create_nfs40_server_with_root_fh(None).await;
@@ -1115,7 +1115,7 @@ mod tests {
     #[tokio::test]
     async fn test_workflow_lock_unlock_relock() {
         use crate::server::filemanager::LockResult;
-        use crate::server::nfs40::{Locku4args, Locku4res, NfsLockType4};
+        use crate::server::nfs40::{Locku4args, NfsLockType4};
         use crate::server::operation::NfsOperation;
 
         let request = create_nfs40_server_with_root_fh(None).await;
@@ -1202,7 +1202,7 @@ mod tests {
     #[tokio::test]
     async fn test_workflow_setattr_getattr_roundtrip() {
         use crate::server::nfs40::{
-            Getattr4args, Getattr4resok, SetAttr4args, SetAttr4res,
+            Getattr4args, Getattr4resok, SetAttr4args,
         };
         use crate::server::operation::NfsOperation;
         use nextnfs_proto::nfs4_proto::FileAttrValue;
@@ -1364,7 +1364,7 @@ mod tests {
     #[tokio::test]
     async fn test_workflow_open_read_existing_file() {
         use crate::server::nfs40::{
-            Open4args, Open4res, OpenClaim4, OpenFlag4, OpenOwner4, Read4args, Read4res,
+            Open4args, OpenClaim4, OpenFlag4, OpenOwner4, Read4args, Read4res,
         };
         use crate::server::operation::NfsOperation;
 
@@ -1508,8 +1508,8 @@ mod tests {
     async fn test_workflow_create_write_read_close() {
         // Full file lifecycle: OPEN(create) → WRITE → READ → CLOSE
         use crate::server::nfs40::{
-            Close4args, Open4args, Open4res, Open4resok, Read4args, Read4res,
-            Write4args, Write4res, OpenFlag4, OpenClaim4, OpenOwner4,
+            Close4args, Open4args, Open4res, Read4args, Read4res,
+            Write4args, OpenFlag4, OpenClaim4, OpenOwner4,
         };
         use crate::server::operation::NfsOperation;
         use nextnfs_proto::nfs4_proto::CreateHow4;
@@ -1588,7 +1588,7 @@ mod tests {
     async fn test_workflow_lock_write_unlock() {
         // Lock coordination: LOCK → WRITE → UNLOCK
         use crate::server::nfs40::{
-            Write4args, Write4res, Locku4args, Locku4res,
+            Write4args, Locku4args,
         };
         use crate::server::operation::NfsOperation;
         use crate::server::filemanager::LockResult;

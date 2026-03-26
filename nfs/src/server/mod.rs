@@ -105,7 +105,6 @@ mod tests {
     use crate::test_utils::*;
     use nfs40::NFS40Server;
     use nextnfs_proto::nfs4_proto::Compound4args;
-    use nextnfs_proto::rpc_proto::*;
 
     fn make_rpc_call(proc: u32) -> RpcCallMsg {
         RpcCallMsg {

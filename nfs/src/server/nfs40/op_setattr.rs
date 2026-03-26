@@ -112,7 +112,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_setattr_returns_attrsset() {
-        use nextnfs_proto::nfs4_proto::{FileAttrValue, NfsResOp4, SetAttr4res};
+        use nextnfs_proto::nfs4_proto::FileAttrValue;
         let request = create_nfs40_server_with_root_fh(None).await;
         let args = SetAttr4args {
             stateid: Stateid4 {

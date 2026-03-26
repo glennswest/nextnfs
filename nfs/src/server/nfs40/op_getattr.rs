@@ -175,8 +175,6 @@ mod tests {
     #[tokio::test]
     #[traced_test]
     async fn test_getattr_on_created_file() {
-        use crate::server::nfs40::{FileAttrValue, Createtype4, Create4args, Fattr4};
-
         let request = create_nfs40_server_with_root_fh(None).await;
         // Create a file first
         let root_file = request.current_filehandle().unwrap().file.clone();
