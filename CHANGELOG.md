@@ -2,16 +2,20 @@
 
 ## [Unreleased]
 
-### 2026-03-26
-- **feat:** Implement VERIFY and NVERIFY operations (RFC 7530 S16.32, S16.15) for client cache validation
-- **feat:** Implement READLINK operation using std::fs::read_link() (was returning NOTSUPP)
-- **feat:** Wire up VERIFY/NVERIFY in compound dispatch (previously routed to operation_not_supported)
-- **fix:** Make Verify4args, Verify4res, Nverify4args, Nverify4res fields public in proto
-- **test:** 7 VERIFY/NVERIFY tests + 2 READLINK tests (371 total workspace tests)
-- **feat:** Industry benchmark suite (tests/nfs_bench_suite.sh) — fio, IOzone, Dbench, Bonnie++, SPECstorage-style workloads (AI/Image, Software Build, Genomics)
-- **feat:** Data integrity test (tests/nfs_integrity.sh) — Linux kernel source untar, SHA-256 checksum, 10 parallel copies, full verification
-- **feat:** Ramdisk baseline benchmarks for peak throughput reference
-- **chore:** CI test-runner now includes bench suite + integrity validation
+## [v0.9.0] — 2026-03-26
+
+### Added
+- VERIFY and NVERIFY operations (RFC 7530 S16.32, S16.15) for client cache validation
+- READLINK operation implemented with std::fs::read_link() (was returning NOTSUPP)
+- Industry benchmark suite (tests/nfs_bench_suite.sh): fio, IOzone, Dbench, Bonnie++, SPECstorage-style workloads (AI/Image, Software Build, Genomics)
+- Data integrity test (tests/nfs_integrity.sh): Linux kernel source untar, SHA-256 all files, 10 parallel copies with full verification
+- Ramdisk baseline benchmark for peak throughput reference
+- CI test-runner integration with bench suite + integrity validation
+- 371 workspace tests (52 proto + 313 server + 6 nfstest), 0 clippy warnings
+
+### Fixed
+- Proto Verify4args, Verify4res, Nverify4args, Nverify4res fields now public
+- VERIFY/NVERIFY wired into compound dispatch (previously returned NOTSUPP)
 
 ## [v0.8.1] — 2026-03-25
 
