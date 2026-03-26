@@ -11,21 +11,12 @@ use vfs::{AltrootFS, PhysicalFS, VfsPath};
 use super::filemanager::FileManagerHandle;
 
 /// Per-export QoS configuration.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct QosConfig {
     /// Maximum operations per second (0 = unlimited)
     pub max_ops_per_sec: u64,
     /// Maximum bytes per second for reads+writes (0 = unlimited)
     pub max_bytes_per_sec: u64,
-}
-
-impl Default for QosConfig {
-    fn default() -> Self {
-        Self {
-            max_ops_per_sec: 0,
-            max_bytes_per_sec: 0,
-        }
-    }
 }
 
 /// Token bucket rate limiter for QoS enforcement.

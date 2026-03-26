@@ -87,6 +87,15 @@ struct RevokeCourtesyClientRequest {
     pub respond_to: oneshot::Sender<()>,
 }
 
+struct GetAllClientsRequest {
+    pub respond_to: oneshot::Sender<Vec<ClientEntry>>,
+}
+
+struct RestoreClientsRequest {
+    pub clients: Vec<crate::server::state_recovery::ClientSnapshot>,
+    pub respond_to: oneshot::Sender<usize>,
+}
+
 enum ClientManagerMessage {
     UpsertClient(UpsertClientRequest),
     ConfirmClient(ConfirmClientRequest),
@@ -95,6 +104,8 @@ enum ClientManagerMessage {
     SweepLeases(SweepLeasesRequest),
     IsCourtesyClient(IsCourtesyClientRequest),
     RevokeCourtesyClient(RevokeCourtesyClientRequest),
+    GetAllClients(GetAllClientsRequest),
+    RestoreClients(RestoreClientsRequest),
 }
 
 pub struct SetCurrentFilehandleRequest {
@@ -151,6 +162,18 @@ impl ClientManager {
             ClientManagerMessage::RevokeCourtesyClient(request) => {
                 self.revoke_courtesy_client(request.client_id);
                 let _ = request.respond_to.send(());
+            }
+            ClientManagerMessage::GetAllClients(request) => {
+                let db = Arc::get_mut(&mut self.db).unwrap();
+                let all: Vec<ClientEntry> = db
+                    .iter()
+                    .filter_map(|(_, e)| if e.confirmed { Some(e.clone()) } else { None })
+                    .collect();
+                let _ = request.respond_to.send(all);
+            }
+            ClientManagerMessage::RestoreClients(request) => {
+                let count = self.restore_clients(request.clients);
+                let _ = request.respond_to.send(count);
             }
         }
     }
@@ -381,6 +404,49 @@ impl ClientManager {
         debug!(clientid = client_id, "courtesy client forcibly revoked due to conflict");
     }
 
+    /// Restore clients from a state snapshot (near-zero grace period recovery).
+    /// Returns the number of clients restored.
+    fn restore_clients(
+        &mut self,
+        clients: Vec<crate::server::state_recovery::ClientSnapshot>,
+    ) -> usize {
+        let db = Arc::get_mut(&mut self.db).unwrap();
+        let mut count = 0;
+        for snap in clients {
+            if !snap.confirmed {
+                continue;
+            }
+            let mut rng = rand::thread_rng();
+            let confirm_vec: Vec<u8> =
+                (0..8).map(|_| rng.sample(Uniform::new(0, 255))).collect();
+            let confirm: [u8; 8] = confirm_vec.try_into().unwrap();
+            let entry = ClientEntry {
+                principal: snap.principal,
+                verifier: snap.verifier,
+                id: snap.id,
+                clientid: snap.clientid,
+                callback: ClientCallback {
+                    program: snap.callback_program,
+                    rnetid: snap.callback_rnetid,
+                    raddr: snap.callback_raddr,
+                    callback_ident: snap.callback_ident,
+                },
+                setclientid_confirm: confirm,
+                confirmed: true,
+                last_renewed: Instant::now(),
+                courtesy: false,
+            };
+            // Update client_id_seq to avoid collisions
+            if snap.clientid >= self.client_id_seq {
+                self.client_id_seq = snap.clientid + 1;
+            }
+            db.insert(entry);
+            count += 1;
+        }
+        debug!(count, "restored clients from state snapshot");
+        count
+    }
+
     pub fn get_record_count(&mut self) -> usize {
         let db = Arc::get_mut(&mut self.db).unwrap();
         db.len()
@@ -593,6 +659,35 @@ impl ClientManagerHandle {
             ))
             .await;
         let _ = rx.await;
+    }
+
+    /// Get all confirmed clients for state persistence.
+    pub async fn get_all_clients(&self) -> Vec<ClientEntry> {
+        let (tx, rx) = oneshot::channel();
+        let _ = self
+            .sender
+            .send(ClientManagerMessage::GetAllClients(GetAllClientsRequest {
+                respond_to: tx,
+            }))
+            .await;
+        rx.await.unwrap_or_default()
+    }
+
+    /// Restore clients from a state snapshot (near-zero grace period recovery).
+    /// Returns the number of clients restored.
+    pub async fn restore_clients(
+        &self,
+        clients: Vec<crate::server::state_recovery::ClientSnapshot>,
+    ) -> usize {
+        let (tx, rx) = oneshot::channel();
+        let _ = self
+            .sender
+            .send(ClientManagerMessage::RestoreClients(RestoreClientsRequest {
+                clients,
+                respond_to: tx,
+            }))
+            .await;
+        rx.await.unwrap_or(0)
     }
 
     /// Start a background lease sweep task that runs every 30 seconds.
@@ -1050,5 +1145,99 @@ mod tests {
         assert_eq!(same_client.clientid, client.clientid);
         assert_eq!(same_client.principal, Some("Linux".to_string()));
         assert!(same_client.confirmed);
+    }
+
+    #[test]
+    fn test_restore_clients() {
+        use crate::server::state_recovery::ClientSnapshot;
+
+        let (_, receiver) = mpsc::channel(16);
+        let mut manager = super::ClientManager::new(receiver);
+
+        let snapshots = vec![
+            ClientSnapshot {
+                principal: Some("Linux".to_string()),
+                verifier: [1; 8],
+                id: "client1".to_string(),
+                clientid: 42,
+                callback_program: 0x40000001,
+                callback_rnetid: "tcp".to_string(),
+                callback_raddr: "192.168.1.10".to_string(),
+                callback_ident: 1,
+                confirmed: true,
+            },
+            ClientSnapshot {
+                principal: None,
+                verifier: [2; 8],
+                id: "client2".to_string(),
+                clientid: 99,
+                callback_program: 0x40000001,
+                callback_rnetid: "tcp".to_string(),
+                callback_raddr: "192.168.1.20".to_string(),
+                callback_ident: 2,
+                confirmed: true,
+            },
+            ClientSnapshot {
+                principal: None,
+                verifier: [3; 8],
+                id: "unconfirmed".to_string(),
+                clientid: 100,
+                callback_program: 0,
+                callback_rnetid: "tcp".to_string(),
+                callback_raddr: "".to_string(),
+                callback_ident: 0,
+                confirmed: false, // should be skipped
+            },
+        ];
+
+        let count = manager.restore_clients(snapshots);
+        assert_eq!(count, 2); // only confirmed clients restored
+        assert_eq!(manager.get_record_count(), 2);
+
+        // Verify client data
+        let c1 = manager.get_client_confirmed(42).unwrap();
+        assert_eq!(c1.id, "client1");
+        assert_eq!(c1.principal, Some("Linux".to_string()));
+        assert_eq!(c1.verifier, [1; 8]);
+        assert!(c1.confirmed);
+        assert!(!c1.courtesy);
+
+        let c2 = manager.get_client_confirmed(99).unwrap();
+        assert_eq!(c2.id, "client2");
+        assert!(c2.confirmed);
+
+        // client_id_seq should be past the max restored clientid
+        assert!(manager.client_id_seq >= 100);
+    }
+
+    #[tokio::test]
+    async fn test_handle_restore_clients() {
+        use crate::server::state_recovery::ClientSnapshot;
+
+        let handle = super::ClientManagerHandle::new();
+        let snapshots = vec![ClientSnapshot {
+            principal: Some("Linux".to_string()),
+            verifier: [1; 8],
+            id: "restored".to_string(),
+            clientid: 50,
+            callback_program: 0x40000001,
+            callback_rnetid: "tcp".to_string(),
+            callback_raddr: "10.0.0.1".to_string(),
+            callback_ident: 1,
+            confirmed: true,
+        }];
+
+        let count = handle.restore_clients(snapshots).await;
+        assert_eq!(count, 1);
+
+        // Verify the restored client can be renewed
+        let result = handle.renew_leases(50).await;
+        assert!(result.is_ok());
+
+        // get_all_clients should include the restored client
+        let all = handle.get_all_clients().await;
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].clientid, 50);
+        assert_eq!(all[0].id, "restored");
     }
 }

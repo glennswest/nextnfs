@@ -20,6 +20,9 @@ pub struct ServerConfig {
     pub listen: String,
     #[serde(default = "default_api_listen")]
     pub api_listen: String,
+    /// Directory for state recovery files (near-zero grace period)
+    #[serde(default)]
+    pub state_dir: Option<String>,
 }
 
 #[derive(Deserialize, Clone)]
@@ -61,6 +64,7 @@ impl Default for ServerConfig {
         Self {
             listen: default_listen(),
             api_listen: default_api_listen(),
+            state_dir: None,
         }
     }
 }

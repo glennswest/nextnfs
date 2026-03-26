@@ -162,7 +162,7 @@ async fn run_server(
     config_path: Option<PathBuf>,
 ) {
     // Load config and merge with CLI args
-    let (exports, listen, api_listen) = if let Some(config_path) = config_path {
+    let (exports, listen, api_listen, state_dir) = if let Some(config_path) = config_path {
         match config::Config::load(&config_path) {
             Ok(cfg) => {
                 let resolved = cfg.resolved_exports();
@@ -176,6 +176,7 @@ async fn run_server(
                 } else {
                     cfg.server.api_listen
                 };
+                let state_dir = cfg.server.state_dir.map(PathBuf::from);
                 if resolved.is_empty() {
                     // No exports in config — use CLI export path
                     let name = export_path
@@ -192,9 +193,10 @@ async fn run_server(
                         }],
                         listen,
                         api,
+                        state_dir,
                     )
                 } else {
-                    (resolved, listen, api)
+                    (resolved, listen, api, state_dir)
                 }
             }
             Err(e) => {
@@ -217,6 +219,7 @@ async fn run_server(
             }],
             listen_addr,
             api_listen_addr,
+            None,
         )
     };
 
@@ -278,6 +281,15 @@ async fn run_server(
     let mut builder = NFSServer::builder();
     builder.bind(&listen);
     builder.export_manager(export_manager.clone());
+    if let Some(ref sd) = state_dir {
+        // Ensure state directory exists
+        if let Err(e) = std::fs::create_dir_all(sd) {
+            error!("Failed to create state directory {}: {}", sd.display(), e);
+            std::process::exit(1);
+        }
+        builder.state_dir(sd.clone());
+        info!(state_dir = %sd.display(), "state recovery enabled");
+    }
     let server = builder.build();
 
     info!(

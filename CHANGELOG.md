@@ -10,7 +10,11 @@
 - Cached `Arc<ExportStats>` in NfsRequest for zero-cost counter updates (no actor messages)
 - SeCinfo4 proto type extended with AuthNone and AuthSys variants for proper XDR encoding
 - Proto OpenDowngrade4args, OpenDowngrade4resok, SecInfo4args fields now public
-- 379 workspace tests (52 proto + 321 server + 6 nfstest), 0 clippy warnings
+- Courteous server behavior — expired client leases enter courtesy state instead of immediate purge; background lease sweep every 30s marks expired→courtesy→purge with 2x lease window
+- Per-export QoS rate limiting — token bucket algorithm (ops/sec and bytes/sec), configurable via TOML `max_ops_per_sec`/`max_bytes_per_sec` and REST API `GET/PUT /api/v1/qos/{name}`, returns NFS4ERR_DELAY when exceeded
+- Near-zero grace period recovery — periodic client state snapshots to JSON (every 30s), atomic writes, restore on startup to skip grace period; configurable via TOML `server.state_dir`
+- RestoreClients actor message for ClientManager — bulk client restoration from state snapshots
+- 401 workspace tests (52 proto + 343 server + 6 nfstest), 0 clippy warnings
 
 ## [v0.9.0] — 2026-03-26
 

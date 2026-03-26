@@ -15,7 +15,7 @@ use socket2::{SockRef, TcpKeepalive};
 use tokio::net::TcpListener;
 use tokio_stream::StreamExt;
 use tokio_util::codec::Framed;
-use tracing::{error, info, span, trace, Level};
+use tracing::{error, info, span, trace, warn, Level};
 pub use vfs;
 pub use vfs::VfsPath;
 
@@ -24,6 +24,7 @@ use crate::server::{NFSService, NfsProtoImpl};
 
 /// Re-export for the binary crate.
 pub use server::export_manager;
+pub use server::state_recovery;
 
 pub struct NFSServer {
     bind: String,
@@ -31,6 +32,8 @@ pub struct NFSServer {
     service_0: Option<server::nfs40::NFS40Server>,
     boot_time: u64,
     session_manager: server::nfs41::SessionManager,
+    /// State directory for near-zero grace period recovery
+    state_dir: Option<std::path::PathBuf>,
 }
 
 impl NFSServer {
@@ -69,8 +72,64 @@ impl NFSServer {
         info!(%self.bind, "nextnfs NFSv4 server listening");
 
         let client_manager_handle = ClientManagerHandle::new();
+
+        // Near-zero grace period: restore client state from snapshot
+        if let Some(ref state_dir) = self.state_dir {
+            let recovery = server::state_recovery::StateRecovery::new(state_dir);
+            match recovery.load() {
+                Ok(snapshot) => {
+                    let count = client_manager_handle
+                        .restore_clients(snapshot.clients)
+                        .await;
+                    info!(
+                        clients_restored = count,
+                        "state recovery complete — grace period skipped"
+                    );
+                    recovery.clear();
+                }
+                Err(e) => {
+                    info!(reason = %e, "no state recovery — normal grace period applies");
+                }
+            }
+        }
+
         // Start background lease sweep for courteous server behavior
         ClientManagerHandle::start_lease_sweeper(client_manager_handle.clone());
+
+        // Start periodic state save task (every 30s) for near-zero grace period
+        if let Some(ref state_dir) = self.state_dir {
+            let cm_save = client_manager_handle.clone();
+            let save_dir = state_dir.clone();
+            let boot_time = self.boot_time;
+            tokio::spawn(async move {
+                let recovery = server::state_recovery::StateRecovery::new(&save_dir);
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+                loop {
+                    interval.tick().await;
+                    let clients = cm_save.get_all_clients().await;
+                    let mut snapshot =
+                        server::state_recovery::StateSnapshot::new(boot_time);
+                    snapshot.clients = clients
+                        .into_iter()
+                        .map(|c| server::state_recovery::ClientSnapshot {
+                            principal: c.principal,
+                            verifier: c.verifier,
+                            id: c.id,
+                            clientid: c.clientid,
+                            callback_program: c.callback.program,
+                            callback_rnetid: c.callback.rnetid,
+                            callback_raddr: c.callback.raddr,
+                            callback_ident: c.callback.callback_ident,
+                            confirmed: c.confirmed,
+                        })
+                        .collect();
+                    if let Err(e) = recovery.save(&snapshot) {
+                        warn!(error = %e, "failed to save state snapshot");
+                    }
+                }
+            });
+        }
+
         let export_manager = self.export_manager.clone();
 
         // Pre-resolve default file manager (first export) for the accept loop
@@ -178,6 +237,7 @@ impl NFSServer {
 pub struct ServerBuilder {
     bind: String,
     export_manager: Option<ExportManagerHandle>,
+    state_dir: Option<std::path::PathBuf>,
 }
 
 impl Default for ServerBuilder {
@@ -191,6 +251,7 @@ impl ServerBuilder {
         ServerBuilder {
             bind: "0.0.0.0:2049".to_string(),
             export_manager: None,
+            state_dir: None,
         }
     }
 
@@ -201,6 +262,11 @@ impl ServerBuilder {
 
     pub fn export_manager(&mut self, em: ExportManagerHandle) -> &mut Self {
         self.export_manager = Some(em);
+        self
+    }
+
+    pub fn state_dir(&mut self, dir: std::path::PathBuf) -> &mut Self {
+        self.state_dir = Some(dir);
         self
     }
 
@@ -216,6 +282,7 @@ impl ServerBuilder {
             service_0: Some(server::nfs40::NFS40Server::new()),
             boot_time,
             session_manager,
+            state_dir: self.state_dir.clone(),
         }
     }
 }

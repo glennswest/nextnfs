@@ -7,6 +7,7 @@ pub mod nfs42;
 pub mod operation;
 pub mod request;
 pub mod response;
+pub mod state_recovery;
 
 use async_trait::async_trait;
 
