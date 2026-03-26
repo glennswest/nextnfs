@@ -321,6 +321,39 @@ mod tests {
 
     #[tokio::test]
     #[traced_test]
+    async fn test_readdir_stale_cookieverf() {
+        // If cookie != 0 and cookieverf doesn't match, should return Nfs4errNotSame
+        let request = create_nfs40_server_with_root_fh(None).await;
+        // Create an entry so we have a non-trivial directory
+        let create_args = Create4args {
+            objtype: Createtype4::Nf4dir,
+            objname: "staledir".to_string(),
+            createattrs: Fattr4 {
+                attrmask: Attrlist4(vec![]),
+                attr_vals: Attrlist4(vec![]),
+            },
+        };
+        let response = create_args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+
+        let mut request = response.request;
+        let root_fh = request.file_manager().get_root_filehandle().await.unwrap();
+        request.set_filehandle(root_fh);
+
+        // Use a non-zero cookie with a fabricated verifier
+        let args = Readdir4args {
+            cookie: 3, // non-zero triggers verifier check
+            cookieverf: [0xFF; 8], // wrong verifier
+            dircount: 4096,
+            maxcount: 8192,
+            attr_request: Attrlist4(vec![FileAttr::Type]),
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4errNotSame);
+    }
+
+    #[tokio::test]
+    #[traced_test]
     async fn test_readdir_multiple_attrs() {
         let request = create_nfs40_server_with_root_fh(None).await;
         let create_args = Create4args {

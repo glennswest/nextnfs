@@ -110,4 +110,43 @@ mod integration_tests {
         let res_confirm_client3 = conf_client3.execute(res_confirm_client2.request).await;
         assert_eq!(res_confirm_client3.status, NfsStat4::Nfs4errStaleClientid);
     }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_confirm_wrong_verifier() {
+        // Set up a client, then try to confirm with wrong verifier
+        let request = create_nfs40_server(None).await;
+        let client1 = create_client(
+            [10, 20, 30, 40, 50, 60, 70, 80],
+            "Linux NFSv4.0 WRONG_VERF/127.0.0.1".to_string(),
+        );
+        let res = client1.execute(request).await;
+        let (client_id, _correct_confirm) = match res.result.unwrap() {
+            NfsResOp4::Opsetclientid(SetClientId4res::Resok4(resok)) => {
+                (resok.clientid, resok.setclientid_confirm)
+            }
+            _ => panic!("Expected Resok4"),
+        };
+
+        // Confirm with wrong verifier — should fail
+        let bad_confirm = SetClientIdConfirm4args {
+            clientid: client_id,
+            setclientid_confirm: [0xFF; 8], // wrong verifier
+        };
+        let res_bad = bad_confirm.execute(res.request).await;
+        assert_ne!(res_bad.status, NfsStat4::Nfs4Ok);
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_confirm_zero_clientid() {
+        // Client ID 0 was never registered — should get stale clientid
+        let request = create_nfs40_server(None).await;
+        let args = SetClientIdConfirm4args {
+            clientid: 0,
+            setclientid_confirm: [0; 8],
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4errStaleClientid);
+    }
 }

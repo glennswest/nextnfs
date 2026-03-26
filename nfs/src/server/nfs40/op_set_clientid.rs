@@ -132,4 +132,37 @@ mod integration_tests {
             _ => panic!("Expected Opsetclientid"),
         }
     }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_setclientid_different_verifier_same_id() {
+        // Same client id string but different verifier should still return same client_id
+        // (updated verifier for an existing client)
+        let request = create_nfs40_server(None).await;
+        let client_a = create_client(
+            [1, 2, 3, 4, 5, 6, 7, 8],
+            "Linux VERF_TEST/127.0.0.1".to_string(),
+        );
+        let client_b = create_client(
+            [10, 20, 30, 40, 50, 60, 70, 80],
+            "Linux VERF_TEST/127.0.0.1".to_string(),
+        );
+
+        let res_a = client_a.execute(request).await;
+        assert_eq!(res_a.status, NfsStat4::Nfs4Ok);
+        let id_a = match res_a.result.unwrap() {
+            NfsResOp4::Opsetclientid(SetClientId4res::Resok4(r)) => r.clientid,
+            _ => panic!("Expected Resok4"),
+        };
+
+        let res_b = client_b.execute(res_a.request).await;
+        assert_eq!(res_b.status, NfsStat4::Nfs4Ok);
+        let id_b = match res_b.result.unwrap() {
+            NfsResOp4::Opsetclientid(SetClientId4res::Resok4(r)) => r.clientid,
+            _ => panic!("Expected Resok4"),
+        };
+
+        // Same client identity string -> same client_id
+        assert_eq!(id_a, id_b);
+    }
 }

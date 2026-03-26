@@ -234,6 +234,80 @@ mod tests {
 
     #[tokio::test]
     #[traced_test]
+    async fn test_read_at_exact_eof() {
+        use crate::server::nfs40::{NfsResOp4, Read4res};
+        use std::io::Write;
+
+        let mut request = create_nfs40_server_with_root_fh(None).await;
+        let root_file = request.current_filehandle().unwrap().file.clone();
+        root_file.join("ateof.txt").unwrap().create_file().unwrap();
+        {
+            let mut f = root_file.join("ateof.txt").unwrap().append_file().unwrap();
+            f.write_all(b"short").unwrap();
+        }
+        let fh = request
+            .file_manager()
+            .get_filehandle_for_path("ateof.txt".to_string())
+            .await
+            .unwrap();
+        request.set_filehandle(fh);
+
+        // Read at the exact end of file (offset == file_size)
+        let args = Read4args {
+            stateid: Stateid4 { seqid: 0, other: [0u8; 12] },
+            offset: 5, // file is 5 bytes
+            count: 4096,
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        if let Some(NfsResOp4::Opread(Read4res::Resok4(resok))) = response.result {
+            assert!(resok.data.is_empty());
+            assert!(resok.eof);
+        } else {
+            panic!("Expected Read4res::Resok4");
+        }
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_read_zero_count() {
+        use crate::server::nfs40::{NfsResOp4, Read4res};
+        use std::io::Write;
+
+        let mut request = create_nfs40_server_with_root_fh(None).await;
+        let root_file = request.current_filehandle().unwrap().file.clone();
+        root_file.join("zerocount.txt").unwrap().create_file().unwrap();
+        {
+            let mut f = root_file.join("zerocount.txt").unwrap().append_file().unwrap();
+            f.write_all(b"content").unwrap();
+        }
+        let fh = request
+            .file_manager()
+            .get_filehandle_for_path("zerocount.txt".to_string())
+            .await
+            .unwrap();
+        request.set_filehandle(fh);
+
+        // Read with count=0
+        let args = Read4args {
+            stateid: Stateid4 { seqid: 0, other: [0u8; 12] },
+            offset: 0,
+            count: 0,
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        if let Some(NfsResOp4::Opread(Read4res::Resok4(resok))) = response.result {
+            assert!(resok.data.is_empty());
+            // offset 0 + 0 bytes = 0, which is < file_size, so eof=false
+            // Actually with count=0, read_size=0, bytes_read=0, 0+0=0 < 7, so not eof
+            assert!(!resok.eof);
+        } else {
+            panic!("Expected Read4res::Resok4");
+        }
+    }
+
+    #[tokio::test]
+    #[traced_test]
     async fn test_read_partial_count() {
         use crate::server::nfs40::{NfsResOp4, Read4res};
         use std::io::Write;

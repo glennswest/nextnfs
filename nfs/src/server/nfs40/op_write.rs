@@ -119,7 +119,7 @@ mod tests {
             nfs40::{NfsStat4, Stateid4, StableHow4, Write4args},
             operation::NfsOperation,
         },
-        test_utils::create_nfs40_server,
+        test_utils::{create_nfs40_server, create_nfs40_server_with_root_fh},
     };
     use tracing_test::traced_test;
 
@@ -203,6 +203,102 @@ mod tests {
         if let Some(NfsResOp4::Opwrite(Write4res::Resok4(resok))) = response.result {
             assert_eq!(resok.count, 12);
             assert_eq!(resok.committed, StableHow4::Unstable4);
+        } else {
+            panic!("Expected Write4res::Resok4");
+        }
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_write_empty_data() {
+        use crate::server::nfs40::{NfsResOp4, Write4res};
+
+        let mut request = create_nfs40_server_with_root_fh(None).await;
+        let root_file = request.current_filehandle().unwrap().file.clone();
+        root_file.join("empty_write.txt").unwrap().create_file().unwrap();
+        let fh = request
+            .file_manager()
+            .get_filehandle_for_path("empty_write.txt".to_string())
+            .await
+            .unwrap();
+        request.set_filehandle(fh);
+
+        // Write zero bytes
+        let args = Write4args {
+            stateid: Stateid4 { seqid: 0, other: [0u8; 12] },
+            offset: 0,
+            stable: StableHow4::FileSync4,
+            data: vec![],
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        if let Some(NfsResOp4::Opwrite(Write4res::Resok4(resok))) = response.result {
+            assert_eq!(resok.count, 0);
+        } else {
+            panic!("Expected Write4res::Resok4");
+        }
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_write_data_sync() {
+        use crate::server::nfs40::{NfsResOp4, Write4res};
+        use crate::test_utils::create_nfs40_server_with_root_fh;
+
+        let mut request = create_nfs40_server_with_root_fh(None).await;
+        let root_file = request.current_filehandle().unwrap().file.clone();
+        root_file.join("dsync.txt").unwrap().create_file().unwrap();
+        let fh = request
+            .file_manager()
+            .get_filehandle_for_path("dsync.txt".to_string())
+            .await
+            .unwrap();
+        request.set_filehandle(fh);
+
+        // DataSync4 should go through the file-sync path (not Unstable4 cache path)
+        let args = Write4args {
+            stateid: Stateid4 { seqid: 0, other: [0u8; 12] },
+            offset: 0,
+            stable: StableHow4::DataSync4,
+            data: b"data sync write".to_vec(),
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        if let Some(NfsResOp4::Opwrite(Write4res::Resok4(resok))) = response.result {
+            assert_eq!(resok.count, 15);
+            assert_eq!(resok.committed, StableHow4::FileSync4);
+        } else {
+            panic!("Expected Write4res::Resok4");
+        }
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_write_at_offset() {
+        use crate::server::nfs40::{NfsResOp4, Write4res};
+        use crate::test_utils::create_nfs40_server_with_root_fh;
+
+        let mut request = create_nfs40_server_with_root_fh(None).await;
+        let root_file = request.current_filehandle().unwrap().file.clone();
+        root_file.join("offsetw.txt").unwrap().create_file().unwrap();
+        let fh = request
+            .file_manager()
+            .get_filehandle_for_path("offsetw.txt".to_string())
+            .await
+            .unwrap();
+        request.set_filehandle(fh);
+
+        // Write at offset 10
+        let args = Write4args {
+            stateid: Stateid4 { seqid: 0, other: [0u8; 12] },
+            offset: 10,
+            stable: StableHow4::FileSync4,
+            data: b"offset data".to_vec(),
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        if let Some(NfsResOp4::Opwrite(Write4res::Resok4(resok))) = response.result {
+            assert_eq!(resok.count, 11);
         } else {
             panic!("Expected Write4res::Resok4");
         }

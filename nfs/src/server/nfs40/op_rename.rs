@@ -243,6 +243,73 @@ mod tests {
 
     #[tokio::test]
     #[traced_test]
+    async fn test_rename_no_current_fh() {
+        use crate::test_utils::create_nfs40_server;
+        // No filehandles at all — saved_fh check fails first
+        let request = create_nfs40_server(None).await;
+        let args = Rename4args {
+            oldname: "a".to_string(),
+            newname: "b".to_string(),
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4errNofilehandle);
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_rename_cross_directory() {
+        // Rename a dir from root into a subdirectory
+        let request = create_nfs40_server_with_root_fh(None).await;
+
+        // Create target directory
+        let create_target = Create4args {
+            objtype: Createtype4::Nf4dir,
+            objname: "targetdir".to_string(),
+            createattrs: Fattr4 {
+                attrmask: Attrlist4(vec![]),
+                attr_vals: Attrlist4(vec![]),
+            },
+        };
+        let response = create_target.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+
+        // Reset to root, create source
+        let mut request = response.request;
+        let root_fh = request.file_manager().get_root_filehandle().await.unwrap();
+        request.set_filehandle(root_fh);
+
+        let create_source = Create4args {
+            objtype: Createtype4::Nf4dir,
+            objname: "moveme".to_string(),
+            createattrs: Fattr4 {
+                attrmask: Attrlist4(vec![]),
+                attr_vals: Attrlist4(vec![]),
+            },
+        };
+        let response = create_source.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+
+        // Save root as source dir, set target as current dir
+        let mut request = response.request;
+        let root_fh = request.file_manager().get_root_filehandle().await.unwrap();
+        request.set_filehandle(root_fh);
+        request.save_filehandle(); // saved = root (source)
+
+        let target_fh = request.file_manager()
+            .get_filehandle_for_path("targetdir".to_string())
+            .await.unwrap();
+        request.set_filehandle(target_fh); // current = targetdir
+
+        let args = Rename4args {
+            oldname: "moveme".to_string(),
+            newname: "moved".to_string(),
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+    }
+
+    #[tokio::test]
+    #[traced_test]
     async fn test_rename_returns_change_info() {
         use crate::server::nfs40::{NfsResOp4, Rename4res};
         let request = create_nfs40_server_with_root_fh(None).await;

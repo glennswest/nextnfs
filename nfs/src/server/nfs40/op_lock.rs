@@ -168,6 +168,81 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_read_locks_dont_conflict() {
+        // Two read locks on overlapping ranges should both succeed
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let args1 = Lock4args {
+            locktype: NfsLockType4::ReadLt,
+            reclaim: false,
+            offset: 0,
+            length: 100,
+            locker: Locker4::OpenOwner(OpenToLockOwner4 {
+                open_seqid: 1,
+                open_stateid: Stateid4 { seqid: 0, other: [0; 12] },
+                lock_seqid: 1,
+                lock_owner: LockOwner4 { clientid: 1, owner: b"reader1".to_vec() },
+            }),
+        };
+        let response1 = args1.execute(request).await;
+        assert_eq!(response1.status, NfsStat4::Nfs4Ok);
+
+        let args2 = Lock4args {
+            locktype: NfsLockType4::ReadLt,
+            reclaim: false,
+            offset: 50,
+            length: 100,
+            locker: Locker4::OpenOwner(OpenToLockOwner4 {
+                open_seqid: 1,
+                open_stateid: Stateid4 { seqid: 0, other: [0; 12] },
+                lock_seqid: 1,
+                lock_owner: LockOwner4 { clientid: 2, owner: b"reader2".to_vec() },
+            }),
+        };
+        let response2 = args2.execute(response1.request).await;
+        assert_eq!(response2.status, NfsStat4::Nfs4Ok);
+    }
+
+    #[tokio::test]
+    async fn test_lock_with_existing_lock_owner() {
+        use nextnfs_proto::nfs4_proto::ExistLockOwner4;
+
+        let request = create_nfs40_server_with_root_fh(None).await;
+        // First acquire a lock via OpenOwner
+        let args1 = Lock4args {
+            locktype: NfsLockType4::WriteLt,
+            reclaim: false,
+            offset: 0,
+            length: 50,
+            locker: Locker4::OpenOwner(OpenToLockOwner4 {
+                open_seqid: 1,
+                open_stateid: Stateid4 { seqid: 0, other: [0; 12] },
+                lock_seqid: 1,
+                lock_owner: LockOwner4 { clientid: 1, owner: b"lockowner".to_vec() },
+            }),
+        };
+        let response1 = args1.execute(request).await;
+        assert_eq!(response1.status, NfsStat4::Nfs4Ok);
+        let stateid1 = match &response1.result {
+            Some(NfsResOp4::Oplock(Lock4res::Resok4(resok))) => resok.lock_stateid.clone(),
+            _ => panic!("Expected Lock4res::Resok4"),
+        };
+
+        // Use LockOwner variant for a second lock on non-overlapping range
+        let args2 = Lock4args {
+            locktype: NfsLockType4::WriteLt,
+            reclaim: false,
+            offset: 100,
+            length: 50,
+            locker: Locker4::LockOwner(ExistLockOwner4 {
+                lock_stateid: stateid1,
+                lock_seqid: 2,
+            }),
+        };
+        let response2 = args2.execute(response1.request).await;
+        assert_eq!(response2.status, NfsStat4::Nfs4Ok);
+    }
+
+    #[tokio::test]
     async fn test_lock_conflict_returns_denied() {
         let request = create_nfs40_server_with_root_fh(None).await;
         // First lock — write lock from client 1

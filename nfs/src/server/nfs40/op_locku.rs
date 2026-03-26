@@ -58,6 +58,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_locku_nonexistent_lock_returns_bad_stateid() {
+        // Unlock with a completely fabricated stateid should return Nfs4errBadStateid
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let args = Locku4args {
+            locktype: NfsLockType4::WriteLt,
+            seqid: 1,
+            lock_stateid: Stateid4 {
+                seqid: 99,
+                other: [0xFF; 12],
+            },
+            offset: 0,
+            length: 100,
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4errBadStateid);
+    }
+
+    #[tokio::test]
     async fn test_locku_valid_unlock() {
         use crate::server::filemanager::LockResult;
         let request = create_nfs40_server_with_root_fh(None).await;

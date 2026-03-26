@@ -39,12 +39,28 @@ impl NfsOperation for Renew4args {
 mod integration_tests {
     use crate::{
         server::{
-            nfs40::{NfsResOp4, NfsStat4, Renew4args, SetClientId4res, SetClientIdConfirm4args},
+            nfs40::{NfsResOp4, NfsStat4, Renew4args, Renew4res, SetClientId4res, SetClientIdConfirm4args},
             operation::NfsOperation,
         },
         test_utils::{create_client, create_nfs40_server},
     };
     use tracing_test::traced_test;
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_renew_unknown_client() {
+        // Renewing a client that was never registered returns stale clientid
+        let request = create_nfs40_server(None).await;
+        let args = Renew4args { clientid: 999 };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4errStaleClientid);
+        match &response.result {
+            Some(NfsResOp4::Oprenew(Renew4res { status })) => {
+                assert_eq!(*status, NfsStat4::Nfs4errStaleClientid);
+            }
+            other => panic!("Expected Oprenew with error status, got {:?}", other),
+        }
+    }
 
     #[tokio::test]
     #[traced_test]
