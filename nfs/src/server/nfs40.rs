@@ -14,6 +14,7 @@ mod op_lockt;
 mod op_locku;
 mod op_lookup;
 mod op_open;
+mod op_open_downgrade;
 mod op_openconfirm;
 pub mod op_pseudo;
 mod op_putfh;
@@ -24,6 +25,7 @@ mod op_release_lockowner;
 mod op_remove;
 mod op_rename;
 mod op_renew;
+mod op_secinfo;
 mod op_set_clientid;
 mod op_set_clientid_confirm;
 mod op_setattr;
@@ -354,8 +356,8 @@ impl NfsProtoImpl for NFS40Server {
 
                         // misc not yet supported
                         NfsArgOp::Opopenattr(_) => self.operation_not_supported(request),
-                        NfsArgOp::OpopenDowngrade(_) => self.operation_not_supported(request),
-                        NfsArgOp::OpSecinfo(_) => self.operation_not_supported(request),
+                        NfsArgOp::OpopenDowngrade(args) => args.execute(request).await,
+                        NfsArgOp::OpSecinfo(args) => args.execute(request).await,
 
                         // NFSv4.1/v4.2 ops — handled properly in compound() version routing
                         _ => self.operation_not_supported(request),

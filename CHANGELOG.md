@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Added
+- SECINFO operation (RFC 7530 S16.31) — returns AUTH_SYS and AUTH_NONE security flavors for client security negotiation
+- OPEN_DOWNGRADE operation (RFC 7530 S16.19) — reduces open share access/deny modes without closing the file
+- SeCinfo4 proto type extended with AuthNone and AuthSys variants for proper XDR encoding
+- Proto OpenDowngrade4args, OpenDowngrade4resok, SecInfo4args fields now public
+- 379 workspace tests (52 proto + 321 server + 6 nfstest), 0 clippy warnings
+
 ## [v0.9.0] — 2026-03-26
 
 ### Added

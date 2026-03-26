@@ -1143,15 +1143,15 @@ pub enum OpenConfirm4res {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct OpenDowngrade4args {
     /* CURRENT_FH: opened file */
-    open_stateid: Stateid4,
-    seqid: Seqid4,
-    share_access: u32,
-    share_deny: u32,
+    pub open_stateid: Stateid4,
+    pub seqid: Seqid4,
+    pub share_access: u32,
+    pub share_deny: u32,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct OpenDowngrade4resok {
-    open_stateid: Stateid4,
+    pub open_stateid: Stateid4,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1311,7 +1311,7 @@ pub struct SaveFh4res {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SecInfo4args {
     /* CURRENT_FH: directory */
-    name: Component4,
+    pub name: Component4,
 }
 
 /*
@@ -1334,8 +1334,11 @@ pub struct RpcSecGssInfo {
 
 /* RPCSEC_GSS has a value of '6'.  See RFC 2203 */
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[repr(u32)]
 pub enum SeCinfo4 {
-    FlavorInfo(RpcSecGssInfo),
+    AuthNone = 0,
+    AuthSys = 1,
+    FlavorInfo(RpcSecGssInfo) = 6,
 }
 
 type SecInfo4resok = Vec<SeCinfo4>;
