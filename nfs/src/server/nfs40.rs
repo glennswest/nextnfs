@@ -1966,4 +1966,168 @@ mod tests {
             other => panic!("Expected Opgetattr Resok4, got {:?}", other),
         }
     }
+
+    #[tokio::test]
+    async fn test_workflow_unstable_write_then_commit() {
+        // Unstable write → COMMIT lifecycle (write cache path)
+        use crate::server::nfs40::{
+            Commit4args, Commit4res, Write4args, Write4res,
+        };
+        use crate::server::operation::NfsOperation;
+        use nextnfs_proto::nfs4_proto::CreateHow4;
+
+        let request = create_nfs40_server_with_root_fh(None).await;
+
+        // OPEN with create — need a file with write cache support
+        let open_args = Open4args {
+            seqid: 1,
+            share_access: 2, // WRITE
+            share_deny: 0,
+            owner: OpenOwner4 { clientid: 1, owner: b"commit_owner".to_vec() },
+            openhow: OpenFlag4::How(CreateHow4::UNCHECKED4(Fattr4 {
+                attrmask: Attrlist4(vec![]),
+                attr_vals: Attrlist4(vec![]),
+            })),
+            claim: OpenClaim4::ClaimNull("commit_test.txt".to_string()),
+        };
+        let response = open_args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        let request = response.request;
+
+        // Unstable write — goes to write cache
+        let write_args = Write4args {
+            stateid: Stateid4 { seqid: 0, other: [0u8; 12] },
+            offset: 0,
+            stable: StableHow4::Unstable4,
+            data: b"cached data for commit".to_vec(),
+        };
+        let response = write_args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        match &response.result {
+            Some(NfsResOp4::Opwrite(Write4res::Resok4(resok))) => {
+                assert_eq!(resok.committed, StableHow4::Unstable4);
+            }
+            other => panic!("Expected Write4res::Resok4, got {:?}", other),
+        }
+        let request = response.request;
+
+        // COMMIT — flush write cache to disk
+        let commit_args = Commit4args { offset: 0, count: 0 };
+        let response = commit_args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        match &response.result {
+            Some(NfsResOp4::Opcommit(Commit4res::Resok4(resok))) => {
+                assert_ne!(resok.writeverf, [0u8; 8]);
+            }
+            other => panic!("Expected Commit4res::Resok4, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_workflow_create_lookup_remove_verify() {
+        // CREATE → LOOKUP (exists) → REMOVE → LOOKUP (gone)
+        use crate::server::nfs40::{Lookup4args, Remove4args};
+        use crate::server::operation::NfsOperation;
+
+        let request = create_nfs40_server_with_root_fh(None).await;
+
+        // CREATE
+        let create_args = Create4args {
+            objtype: Createtype4::Nf4dir,
+            objname: "verify_dir".to_string(),
+            createattrs: Fattr4 {
+                attrmask: Attrlist4(vec![]),
+                attr_vals: Attrlist4(vec![]),
+            },
+        };
+        let response = create_args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+
+        // Reset to root
+        let mut request = response.request;
+        let root_fh = request.file_manager().get_root_filehandle().await.unwrap();
+        request.set_filehandle(root_fh);
+
+        // LOOKUP — should find it
+        let lookup = Lookup4args { objname: "verify_dir".to_string() };
+        let response = lookup.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+
+        // Reset to root for REMOVE
+        let mut request = response.request;
+        let root_fh = request.file_manager().get_root_filehandle().await.unwrap();
+        request.set_filehandle(root_fh);
+
+        // REMOVE
+        let remove = Remove4args { target: "verify_dir".to_string() };
+        let response = remove.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+
+        // Reset to root for second LOOKUP
+        let mut request = response.request;
+        let root_fh = request.file_manager().get_root_filehandle().await.unwrap();
+        request.set_filehandle(root_fh);
+
+        // LOOKUP — should be gone now
+        let lookup2 = Lookup4args { objname: "verify_dir".to_string() };
+        let response = lookup2.execute(request).await;
+        assert_ne!(response.status, NfsStat4::Nfs4Ok);
+    }
+
+    #[tokio::test]
+    async fn test_workflow_open_close_reopen() {
+        // OPEN → CLOSE → re-OPEN (verify file persists)
+        use crate::server::nfs40::{
+            Close4args, Open4args, Open4res,
+        };
+        use crate::server::operation::NfsOperation;
+        use nextnfs_proto::nfs4_proto::CreateHow4;
+
+        let request = create_nfs40_server_with_root_fh(None).await;
+
+        // OPEN create
+        let open_args = Open4args {
+            seqid: 1,
+            share_access: 2,
+            share_deny: 0,
+            owner: OpenOwner4 { clientid: 1, owner: b"reopen".to_vec() },
+            openhow: OpenFlag4::How(CreateHow4::UNCHECKED4(Fattr4 {
+                attrmask: Attrlist4(vec![]),
+                attr_vals: Attrlist4(vec![]),
+            })),
+            claim: OpenClaim4::ClaimNull("reopen.txt".to_string()),
+        };
+        let response = open_args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        let stateid = match &response.result {
+            Some(NfsResOp4::Opopen(Open4res::Resok4(resok))) => resok.stateid.clone(),
+            other => panic!("Expected Open4res::Resok4, got {:?}", other),
+        };
+        let request = response.request;
+
+        // CLOSE
+        let close_args = Close4args {
+            seqid: 1,
+            open_stateid: stateid,
+        };
+        let response = close_args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+
+        // Reset to root for re-OPEN
+        let mut request = response.request;
+        let root_fh = request.file_manager().get_root_filehandle().await.unwrap();
+        request.set_filehandle(root_fh);
+
+        // Re-OPEN for reading — file should still exist
+        let reopen = Open4args {
+            seqid: 2,
+            share_access: 1, // READ
+            share_deny: 0,
+            owner: OpenOwner4 { clientid: 1, owner: b"reopen".to_vec() },
+            openhow: OpenFlag4::Open4Nocreate,
+            claim: OpenClaim4::ClaimNull("reopen.txt".to_string()),
+        };
+        let response = reopen.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+    }
 }
