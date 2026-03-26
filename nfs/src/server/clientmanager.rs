@@ -297,10 +297,17 @@ impl ClientManager {
 
         match new_confirmed {
             Some(new_confirmed) => {
-                db.modify_by_setclientid_confirm(&new_confirmed.setclientid_confirm, |c| {
-                    c.confirmed = true;
-                });
-                Ok(new_confirmed)
+                // Safe pattern: remove by unique key, mutate, re-insert
+                // (avoids multi_index_map modify_by_* reindex panics)
+                let token = new_confirmed.setclientid_confirm;
+                if let Some(mut entry) = db.remove_by_setclientid_confirm(&token) {
+                    entry.confirmed = true;
+                    let result = entry.clone();
+                    db.insert(entry);
+                    Ok(result)
+                } else {
+                    Ok(new_confirmed)
+                }
             }
             None => Err(ClientManagerError {
                 nfs_error: NfsStat4::Nfs4errStaleClientid,
@@ -337,10 +344,21 @@ impl ClientManager {
         }
 
         // Renew: update last_renewed and clear courtesy flag
-        db.modify_by_clientid(&client_id, |c| {
-            c.last_renewed = Instant::now();
-            c.courtesy = false;
-        });
+        // Safe pattern: collect entries, remove, mutate, re-insert
+        // (avoids multi_index_map modify_by_* reindex panics)
+        let to_renew: Vec<ClientEntry> = db
+            .get_by_clientid(&client_id)
+            .into_iter()
+            .cloned()
+            .collect();
+        for entry in to_renew {
+            let token = entry.setclientid_confirm;
+            if let Some(mut e) = db.remove_by_setclientid_confirm(&token) {
+                e.last_renewed = Instant::now();
+                e.courtesy = false;
+                db.insert(e);
+            }
+        }
 
         Ok(())
     }
@@ -371,11 +389,20 @@ impl ClientManager {
             }
         }
 
-        // Mark courtesy clients
+        // Mark courtesy clients — safe remove+modify+insert pattern
         for cid in &courtesy_clients {
-            db.modify_by_clientid(cid, |c| {
-                c.courtesy = true;
-            });
+            let entries: Vec<ClientEntry> = db
+                .get_by_clientid(cid)
+                .into_iter()
+                .cloned()
+                .collect();
+            for entry in entries {
+                let token = entry.setclientid_confirm;
+                if let Some(mut e) = db.remove_by_setclientid_confirm(&token) {
+                    e.courtesy = true;
+                    db.insert(e);
+                }
+            }
             debug!(clientid = cid, "client lease expired, entering courtesy state");
         }
 
@@ -710,7 +737,21 @@ impl ClientManagerHandle {
 /// Learn more: https://ryhl.io/blog/actors-with-tokio/
 async fn run_client_manager(mut actor: ClientManager) {
     while let Some(msg) = actor.receiver.recv().await {
-        actor.handle_message(msg);
+        // Catch panics to keep the actor alive — a panic in one message
+        // handler should not kill the entire client manager.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            actor.handle_message(msg);
+        }));
+        if let Err(e) = result {
+            let msg = if let Some(s) = e.downcast_ref::<&str>() {
+                s.to_string()
+            } else if let Some(s) = e.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "unknown panic".to_string()
+            };
+            error!("client manager panic caught (actor stays alive): {}", msg);
+        }
     }
 }
 

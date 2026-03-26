@@ -362,7 +362,7 @@ start_nextnfs() {
     echo "  Export: $NEXTNFS_EXPORT_DIR"
     echo "  Listen: 127.0.0.1:$NEXTNFS_PORT"
 
-    RUST_LOG=debug "$NEXTNFS_BIN" \
+    RUST_LOG=debug RUST_BACKTRACE=1 "$NEXTNFS_BIN" \
         --export "$NEXTNFS_EXPORT_DIR" \
         --listen "127.0.0.1:$NEXTNFS_PORT" \
         --api-listen "127.0.0.1:8090" \
