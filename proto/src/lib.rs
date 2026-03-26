@@ -193,8 +193,22 @@ pub fn from_bytes(buffer: Vec<u8>) -> Result<RpcCallMsg, anyhow::Error> {
         let pos = cursor.position() as usize;
         let remaining = &buffer[pos..];
         let mut args_cursor = Cursor::new(remaining.to_vec());
-        let compound: nfs4_proto::Compound4args = from_reader(&mut args_cursor)?;
-        Some(compound)
+        match from_reader::<_, nfs4_proto::Compound4args>(&mut args_cursor) {
+            Ok(compound) => Some(compound),
+            Err(e) => {
+                let hex_preview: String = remaining.iter().take(64)
+                    .map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(" ");
+                tracing::error!(
+                    proc = proc_num,
+                    prog = prog,
+                    vers = vers,
+                    remaining_len = remaining.len(),
+                    hex = %hex_preview,
+                    "compound deserialization failed: {}", e
+                );
+                anyhow::bail!("failed to deserialize compound args: {}", e);
+            }
+        }
     };
 
     Ok(RpcCallMsg {
