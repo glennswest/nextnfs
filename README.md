@@ -4,7 +4,7 @@ High-performance standalone NFSv4.0 server over a real filesystem. Runs as a sta
 
 ## Features
 
-- **NFSv4.0** — full compound operations, OPEN/CLOSE, READ/WRITE/COMMIT, READDIR, READLINK, CREATE, REMOVE, RENAME
+- **NFSv4.0** — full compound operations, OPEN/CLOSE/OPEN_DOWNGRADE, READ/WRITE/COMMIT, READDIR, READLINK, CREATE, REMOVE, RENAME, VERIFY/NVERIFY, SECINFO
 - **Multi-export** — serve multiple filesystem paths as separate NFS exports
 - **Pseudo-filesystem root** — NFSv4 namespace with exports as top-level directories
 - **REST API** — manage exports, view stats, health checks (axum on port 8080)
