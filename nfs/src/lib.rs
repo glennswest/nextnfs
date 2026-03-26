@@ -15,7 +15,7 @@ use socket2::{SockRef, TcpKeepalive};
 use tokio::net::TcpListener;
 use tokio_stream::StreamExt;
 use tokio_util::codec::Framed;
-use tracing::{error, info, span, trace, warn, Level};
+use tracing::{error, info, span, warn, Level};
 pub use vfs;
 pub use vfs::VfsPath;
 
@@ -176,6 +176,11 @@ impl NFSServer {
                             let msg = nfs_transport.next().await;
                             match msg {
                                 Some(Ok(msg)) => {
+                                    let proc = match &msg.body {
+                                        nextnfs_proto::rpc_proto::MsgType::Call(cb) => cb.proc,
+                                        _ => u32::MAX,
+                                    };
+                                    info!(%addr, xid = msg.xid, proc, "RPC message received");
                                     let request = NfsRequest::new(
                                         addr.to_string(),
                                         cm.clone(),
@@ -189,18 +194,20 @@ impl NFSServer {
                                     let service = NFSService::new(nfs_protocol.clone());
 
                                     let resp = service.call(msg, request).await;
+                                    info!(%addr, xid = resp.xid, "RPC response sending");
                                     match nfs_transport.send(resp).await {
                                         Ok(_) => {
-                                            trace!("response sent");
+                                            info!(%addr, "RPC response sent");
                                         }
                                         Err(e) => {
-                                            error!("couldn't send response: {:?}", e);
+                                            error!(%addr, "couldn't send response: {:?}", e);
                                             break;
                                         }
                                     }
                                 }
                                 Some(Err(e)) => {
-                                    error!("couldn't get message: {:?}", e);
+                                    error!(%addr, "couldn't get message: {:?}", e);
+                                    // Send GarbageArgs but don't break — let the client retry
                                     let resp = Box::new(nextnfs_proto::rpc_proto::RpcReplyMsg {
                                         xid: 0,
                                         body: nextnfs_proto::rpc_proto::MsgType::Reply(
@@ -212,10 +219,10 @@ impl NFSServer {
                                     });
                                     match nfs_transport.send(resp).await {
                                         Ok(_) => {
-                                            trace!("response sent");
+                                            info!(%addr, "GarbageArgs response sent");
                                         }
                                         Err(e) => {
-                                            error!("couldn't send response: {:?}", e);
+                                            error!(%addr, "couldn't send GarbageArgs: {:?}", e);
                                             break;
                                         }
                                     }

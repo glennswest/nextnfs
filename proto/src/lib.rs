@@ -68,6 +68,11 @@ impl Decoder for XDRProtoCodec {
             message_data.extend_from_slice(&fragment[..]);
         }
 
+        tracing::info!(
+            total_len = message_data.len(),
+            is_last = is_last,
+            "RPC record assembled"
+        );
         RpcCallMsg::from_bytes(message_data)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
             .map(Some)

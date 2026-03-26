@@ -395,10 +395,12 @@ start_nextnfs() {
         fail "failed to mount nextnfs"
         echo "--- mount debug ---"
         echo "  port: $NEXTNFS_PORT"
-        echo "  server log (last 30 lines):"
-        tail -30 /tmp/nextnfs-test.log 2>/dev/null || true
+        sleep 2  # Wait for server to flush logs
+        echo "  server log (last 60 lines):"
+        tail -60 /tmp/nextnfs-test.log 2>/dev/null || true
         echo "--- end ---"
-        return 1
+        # Don't return — try wire tests directly
+        echo "  Attempting wire tests without mount..."
     fi
 }
 
@@ -693,10 +695,20 @@ main() {
 
     phase 4 "Test: nextnfs"
 
+    # start_nextnfs starts the server and tries to mount
+    # Wire tests work without mount (they use nextnfstest directly)
+    # Shell/perf tests require mount
     if start_nextnfs; then
         run_wire_tests 127.0.0.1 "$NEXTNFS_PORT" "nextnfs" "$RESULTS_DIR/nextnfs/wire"
-        run_shell_tests "$NEXTNFS_MOUNT" "$NEXTNFS_PORT" "nextnfs" "nextnfs"
-        run_perf_tests "$NEXTNFS_MOUNT" "$NEXTNFS_PORT" "nextnfs" "nextnfs"
+        if mountpoint -q "$NEXTNFS_MOUNT" 2>/dev/null; then
+            run_shell_tests "$NEXTNFS_MOUNT" "$NEXTNFS_PORT" "nextnfs" "nextnfs"
+            run_perf_tests "$NEXTNFS_MOUNT" "$NEXTNFS_PORT" "nextnfs" "nextnfs"
+        else
+            echo "  Skipping shell/perf tests — mount not available (container?)"
+        fi
+        # Show final server log state
+        echo "  server log (last 20 lines):"
+        tail -20 /tmp/nextnfs-test.log 2>/dev/null || true
         stop_nextnfs
     else
         echo "  Skipping nextnfs tests — server failed to start"
