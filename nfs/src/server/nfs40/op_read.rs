@@ -1,4 +1,5 @@
 use std::io::{Read, Seek, SeekFrom};
+use std::sync::atomic::Ordering;
 
 use async_trait::async_trait;
 use tracing::{debug, error};
@@ -64,6 +65,12 @@ impl NfsOperation for Read4args {
 
                 buffer.truncate(bytes_read);
                 let eof = (self.offset + bytes_read as u64) >= file_size;
+
+                // Update per-export read stats
+                if let Some(stats) = request.export_stats() {
+                    stats.reads.fetch_add(1, Ordering::Relaxed);
+                    stats.bytes_read.fetch_add(bytes_read as u64, Ordering::Relaxed);
+                }
 
                 NfsOpResponse {
                     request,

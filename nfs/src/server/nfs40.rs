@@ -1,7 +1,55 @@
+use std::sync::atomic::Ordering;
+
 use async_trait::async_trait;
+use tracing::info;
 
 use super::{operation::NfsOperation, request::NfsRequest, response::NfsOpResponse};
 use nextnfs_proto::{nfs4_proto::*, rpc_proto::*};
+
+/// Extract a short operation name from an NfsArgOp for audit logging.
+fn op_name(arg: &NfsArgOp) -> &'static str {
+    match arg {
+        NfsArgOp::OpUndef0 | NfsArgOp::OpUndef1 | NfsArgOp::OpUndef2 => "UNDEF",
+        NfsArgOp::OpAccess(_) => "ACCESS",
+        NfsArgOp::Opclose(_) => "CLOSE",
+        NfsArgOp::Opcommit(_) => "COMMIT",
+        NfsArgOp::Opcreate(_) => "CREATE",
+        NfsArgOp::Opdelegpurge(_) => "DELEGPURGE",
+        NfsArgOp::Opdelegreturn(_) => "DELEGRETURN",
+        NfsArgOp::Opgetattr(_) => "GETATTR",
+        NfsArgOp::Opgetfh(_) => "GETFH",
+        NfsArgOp::Oplink(_) => "LINK",
+        NfsArgOp::Oplock(_) => "LOCK",
+        NfsArgOp::Oplockt(_) => "LOCKT",
+        NfsArgOp::Oplocku(_) => "LOCKU",
+        NfsArgOp::Oplookup(_) => "LOOKUP",
+        NfsArgOp::Oplookupp(_) => "LOOKUPP",
+        NfsArgOp::Opnverify(_) => "NVERIFY",
+        NfsArgOp::Opopen(_) => "OPEN",
+        NfsArgOp::Opopenattr(_) => "OPENATTR",
+        NfsArgOp::OpopenConfirm(_) => "OPEN_CONFIRM",
+        NfsArgOp::OpopenDowngrade(_) => "OPEN_DOWNGRADE",
+        NfsArgOp::Opputfh(_) => "PUTFH",
+        NfsArgOp::Opputpubfh(_) => "PUTPUBFH",
+        NfsArgOp::Opputrootfh(_) => "PUTROOTFH",
+        NfsArgOp::Opread(_) => "READ",
+        NfsArgOp::Opreaddir(_) => "READDIR",
+        NfsArgOp::Opreadlink(_) => "READLINK",
+        NfsArgOp::Opremove(_) => "REMOVE",
+        NfsArgOp::Oprename(_) => "RENAME",
+        NfsArgOp::Oprenew(_) => "RENEW",
+        NfsArgOp::Oprestorefh(_) => "RESTOREFH",
+        NfsArgOp::Opsavefh(_) => "SAVEFH",
+        NfsArgOp::OpSecinfo(_) => "SECINFO",
+        NfsArgOp::Opsetattr(_) => "SETATTR",
+        NfsArgOp::Opsetclientid(_) => "SETCLIENTID",
+        NfsArgOp::OpsetclientidConfirm(_) => "SETCLIENTID_CONFIRM",
+        NfsArgOp::Opverify(_) => "VERIFY",
+        NfsArgOp::Opwrite(_) => "WRITE",
+        NfsArgOp::OpreleaseLockOwner(_) => "RELEASE_LOCKOWNER",
+        _ => "UNKNOWN",
+    }
+}
 
 mod op_access;
 mod op_close;
@@ -300,6 +348,7 @@ impl NfsProtoImpl for NFS40Server {
 
                 let mut resarray = Vec::with_capacity(args.argarray.len());
                 for arg in args.argarray {
+                    let operation = op_name(&arg);
                     let response = match arg {
                         // undefined ops
                         NfsArgOp::OpUndef0 | NfsArgOp::OpUndef1 | NfsArgOp::OpUndef2 => {
@@ -363,7 +412,28 @@ impl NfsProtoImpl for NFS40Server {
                         _ => self.operation_not_supported(request),
                     };
                     let res = response.result;
-                    last_status = response.status;
+                    last_status = response.status.clone();
+
+                    // Per-client audit log — structured tracing for all operations
+                    let client = response.request.client_addr().clone();
+                    let export_id = response.request.current_export_id();
+                    let path = response.request.current_filehandle()
+                        .map(|fh| fh.path.as_str())
+                        .unwrap_or("-");
+                    info!(
+                        client = %client,
+                        op = operation,
+                        status = ?last_status,
+                        export = ?export_id,
+                        path = path,
+                        "nfs_audit"
+                    );
+
+                    // Increment per-export ops counter
+                    if let Some(stats) = response.request.export_stats() {
+                        stats.ops.fetch_add(1, Ordering::Relaxed);
+                    }
+
                     if let Some(res) = res {
                         resarray.push(res);
                     } else {

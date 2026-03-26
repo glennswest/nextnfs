@@ -1,4 +1,5 @@
 use std::io::{Seek, SeekFrom, Write};
+use std::sync::atomic::Ordering;
 
 use async_trait::async_trait;
 use tracing::{debug, error};
@@ -97,6 +98,12 @@ impl NfsOperation for Write4args {
                 }
                 request.file_manager().touch_file(filehandle.id).await;
             }
+        }
+
+        // Update per-export write stats
+        if let Some(stats) = request.export_stats() {
+            stats.writes.fetch_add(1, Ordering::Relaxed);
+            stats.bytes_written.fetch_add(count as u64, Ordering::Relaxed);
         }
 
         let boot_time = request.boot_time;

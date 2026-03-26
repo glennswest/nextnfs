@@ -1,11 +1,11 @@
-use std::{collections::HashMap, time::SystemTime};
+use std::{collections::HashMap, sync::Arc, time::SystemTime};
 
 use nextnfs_proto::nfs4_proto::{NfsFh4, NfsStat4};
 use tracing::error;
 
 use super::{
     clientmanager::ClientManagerHandle,
-    export_manager::ExportManagerHandle,
+    export_manager::{ExportManagerHandle, ExportStats},
     filemanager::{FileManagerHandle, Filehandle},
     nfs40::op_pseudo,
     nfs41::SessionManager,
@@ -23,6 +23,8 @@ pub struct NfsRequest<'a> {
     export_manager: ExportManagerHandle,
     // cached file manager for the current export (set by set_export)
     cached_fmanager: Option<FileManagerHandle>,
+    // cached export stats for zero-cost counter updates
+    export_stats: Option<Arc<ExportStats>>,
     // current export id (extracted from filehandle)
     current_export_id: Option<u8>,
     // time the server was booted
@@ -61,6 +63,7 @@ impl<'a> NfsRequest<'a> {
             cmanager,
             export_manager,
             cached_fmanager: default_fmanager,
+            export_stats: None,
             current_export_id: None,
             boot_time,
             request_time,
@@ -112,10 +115,12 @@ impl<'a> NfsRequest<'a> {
         if export_id == op_pseudo::PSEUDO_ROOT_EXPORT_ID {
             // Pseudo-root doesn't have a real file manager
             self.cached_fmanager = None;
+            self.export_stats = None;
             return;
         }
-        if let Some((_info, fm)) = self.export_manager.get_export_by_id(export_id).await {
+        if let Some((info, fm)) = self.export_manager.get_export_by_id(export_id).await {
             self.cached_fmanager = Some(fm);
+            self.export_stats = Some(info.stats);
         }
     }
 
@@ -126,6 +131,11 @@ impl<'a> NfsRequest<'a> {
 
     pub fn current_export_id(&self) -> Option<u8> {
         self.current_export_id
+    }
+
+    /// Get cached export stats for zero-cost counter updates.
+    pub fn export_stats(&self) -> Option<&Arc<ExportStats>> {
+        self.export_stats.as_ref()
     }
 
     pub fn set_filehandle(&mut self, filehandle: Filehandle) {

@@ -5,6 +5,9 @@
 ### Added
 - SECINFO operation (RFC 7530 S16.31) — returns AUTH_SYS and AUTH_NONE security flavors for client security negotiation
 - OPEN_DOWNGRADE operation (RFC 7530 S16.19) — reduces open share access/deny modes without closing the file
+- Per-client audit logging — structured tracing with client IP, operation, status, export ID, and file path for every NFS operation
+- Per-export I/O statistics — READ/WRITE operations now increment ExportStats counters (reads, writes, bytes_read, bytes_written, ops) visible via REST API `/api/v1/stats`
+- Cached `Arc<ExportStats>` in NfsRequest for zero-cost counter updates (no actor messages)
 - SeCinfo4 proto type extended with AuthNone and AuthSys variants for proper XDR encoding
 - Proto OpenDowngrade4args, OpenDowngrade4resok, SecInfo4args fields now public
 - 379 workspace tests (52 proto + 321 server + 6 nfstest), 0 clippy warnings
