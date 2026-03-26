@@ -27,6 +27,7 @@ mod op_renew;
 mod op_set_clientid;
 mod op_set_clientid_confirm;
 mod op_setattr;
+mod op_verify;
 mod op_write;
 
 use super::NfsProtoImpl;
@@ -348,12 +349,13 @@ impl NfsProtoImpl for NFS40Server {
                         NfsArgOp::Oplocku(args) => args.execute(request).await,
                         NfsArgOp::OpreleaseLockOwner(args) => args.execute(request).await,
 
+                        NfsArgOp::Opnverify(args) => args.execute(request).await,
+                        NfsArgOp::Opverify(args) => args.execute(request).await,
+
                         // misc not yet supported
-                        NfsArgOp::Opnverify(_) => self.operation_not_supported(request),
                         NfsArgOp::Opopenattr(_) => self.operation_not_supported(request),
                         NfsArgOp::OpopenDowngrade(_) => self.operation_not_supported(request),
                         NfsArgOp::OpSecinfo(_) => self.operation_not_supported(request),
-                        NfsArgOp::Opverify(_) => self.operation_not_supported(request),
 
                         // NFSv4.1/v4.2 ops — handled properly in compound() version routing
                         _ => self.operation_not_supported(request),

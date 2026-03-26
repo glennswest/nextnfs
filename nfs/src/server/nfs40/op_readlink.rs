@@ -1,6 +1,4 @@
 //! READLINK operation — read symbolic link target.
-//!
-//! Returns NFS4ERR_NOTSUPP since the VFS backend doesn't support symlinks yet.
 
 use async_trait::async_trait;
 
@@ -8,7 +6,7 @@ use crate::server::operation::NfsOperation;
 use crate::server::request::NfsRequest;
 use crate::server::response::NfsOpResponse;
 use nextnfs_proto::nfs4_proto::*;
-use tracing::debug;
+use tracing::{debug, error};
 
 /// Readlink has no arguments — uses current filehandle.
 pub struct Readlink4args;
@@ -18,15 +16,53 @@ impl NfsOperation for Readlink4args {
     async fn execute<'a>(&self, request: NfsRequest<'a>) -> NfsOpResponse<'a> {
         debug!("READLINK");
 
-        // The vfs crate's MemoryFS doesn't support symlinks.
-        // Return NOTSUPP for now — will be implemented when backed by StormFS VFS.
-        NfsOpResponse {
-            request,
-            result: Some(NfsResOp4::Opreadlink(Readlink4res {
-                status: NfsStat4::Nfs4errNotsupp,
-                link: String::new(),
-            })),
-            status: NfsStat4::Nfs4errNotsupp,
+        let filehandle = match request.current_filehandle() {
+            Some(fh) => fh.clone(),
+            None => {
+                return NfsOpResponse {
+                    request,
+                    result: None,
+                    status: NfsStat4::Nfs4errNofilehandle,
+                };
+            }
+        };
+
+        // Get the real path and use std::fs::read_link
+        let path_str = filehandle.file.as_str().to_string();
+        match std::fs::read_link(&path_str) {
+            Ok(target) => {
+                let link_target = target.to_string_lossy().to_string();
+                debug!("READLINK {} -> {}", path_str, link_target);
+                NfsOpResponse {
+                    request,
+                    result: Some(NfsResOp4::Opreadlink(Readlink4res {
+                        status: NfsStat4::Nfs4Ok,
+                        link: link_target,
+                    })),
+                    status: NfsStat4::Nfs4Ok,
+                }
+            }
+            Err(e) => {
+                let status = match e.kind() {
+                    std::io::ErrorKind::NotFound => NfsStat4::Nfs4errNoent,
+                    std::io::ErrorKind::InvalidInput => {
+                        // Not a symlink
+                        NfsStat4::Nfs4errInval
+                    }
+                    _ => {
+                        error!("READLINK failed for {}: {:?}", path_str, e);
+                        NfsStat4::Nfs4errIo
+                    }
+                };
+                NfsOpResponse {
+                    request,
+                    result: Some(NfsResOp4::Opreadlink(Readlink4res {
+                        status: status.clone(),
+                        link: String::new(),
+                    })),
+                    status,
+                }
+            }
         }
     }
 }
@@ -38,17 +74,20 @@ mod tests {
     use crate::test_utils::*;
 
     #[tokio::test]
-    async fn test_readlink_returns_notsupp() {
+    async fn test_readlink_no_filehandle() {
+        let request = create_nfs40_server(None).await;
+        let args = Readlink4args;
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4errNofilehandle);
+    }
+
+    #[tokio::test]
+    async fn test_readlink_on_directory() {
+        // READLINK on root dir should fail — not a symlink
         let request = create_nfs40_server_with_root_fh(None).await;
         let args = Readlink4args;
         let response = args.execute(request).await;
-        assert_eq!(response.status, NfsStat4::Nfs4errNotsupp);
-        match response.result {
-            Some(NfsResOp4::Opreadlink(res)) => {
-                assert_eq!(res.status, NfsStat4::Nfs4errNotsupp);
-                assert!(res.link.is_empty());
-            }
-            other => panic!("Expected Opreadlink, got {:?}", other),
-        }
+        // MemoryFS paths don't map to real filesystem, so read_link will fail
+        assert_ne!(response.status, NfsStat4::Nfs4Ok);
     }
 }

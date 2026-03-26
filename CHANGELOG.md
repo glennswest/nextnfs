@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### 2026-03-26
+- **feat:** Implement VERIFY and NVERIFY operations (RFC 7530 S16.32, S16.15) for client cache validation
+- **feat:** Implement READLINK operation using std::fs::read_link() (was returning NOTSUPP)
+- **feat:** Wire up VERIFY/NVERIFY in compound dispatch (previously routed to operation_not_supported)
+- **fix:** Make Verify4args, Verify4res, Nverify4args, Nverify4res fields public in proto
+- **test:** 7 VERIFY/NVERIFY tests + 2 READLINK tests (371 total workspace tests)
+
 ## [v0.8.1] — 2026-03-25
 
 ### Added

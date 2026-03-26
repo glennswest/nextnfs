@@ -886,12 +886,12 @@ pub struct Readlink4res {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Nverify4args {
     /* CURRENT_FH: object */
-    obj_attributes: Fattr4,
+    pub obj_attributes: Fattr4,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Nverify4res {
-    status: NfsStat4,
+    pub status: NfsStat4,
 }
 
 // const OPEN4_SHARE_ACCESS_READ: u32 = 0x00000001;
@@ -1396,12 +1396,12 @@ pub struct SetClientIdConfirm4res {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Verify4args {
     /* CURRENT_FH: object */
-    obj_attributes: Fattr4,
+    pub obj_attributes: Fattr4,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Verify4res {
-    status: NfsStat4,
+    pub status: NfsStat4,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
