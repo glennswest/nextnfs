@@ -8,6 +8,10 @@
 - **feat:** Wire up VERIFY/NVERIFY in compound dispatch (previously routed to operation_not_supported)
 - **fix:** Make Verify4args, Verify4res, Nverify4args, Nverify4res fields public in proto
 - **test:** 7 VERIFY/NVERIFY tests + 2 READLINK tests (371 total workspace tests)
+- **feat:** Industry benchmark suite (tests/nfs_bench_suite.sh) — fio, IOzone, Dbench, Bonnie++, SPECstorage-style workloads (AI/Image, Software Build, Genomics)
+- **feat:** Data integrity test (tests/nfs_integrity.sh) — Linux kernel source untar, SHA-256 checksum, 10 parallel copies, full verification
+- **feat:** Ramdisk baseline benchmarks for peak throughput reference
+- **chore:** CI test-runner now includes bench suite + integrity validation
 
 ## [v0.8.1] — 2026-03-25
 

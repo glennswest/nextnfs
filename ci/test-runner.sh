@@ -469,6 +469,24 @@ main() {
     run_shell_tests "$NEXTNFS_MOUNT" "$NFS_PORT" "nextnfs" "nextnfs"
     run_perf_tests "$NEXTNFS_MOUNT" "$NFS_PORT" "nextnfs" "nextnfs"
 
+    # Industry benchmark suite (fio, IOzone, Dbench, Bonnie++, SPECstorage-style)
+    echo ""
+    echo -e "${BOLD}Industry Benchmark Suite${RESET}"
+    local bench_script="$NEXTNFS_SRC/tests/nfs_bench_suite.sh"
+    if [ -f "$bench_script" ]; then
+        NFS_MOUNT="$NEXTNFS_MOUNT" RESULTS_DIR="$RESULTS_DIR/nextnfs" \
+            bash "$bench_script" --quick 2>&1 || fail "bench suite"
+    fi
+
+    # Data integrity validation (Linux kernel source copy + verify)
+    echo ""
+    echo -e "${BOLD}Data Integrity Validation${RESET}"
+    local integrity_script="$NEXTNFS_SRC/tests/nfs_integrity.sh"
+    if [ -f "$integrity_script" ]; then
+        NFS_MOUNT="$NEXTNFS_MOUNT" RESULTS_DIR="$RESULTS_DIR/nextnfs" \
+            bash "$integrity_script" --copies 10 2>&1 || fail "integrity test"
+    fi
+
     unmount_nfs "$NEXTNFS_MOUNT"
 
     # Optionally run knfsd baseline (only makes sense on same machine)
