@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [v0.10.0] — 2026-03-26
+
 ### Added
 - SECINFO operation (RFC 7530 S16.31) — returns AUTH_SYS and AUTH_NONE security flavors for client security negotiation
 - OPEN_DOWNGRADE operation (RFC 7530 S16.19) — reduces open share access/deny modes without closing the file
