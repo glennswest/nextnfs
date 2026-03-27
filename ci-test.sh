@@ -362,7 +362,7 @@ start_nextnfs() {
     echo "  Export: $NEXTNFS_EXPORT_DIR"
     echo "  Listen: 127.0.0.1:$NEXTNFS_PORT"
 
-    RUST_LOG=debug RUST_BACKTRACE=1 "$NEXTNFS_BIN" \
+    RUST_LOG=info "$NEXTNFS_BIN" \
         --export "$NEXTNFS_EXPORT_DIR" \
         --listen "127.0.0.1:$NEXTNFS_PORT" \
         --api-listen "127.0.0.1:8090" \
@@ -709,8 +709,8 @@ main() {
             echo "  Skipping shell/perf tests — mount not available (container?)"
         fi
         # Show final server log state
-        echo "  server log (last 100 lines):"
-        tail -100 /tmp/nextnfs-test.log 2>/dev/null || true
+        echo "  server log (last 30 lines):"
+        tail -30 /tmp/nextnfs-test.log 2>/dev/null || true
         stop_nextnfs
     else
         echo "  Skipping nextnfs tests — server failed to start"

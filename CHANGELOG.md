@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [v0.10.1] — 2026-03-26
+
+### Fixed
+- multi_index_map `modify_by_*` panic on Linux — replaced all 3 usages (confirm_client, renew_leases, sweep_leases) with safe remove+insert pattern to avoid internal reindex panics
+- Client manager actor resilience — added `catch_unwind` around message handling so a panic in one request doesn't kill the actor and cascade-fail all subsequent client operations
+- SETCLIENTID error propagation — handler was swallowing the actual NFS error and always returning NFS4ERR_SERVERFAULT; now returns the correct error code from ClientManager
+- All 14/14 NFSv4.0 wire tests now pass on Linux CI (previously 3 SETCLIENTID-related tests failed: W40-010, W40-011, W40-014)
+- Added proto roundtrip tests for SETCLIENTID wire encoding compatibility
+- 403 workspace tests (54 proto + 343 server + 6 nfstest), 0 clippy warnings
+
 ## [v0.10.0] — 2026-03-26
 
 ### Added
