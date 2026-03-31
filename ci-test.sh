@@ -362,7 +362,7 @@ start_nextnfs() {
     echo "  Export: $NEXTNFS_EXPORT_DIR"
     echo "  Listen: 127.0.0.1:$NEXTNFS_PORT"
 
-    RUST_LOG=info "$NEXTNFS_BIN" \
+    RUST_LOG=debug "$NEXTNFS_BIN" \
         --export "$NEXTNFS_EXPORT_DIR" \
         --listen "127.0.0.1:$NEXTNFS_PORT" \
         --api-listen "127.0.0.1:8090" \
@@ -386,10 +386,20 @@ start_nextnfs() {
     # Mount — nolock avoids NLM/rpcbind dependency, port= for non-standard port
     mkdir -p "$NEXTNFS_MOUNT"
     echo "  Mounting: mount -t nfs4 -o vers=4.0,proto=tcp,port=${NEXTNFS_PORT},nolock,soft,timeo=50,retrans=2 127.0.0.1:/ $NEXTNFS_MOUNT"
-    local mount_out
-    mount_out=$(timeout 30 mount -t nfs4 -o "vers=4.0,proto=tcp,port=${NEXTNFS_PORT},nolock,soft,timeo=50,retrans=2" \
-        "127.0.0.1:/" "$NEXTNFS_MOUNT" 2>&1) || true
-    echo "  mount result: $mount_out"
+
+    # Clear kernel ring buffer before mount to isolate messages
+    dmesg -C 2>/dev/null || true
+
+    local mount_out mount_rc
+    mount_rc=0
+    mount_out=$(timeout 30 mount -v -t nfs4 -o "vers=4.0,proto=tcp,port=${NEXTNFS_PORT},nolock,soft,timeo=50,retrans=2" \
+        "127.0.0.1:/" "$NEXTNFS_MOUNT" 2>&1) || mount_rc=$?
+    echo "  mount exit code: $mount_rc"
+    echo "  mount output: $mount_out"
+
+    # Capture dmesg from mount attempt only
+    echo "  dmesg after mount attempt:"
+    dmesg 2>/dev/null | head -30 || true
 
     if mountpoint -q "$NEXTNFS_MOUNT"; then
         ok "nextnfs mounted at $NEXTNFS_MOUNT"
@@ -397,8 +407,6 @@ start_nextnfs() {
         fail "failed to mount nextnfs"
         echo "--- mount debug ---"
         echo "  port: $NEXTNFS_PORT"
-        echo "  dmesg NFS (last 20 lines):"
-        dmesg 2>/dev/null | grep -i nfs | tail -20 || true
         sleep 2  # Wait for server to flush logs
         echo "  server log (last 60 lines):"
         tail -60 /tmp/nextnfs-test.log 2>/dev/null || true
