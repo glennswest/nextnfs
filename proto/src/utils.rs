@@ -539,10 +539,16 @@ impl Attrlist4<FileAttrValue> {
                 FileAttrValue::Owner(v) => {
                     buffer.extend_from_slice((v.len() as u32).to_be_bytes().as_ref());
                     buffer.extend_from_slice(v.as_bytes());
+                    // XDR padding to 4-byte boundary
+                    let pad = (4 - (v.len() % 4)) % 4;
+                    buffer.extend_from_slice(&vec![0u8; pad]);
                 }
                 FileAttrValue::OwnerGroup(v) => {
                     buffer.extend_from_slice((v.len() as u32).to_be_bytes().as_ref());
                     buffer.extend_from_slice(v.as_bytes());
+                    // XDR padding to 4-byte boundary
+                    let pad = (4 - (v.len() % 4)) % 4;
+                    buffer.extend_from_slice(&vec![0u8; pad]);
                 }
                 FileAttrValue::SpaceUsed(v) => {
                     buffer.extend_from_slice(v.to_be_bytes().as_ref());
@@ -848,6 +854,41 @@ mod tests {
         let stale_bytes = serde_xdr::to_bytes(&NfsStat4::Nfs4errStale).unwrap();
         let val = u32::from_be_bytes(stale_bytes[..4].try_into().unwrap());
         assert_eq!(val, 70);
+    }
+
+    #[test]
+    fn test_owner_xdr_padding_in_to_bytes() {
+        // Owner "0" is 1 byte — needs 3 bytes of XDR padding
+        let attrs = Attrlist4(vec![FileAttrValue::Owner("0".to_string())]);
+        let bytes = attrs.to_bytes();
+        // to_bytes() returns raw serialized values:
+        // length=1 (4 bytes) + "0" (1 byte) + padding (3 bytes) = 8 bytes
+        assert_eq!(bytes.len(), 8);
+        assert_eq!(&bytes[0..4], &1u32.to_be_bytes()); // string length = 1
+        assert_eq!(bytes[4], b'0');                      // "0"
+        assert_eq!(&bytes[5..8], &[0, 0, 0]);           // XDR padding
+    }
+
+    #[test]
+    fn test_owner_group_xdr_padding_roundtrip() {
+        // Test that Owner/OwnerGroup with non-aligned lengths produce padded output
+        // that can be correctly deserialized
+        for name in &["0", "ab", "abc", "abcd", "nobody", "x"] {
+            let attrs = Attrlist4(vec![
+                FileAttrValue::Owner(name.to_string()),
+                FileAttrValue::Numlinks(42),
+            ]);
+            let bytes = attrs.to_bytes();
+            // Verify the bytes can be deserialized back
+            let raw = FattrRaw {
+                attrmask: vec![],
+                attr_vals: bytes,
+            };
+            let decoded = raw.attrvalues_from_bytes(&[FileAttr::Owner, FileAttr::Numlinks]);
+            assert_eq!(decoded.len(), 2, "failed for owner={:?}", name);
+            assert_eq!(decoded[0], FileAttrValue::Owner(name.to_string()));
+            assert_eq!(decoded[1], FileAttrValue::Numlinks(42));
+        }
     }
 
     #[test]
