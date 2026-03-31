@@ -2,11 +2,21 @@
 
 ## [Unreleased]
 
-### 2026-03-25
-- **feat:** RPC program/version validation — unknown programs (e.g. nfslocalio 400122) get PROG_UNAVAIL, wrong NFS version gets PROG_MISMATCH; fixes kernel NFS mount hang on Linux 6.12+
-- **feat:** MAXREAD, MAXWRITE, MAXFILESIZE, MAXLINK, MAXNAME, HOMOGENEOUS, NOTRUNC, CANSETTIME, CHOWNRESTRICTED GETATTR attributes for kernel NFS mount support
-- **fix:** `from_bytes()` no longer tries to parse COMPOUND args for non-NFS RPC programs, preventing false GarbageArgs errors on multiplexed connections
-- **fix:** XDR padding for Owner/OwnerGroup strings in GETATTR serialization — missing 4-byte alignment corrupted all subsequent attributes in the opaque blob, causing kernel mount to reject responses
+## [v0.11.0] — 2026-03-25
+
+### Added
+- Linux kernel NFS mount support — nextnfs can now be mounted by the Linux kernel NFS client (`mount -t nfs4`)
+- RPC program/version validation — unknown programs (e.g. nfslocalio 400122) get PROG_UNAVAIL, wrong NFS version gets PROG_MISMATCH
+- MismatchInfo constructor for RPC version negotiation responses
+- GETATTR attributes: MAXREAD, MAXWRITE, MAXFILESIZE, MAXLINK, MAXNAME, HOMOGENEOUS, NOTRUNC, CANSETTIME, CHOWNRESTRICTED
+- XDR padding roundtrip tests for Owner/OwnerGroup string serialization
+- Tests for ProgUnavail (unknown program) and ProgMismatch (wrong version) RPC dispatch
+- 407 workspace tests (56 proto + 345 server + 6 nfstest), 0 clippy warnings
+
+### Fixed
+- XDR padding for Owner/OwnerGroup strings in GETATTR serialization — missing 4-byte alignment corrupted all subsequent attributes in the opaque blob, causing kernel mount to reject responses with EIO
+- `from_bytes()` no longer tries to parse COMPOUND args for non-NFS RPC programs, preventing false GarbageArgs errors on multiplexed connections
+- nfslocalio (Linux 6.12+) mount hang — kernel sends RPC program 400122 on the NFS TCP connection; server now responds immediately with PROG_UNAVAIL instead of timing out
 
 ## [v0.10.1] — 2026-03-26
 
