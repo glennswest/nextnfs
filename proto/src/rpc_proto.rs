@@ -65,6 +65,12 @@ pub struct MismatchInfo {
     high: u32,
 }
 
+impl MismatchInfo {
+    pub fn new(low: u32, high: u32) -> Self {
+        Self { low, high }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[repr(u32)]
 pub enum ReplyBody {

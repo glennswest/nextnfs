@@ -15,7 +15,8 @@ use request::NfsRequest;
 use tracing::debug;
 
 use nextnfs_proto::rpc_proto::{
-    AcceptBody, AcceptedReply, CallBody, MsgType, OpaqueAuth, ReplyBody, RpcCallMsg, RpcReplyMsg,
+    AcceptBody, AcceptedReply, CallBody, MismatchInfo, MsgType, OpaqueAuth, ReplyBody, RpcCallMsg,
+    RpcReplyMsg,
 };
 
 #[async_trait]
@@ -61,6 +62,32 @@ where
 
         match rpc_call_message.body {
             MsgType::Call(call_body) => {
+                // Validate RPC program number — only NFS (100003) is supported.
+                // Respond with ProgUnavail for unknown programs (e.g. nfslocalio 400122).
+                if call_body.prog != 100003 {
+                    debug!("unknown RPC program {} (proc {}), returning ProgUnavail", call_body.prog, call_body.proc);
+                    request.close().await;
+                    return Box::new(RpcReplyMsg {
+                        xid: rpc_call_message.xid,
+                        body: MsgType::Reply(ReplyBody::MsgAccepted(AcceptedReply {
+                            verf: OpaqueAuth::AuthNull(Vec::new()),
+                            reply_data: AcceptBody::ProgUnavail,
+                        })),
+                    });
+                }
+                // Validate NFS version — only NFSv4 (version 4) is supported.
+                if call_body.vers != 4 {
+                    debug!("unsupported NFS version {} (prog {}), returning ProgMismatch", call_body.vers, call_body.prog);
+                    request.close().await;
+                    return Box::new(RpcReplyMsg {
+                        xid: rpc_call_message.xid,
+                        body: MsgType::Reply(ReplyBody::MsgAccepted(AcceptedReply {
+                            verf: OpaqueAuth::AuthNull(Vec::new()),
+                            reply_data: AcceptBody::ProgMismatch(MismatchInfo::new(4, 4)),
+                        })),
+                    });
+                }
+
                 let (request, body) = match call_body.proc {
                     0 => self.server.null(call_body, request).await,
                     1 => self.server.compound(call_body, request).await,
@@ -195,6 +222,60 @@ mod tests {
                 assert!(matches!(accepted.reply_data, AcceptBody::GarbageArgs));
             }
             _ => panic!("Expected MsgAccepted"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_rpc_prog_unavail_unknown_program() {
+        let service = NFSService::new(NFS40Server::new());
+        let request = create_nfs40_server(None).await;
+        // nfslocalio program 400122
+        let msg = RpcCallMsg {
+            xid: 55,
+            body: MsgType::Call(CallBody {
+                rpcvers: 2,
+                prog: 400122,
+                vers: 1,
+                proc: 1,
+                cred: OpaqueAuth::AuthNull(vec![]),
+                verf: OpaqueAuth::AuthNull(vec![]),
+                args: None,
+            }),
+        };
+        let reply = service.call(msg, request).await;
+        assert_eq!(reply.xid, 55);
+        match reply.body {
+            MsgType::Reply(ReplyBody::MsgAccepted(accepted)) => {
+                assert!(matches!(accepted.reply_data, AcceptBody::ProgUnavail));
+            }
+            _ => panic!("Expected MsgAccepted with ProgUnavail"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_rpc_prog_mismatch_wrong_version() {
+        let service = NFSService::new(NFS40Server::new());
+        let request = create_nfs40_server(None).await;
+        // NFS program but wrong version (v3)
+        let msg = RpcCallMsg {
+            xid: 56,
+            body: MsgType::Call(CallBody {
+                rpcvers: 2,
+                prog: 100003,
+                vers: 3,
+                proc: 1,
+                cred: OpaqueAuth::AuthNull(vec![]),
+                verf: OpaqueAuth::AuthNull(vec![]),
+                args: None,
+            }),
+        };
+        let reply = service.call(msg, request).await;
+        assert_eq!(reply.xid, 56);
+        match reply.body {
+            MsgType::Reply(ReplyBody::MsgAccepted(accepted)) => {
+                assert!(matches!(accepted.reply_data, AcceptBody::ProgMismatch(_)));
+            }
+            _ => panic!("Expected MsgAccepted with ProgMismatch"),
         }
     }
 

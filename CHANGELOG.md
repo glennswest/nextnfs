@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### 2026-03-25
+- **feat:** RPC program/version validation — unknown programs (e.g. nfslocalio 400122) get PROG_UNAVAIL, wrong NFS version gets PROG_MISMATCH; fixes kernel NFS mount hang on Linux 6.12+
+- **feat:** MAXREAD, MAXWRITE, MAXFILESIZE, MAXLINK, MAXNAME, HOMOGENEOUS, NOTRUNC, CANSETTIME, CHOWNRESTRICTED GETATTR attributes for kernel NFS mount support
+- **fix:** `from_bytes()` no longer tries to parse COMPOUND args for non-NFS RPC programs, preventing false GarbageArgs errors on multiplexed connections
+
 ## [v0.10.1] — 2026-03-26
 
 ### Fixed

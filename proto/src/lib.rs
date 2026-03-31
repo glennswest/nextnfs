@@ -201,8 +201,9 @@ pub fn from_bytes(buffer: Vec<u8>) -> Result<RpcCallMsg, anyhow::Error> {
     let cred = read_opaque_auth(&mut cursor)?;
     let verf = read_opaque_auth(&mut cursor)?;
 
-    // Parse COMPOUND args (if not NULL procedure)
-    let args = if proc_num == 0 {
+    // Parse COMPOUND args only for NFS program (100003) non-NULL procedures.
+    // Other programs (e.g. nfslocalio 400122) have different arg formats.
+    let args = if proc_num == 0 || prog != 100003 {
         None
     } else {
         // Remaining bytes are the COMPOUND args — deserialize via serde_xdr
