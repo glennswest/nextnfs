@@ -362,7 +362,7 @@ start_nextnfs() {
     echo "  Export: $NEXTNFS_EXPORT_DIR"
     echo "  Listen: 127.0.0.1:$NEXTNFS_PORT"
 
-    RUST_LOG=info "$NEXTNFS_BIN" \
+    RUST_LOG=debug "$NEXTNFS_BIN" \
         --export "$NEXTNFS_EXPORT_DIR" \
         --listen "127.0.0.1:$NEXTNFS_PORT" \
         --api-listen "127.0.0.1:8090" \
@@ -397,6 +397,8 @@ start_nextnfs() {
         fail "failed to mount nextnfs"
         echo "--- mount debug ---"
         echo "  port: $NEXTNFS_PORT"
+        echo "  dmesg NFS (last 20 lines):"
+        dmesg 2>/dev/null | grep -i nfs | tail -20 || true
         sleep 2  # Wait for server to flush logs
         echo "  server log (last 60 lines):"
         tail -60 /tmp/nextnfs-test.log 2>/dev/null || true
