@@ -139,6 +139,42 @@ pub fn pseudo_root_getattr(
                 answer_attrs.push(FileAttr::AclSupport);
                 attrs.push(FileAttrValue::AclSupport(0));
             }
+            FileAttr::Maxfilesize => {
+                answer_attrs.push(FileAttr::Maxfilesize);
+                attrs.push(FileAttrValue::Maxfilesize(i64::MAX as u64));
+            }
+            FileAttr::Maxread => {
+                answer_attrs.push(FileAttr::Maxread);
+                attrs.push(FileAttrValue::Maxread(1048576));
+            }
+            FileAttr::Maxwrite => {
+                answer_attrs.push(FileAttr::Maxwrite);
+                attrs.push(FileAttrValue::Maxwrite(1048576));
+            }
+            FileAttr::Maxlink => {
+                answer_attrs.push(FileAttr::Maxlink);
+                attrs.push(FileAttrValue::Maxlink(32000));
+            }
+            FileAttr::Maxname => {
+                answer_attrs.push(FileAttr::Maxname);
+                attrs.push(FileAttrValue::Maxname(255));
+            }
+            FileAttr::Homogeneous => {
+                answer_attrs.push(FileAttr::Homogeneous);
+                attrs.push(FileAttrValue::Homogeneous(true));
+            }
+            FileAttr::NoTrunc => {
+                answer_attrs.push(FileAttr::NoTrunc);
+                attrs.push(FileAttrValue::NoTrunc(true));
+            }
+            FileAttr::Cansettime => {
+                answer_attrs.push(FileAttr::Cansettime);
+                attrs.push(FileAttrValue::Cansettime(true));
+            }
+            FileAttr::ChownRestricted => {
+                answer_attrs.push(FileAttr::ChownRestricted);
+                attrs.push(FileAttrValue::ChownRestricted(true));
+            }
             _ => {}
         }
     }
@@ -283,6 +319,42 @@ fn pseudo_export_entry_attrs(
                 answer_attrs.push(FileAttr::AclSupport);
                 attrs.push(FileAttrValue::AclSupport(0));
             }
+            FileAttr::Maxfilesize => {
+                answer_attrs.push(FileAttr::Maxfilesize);
+                attrs.push(FileAttrValue::Maxfilesize(i64::MAX as u64));
+            }
+            FileAttr::Maxread => {
+                answer_attrs.push(FileAttr::Maxread);
+                attrs.push(FileAttrValue::Maxread(1048576));
+            }
+            FileAttr::Maxwrite => {
+                answer_attrs.push(FileAttr::Maxwrite);
+                attrs.push(FileAttrValue::Maxwrite(1048576));
+            }
+            FileAttr::Maxlink => {
+                answer_attrs.push(FileAttr::Maxlink);
+                attrs.push(FileAttrValue::Maxlink(32000));
+            }
+            FileAttr::Maxname => {
+                answer_attrs.push(FileAttr::Maxname);
+                attrs.push(FileAttrValue::Maxname(255));
+            }
+            FileAttr::Homogeneous => {
+                answer_attrs.push(FileAttr::Homogeneous);
+                attrs.push(FileAttrValue::Homogeneous(true));
+            }
+            FileAttr::NoTrunc => {
+                answer_attrs.push(FileAttr::NoTrunc);
+                attrs.push(FileAttrValue::NoTrunc(true));
+            }
+            FileAttr::Cansettime => {
+                answer_attrs.push(FileAttr::Cansettime);
+                attrs.push(FileAttrValue::Cansettime(true));
+            }
+            FileAttr::ChownRestricted => {
+                answer_attrs.push(FileAttr::ChownRestricted);
+                attrs.push(FileAttrValue::ChownRestricted(true));
+            }
             _ => {}
         }
     }
@@ -305,8 +377,17 @@ fn pseudo_supported_attrs() -> Attrlist4<FileAttr> {
         FileAttr::LeaseTime,
         FileAttr::RdattrError,
         FileAttr::AclSupport,
+        FileAttr::Cansettime,
+        FileAttr::ChownRestricted,
         FileAttr::Fileid,
+        FileAttr::Homogeneous,
+        FileAttr::Maxfilesize,
+        FileAttr::Maxlink,
+        FileAttr::Maxname,
+        FileAttr::Maxread,
+        FileAttr::Maxwrite,
         FileAttr::Mode,
+        FileAttr::NoTrunc,
         FileAttr::Numlinks,
         FileAttr::Owner,
         FileAttr::OwnerGroup,

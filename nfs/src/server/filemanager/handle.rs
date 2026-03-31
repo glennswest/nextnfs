@@ -557,12 +557,42 @@ impl FileManagerHandle {
                     attrs.push(FileAttrValue::TimeModify(filehandle.attr_time_modify));
                     answer_attrs.push(FileAttr::TimeModify);
                 }
-                // FileAttr::MountedOnFileid => {
-                //     attrs.push(FileAttrValue::MountedOnFileid(
-                //         filehandle.attr_mounted_on_fileid,
-                //     ));
-                //     answer_attrs.push(FileAttr::MountedOnFileid);
-                // }
+                FileAttr::Maxfilesize => {
+                    attrs.push(FileAttrValue::Maxfilesize(i64::MAX as u64));
+                    answer_attrs.push(FileAttr::Maxfilesize);
+                }
+                FileAttr::Maxread => {
+                    attrs.push(FileAttrValue::Maxread(1048576));
+                    answer_attrs.push(FileAttr::Maxread);
+                }
+                FileAttr::Maxwrite => {
+                    attrs.push(FileAttrValue::Maxwrite(1048576));
+                    answer_attrs.push(FileAttr::Maxwrite);
+                }
+                FileAttr::Maxlink => {
+                    attrs.push(FileAttrValue::Maxlink(32000));
+                    answer_attrs.push(FileAttr::Maxlink);
+                }
+                FileAttr::Maxname => {
+                    attrs.push(FileAttrValue::Maxname(255));
+                    answer_attrs.push(FileAttr::Maxname);
+                }
+                FileAttr::Homogeneous => {
+                    attrs.push(FileAttrValue::Homogeneous(true));
+                    answer_attrs.push(FileAttr::Homogeneous);
+                }
+                FileAttr::NoTrunc => {
+                    attrs.push(FileAttrValue::NoTrunc(true));
+                    answer_attrs.push(FileAttr::NoTrunc);
+                }
+                FileAttr::Cansettime => {
+                    attrs.push(FileAttrValue::Cansettime(true));
+                    answer_attrs.push(FileAttr::Cansettime);
+                }
+                FileAttr::ChownRestricted => {
+                    attrs.push(FileAttrValue::ChownRestricted(true));
+                    answer_attrs.push(FileAttr::ChownRestricted);
+                }
                 _ => {}
             }
         }
@@ -636,10 +666,18 @@ impl FileManagerHandle {
             FileAttr::Acl,
             FileAttr::AclSupport,
             FileAttr::Archive,
-            // FileAttr::Cansettime,
+            FileAttr::Cansettime,
+            FileAttr::ChownRestricted,
             FileAttr::Filehandle,
             FileAttr::Fileid,
+            FileAttr::Homogeneous,
+            FileAttr::Maxfilesize,
+            FileAttr::Maxlink,
+            FileAttr::Maxname,
+            FileAttr::Maxread,
+            FileAttr::Maxwrite,
             FileAttr::Mode,
+            FileAttr::NoTrunc,
             FileAttr::Numlinks,
             FileAttr::Owner,
             FileAttr::OwnerGroup,
@@ -647,7 +685,6 @@ impl FileManagerHandle {
             FileAttr::TimeAccess,
             FileAttr::TimeMetadata,
             FileAttr::TimeModify,
-            // FileAttr::MountedOnFileid,
         ]))
     }
 
