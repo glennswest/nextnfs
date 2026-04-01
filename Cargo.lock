@@ -1001,7 +1001,7 @@ dependencies = [
 
 [[package]]
 name = "nextnfs"
-version = "0.10.1"
+version = "0.11.0"
 dependencies = [
  "axum",
  "clap",
@@ -1020,7 +1020,7 @@ dependencies = [
 
 [[package]]
 name = "nextnfs-proto"
-version = "0.10.1"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "bytes",
@@ -1036,7 +1036,7 @@ dependencies = [
 
 [[package]]
 name = "nextnfs-server"
-version = "0.10.1"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1069,7 +1069,7 @@ dependencies = [
 
 [[package]]
 name = "nextnfstest"
-version = "0.10.1"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "axum",

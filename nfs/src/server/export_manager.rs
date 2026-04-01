@@ -9,6 +9,7 @@ use tracing::info;
 use vfs::{AltrootFS, PhysicalFS, VfsPath};
 
 use super::filemanager::FileManagerHandle;
+use super::overlay::OverlayFS;
 
 /// Per-export QoS configuration.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
@@ -165,6 +166,7 @@ struct ExportState {
 // Messages to the ExportManager actor
 enum ExportManagerMessage {
     AddExport(AddExportRequest),
+    AddOverlayExport(AddOverlayExportRequest),
     RemoveExport(RemoveExportRequest),
     ListExports(ListExportsRequest),
     GetExportById(GetExportByIdRequest),
@@ -188,6 +190,13 @@ struct AddExportRequest {
     name: String,
     path: PathBuf,
     read_only: bool,
+    respond_to: oneshot::Sender<Result<ExportInfo, String>>,
+}
+
+struct AddOverlayExportRequest {
+    name: String,
+    upper: PathBuf,
+    lower: Vec<PathBuf>,
     respond_to: oneshot::Sender<Result<ExportInfo, String>>,
 }
 
@@ -231,6 +240,10 @@ impl ExportManager {
         match msg {
             ExportManagerMessage::AddExport(req) => {
                 let result = self.add_export(req.name, req.path, req.read_only);
+                let _ = req.respond_to.send(result);
+            }
+            ExportManagerMessage::AddOverlayExport(req) => {
+                let result = self.add_overlay_export(req.name, req.upper, req.lower);
                 let _ = req.respond_to.send(result);
             }
             ExportManagerMessage::RemoveExport(req) => {
@@ -336,6 +349,84 @@ impl ExportManager {
         Ok(info)
     }
 
+    fn add_overlay_export(
+        &mut self,
+        name: String,
+        upper: PathBuf,
+        lower: Vec<PathBuf>,
+    ) -> Result<ExportInfo, String> {
+        if self.exports.contains_key(&name) {
+            return Err(format!("export '{}' already exists", name));
+        }
+        if self.next_export_id >= 0xFE {
+            return Err("maximum number of exports reached".to_string());
+        }
+        if lower.is_empty() {
+            return Err("overlay export requires at least one lower layer".to_string());
+        }
+
+        // Canonicalize and validate upper directory
+        let upper_canonical = upper.canonicalize().map_err(|e| {
+            format!("upper path {} does not exist: {}", upper.display(), e)
+        })?;
+        if !upper_canonical.is_dir() {
+            return Err(format!("{} is not a directory", upper_canonical.display()));
+        }
+
+        // Canonicalize and validate all lower directories
+        let mut lower_vfs = Vec::with_capacity(lower.len());
+        for l in &lower {
+            let canonical = l.canonicalize().map_err(|e| {
+                format!("lower path {} does not exist: {}", l.display(), e)
+            })?;
+            if !canonical.is_dir() {
+                return Err(format!("{} is not a directory", canonical.display()));
+            }
+            lower_vfs.push(VfsPath::new(PhysicalFS::new(&canonical)));
+        }
+
+        let upper_vfs = VfsPath::new(PhysicalFS::new(&upper_canonical));
+        let overlay = OverlayFS::new(upper_vfs, lower_vfs);
+        let vfs_root: VfsPath = AltrootFS::new(VfsPath::new(overlay)).into();
+
+        let export_id = self.next_export_id;
+        self.next_export_id += 1;
+
+        let file_manager = FileManagerHandle::new(
+            vfs_root.clone(),
+            Some(export_id as u64),
+            upper_canonical.clone(),
+        );
+
+        let stats = ExportStats::new();
+        let rate_limiter = Arc::new(Mutex::new(RateLimiter::new(QosConfig::default())));
+        let info = ExportInfo {
+            export_id,
+            name: name.clone(),
+            path: upper_canonical.clone(),
+            read_only: false,
+            stats,
+            rate_limiter,
+        };
+
+        let state = ExportState {
+            info: info.clone(),
+            _vfs_root: vfs_root,
+            file_manager,
+        };
+
+        self.exports.insert(name.clone(), state);
+        self.export_by_id.insert(export_id, name.clone());
+        info!(
+            %name,
+            upper = %upper_canonical.display(),
+            layers = lower.len(),
+            export_id,
+            "overlay export added"
+        );
+        Ok(info)
+    }
+
     fn remove_export(&mut self, name: &str) -> Result<(), String> {
         match self.exports.remove(name) {
             Some(state) => {
@@ -388,6 +479,27 @@ impl ExportManagerHandle {
                 read_only,
                 respond_to: tx,
             }))
+            .await
+            .map_err(|_| "export manager gone".to_string())?;
+        rx.await.map_err(|_| "export manager gone".to_string())?
+    }
+
+    pub async fn add_overlay_export(
+        &self,
+        name: String,
+        upper: PathBuf,
+        lower: Vec<PathBuf>,
+    ) -> Result<ExportInfo, String> {
+        let (tx, rx) = oneshot::channel();
+        self.sender
+            .send(ExportManagerMessage::AddOverlayExport(
+                AddOverlayExportRequest {
+                    name,
+                    upper,
+                    lower,
+                    respond_to: tx,
+                },
+            ))
             .await
             .map_err(|_| "export manager gone".to_string())?;
         rx.await.map_err(|_| "export manager gone".to_string())?
@@ -724,5 +836,135 @@ mod tests {
         let qos = qos.unwrap();
         assert_eq!(qos.max_ops_per_sec, 500);
         assert_eq!(qos.max_bytes_per_sec, 10_000_000);
+    }
+
+    // ── Overlay export tests ────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_add_overlay_export() {
+        let em = ExportManagerHandle::new();
+        // Use /tmp as both upper and lower (just testing the API plumbing)
+        let result = em
+            .add_overlay_export(
+                "overlay1".to_string(),
+                PathBuf::from("/tmp"),
+                vec![PathBuf::from("/tmp")],
+            )
+            .await;
+        assert!(result.is_ok());
+        let info = result.unwrap();
+        assert_eq!(info.name, "overlay1");
+        assert!(!info.read_only);
+    }
+
+    #[tokio::test]
+    async fn test_add_overlay_export_multiple_layers() {
+        let em = ExportManagerHandle::new();
+        let result = em
+            .add_overlay_export(
+                "multi".to_string(),
+                PathBuf::from("/tmp"),
+                vec![PathBuf::from("/tmp"), PathBuf::from("/tmp")],
+            )
+            .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_add_overlay_export_no_lower() {
+        let em = ExportManagerHandle::new();
+        let result = em
+            .add_overlay_export("nolower".to_string(), PathBuf::from("/tmp"), vec![])
+            .await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("at least one lower"));
+    }
+
+    #[tokio::test]
+    async fn test_add_overlay_export_bad_upper() {
+        let em = ExportManagerHandle::new();
+        let result = em
+            .add_overlay_export(
+                "badpath".to_string(),
+                PathBuf::from("/nonexistent_xyz"),
+                vec![PathBuf::from("/tmp")],
+            )
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_add_overlay_export_bad_lower() {
+        let em = ExportManagerHandle::new();
+        let result = em
+            .add_overlay_export(
+                "badlower".to_string(),
+                PathBuf::from("/tmp"),
+                vec![PathBuf::from("/nonexistent_xyz")],
+            )
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_overlay_export_listed() {
+        let em = ExportManagerHandle::new();
+        em.add_overlay_export(
+            "ovlist".to_string(),
+            PathBuf::from("/tmp"),
+            vec![PathBuf::from("/tmp")],
+        )
+        .await
+        .unwrap();
+        let exports = em.list_exports().await;
+        assert_eq!(exports.len(), 1);
+        assert_eq!(exports[0].name, "ovlist");
+    }
+
+    #[tokio::test]
+    async fn test_overlay_export_lookup_by_name() {
+        let em = ExportManagerHandle::new();
+        em.add_overlay_export(
+            "ovname".to_string(),
+            PathBuf::from("/tmp"),
+            vec![PathBuf::from("/tmp")],
+        )
+        .await
+        .unwrap();
+        let result = em.get_export_by_name("ovname").await;
+        assert!(result.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_overlay_export_remove() {
+        let em = ExportManagerHandle::new();
+        em.add_overlay_export(
+            "ovrm".to_string(),
+            PathBuf::from("/tmp"),
+            vec![PathBuf::from("/tmp")],
+        )
+        .await
+        .unwrap();
+        let result = em.remove_export("ovrm").await;
+        assert!(result.is_ok());
+        let exports = em.list_exports().await;
+        assert!(exports.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_mixed_regular_and_overlay_exports() {
+        let em = ExportManagerHandle::new();
+        em.add_export("regular".to_string(), PathBuf::from("/tmp"), false)
+            .await
+            .unwrap();
+        em.add_overlay_export(
+            "overlay".to_string(),
+            PathBuf::from("/tmp"),
+            vec![PathBuf::from("/tmp")],
+        )
+        .await
+        .unwrap();
+        let exports = em.list_exports().await;
+        assert_eq!(exports.len(), 2);
     }
 }
