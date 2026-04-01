@@ -5,6 +5,7 @@ pub mod nfs40;
 pub mod nfs41;
 pub mod nfs42;
 pub mod operation;
+pub mod overlay;
 pub mod request;
 pub mod response;
 pub mod state_recovery;
