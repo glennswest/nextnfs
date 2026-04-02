@@ -82,6 +82,16 @@ mod op_set_clientid_confirm;
 mod op_setattr;
 mod op_verify;
 mod op_write;
+// NFSv4.1 operations (RFC 5661)
+mod op_bind_conn_to_session;
+mod op_create_session;
+mod op_destroy_clientid;
+mod op_destroy_session;
+mod op_exchange_id;
+mod op_free_stateid;
+mod op_reclaim_complete;
+mod op_sequence;
+mod op_test_stateid;
 // NFSv4.2 operations (RFC 7862)
 mod op_allocate;
 mod op_copy;
@@ -345,10 +355,10 @@ impl NfsProtoImpl for NFS40Server {
         let mut last_status = NfsStat4::Nfs4Ok;
         let res = match msg.args {
             Some(args) => {
-                // Reject NFSv4.1+ — clients will auto-negotiate down to v4.0
-                if args.minor_version > 0 {
+                // Reject NFSv4.2+ (only v4.0 and v4.1 supported)
+                if args.minor_version > 1 {
                     debug!(
-                        "COMPOUND: rejecting minor_version={}, only v4.0 supported",
+                        "COMPOUND: rejecting minor_version={}, only v4.0/v4.1 supported",
                         args.minor_version
                     );
                     return (
@@ -479,13 +489,21 @@ impl NfsProtoImpl for NFS40Server {
                         NfsArgOp::OpopenDowngrade(args) => args.execute(request).await,
                         NfsArgOp::OpSecinfo(args) => args.execute(request).await,
 
+                        // NFSv4.1 operations (RFC 5661)
+                        NfsArgOp::OpexchangeId(args) => args.execute(request).await,
+                        NfsArgOp::OpcreateSession(args) => args.execute(request).await,
+                        NfsArgOp::Opsequence(args) => args.execute(request).await,
+                        NfsArgOp::OpdestroySession(args) => args.execute(request).await,
+                        NfsArgOp::OpdestroyClientid(args) => args.execute(request).await,
+                        NfsArgOp::OpreclaimComplete(args) => args.execute(request).await,
+                        NfsArgOp::OpbindConnToSession(args) => args.execute(request).await,
+                        NfsArgOp::OpfreeStateid(args) => args.execute(request).await,
+                        NfsArgOp::OptestStateid(args) => args.execute(request).await,
+
                         // NFSv4.2 operations (RFC 7862)
                         NfsArgOp::Opallocate(args) => args.execute(request).await,
                         NfsArgOp::Opcopy(args) => args.execute(request).await,
                         NfsArgOp::Opseek(args) => args.execute(request).await,
-
-                        // NFSv4.1 ops — handled in compound() version routing
-                        _ => self.operation_not_supported(request),
                     };
                     let res = response.result;
                     last_status = response.status.clone();
@@ -553,7 +571,7 @@ impl NfsProtoImpl for NFS40Server {
     }
 
     fn minor_version(&self) -> u32 {
-        0
+        1
     }
 }
 
@@ -668,7 +686,7 @@ mod tests {
             verf: OpaqueAuth::AuthNull(vec![]),
             args: Some(Compound4args {
                 tag: "test".to_string(),
-                minor_version: 1, // v4.1 — should be rejected
+                minor_version: 2, // v4.2 — should be rejected (only 0 and 1 supported)
                 argarray: vec![NfsArgOp::Opputrootfh(())],
             }),
         };
@@ -678,6 +696,36 @@ mod tests {
                 AcceptBody::Success(res) => {
                     assert_eq!(res.status, NfsStat4::Nfs4errMinorVersMismatch);
                     assert!(res.resarray.is_empty());
+                }
+                _ => panic!("Expected Success"),
+            },
+            _ => panic!("Expected MsgAccepted"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_compound_minor_version_1_accepted() {
+        let server = NFS40Server::new();
+        let request = create_nfs40_server(None).await;
+        let msg = CallBody {
+            rpcvers: 2,
+            prog: 100003,
+            vers: 4,
+            proc: 1,
+            cred: OpaqueAuth::AuthNull(vec![]),
+            verf: OpaqueAuth::AuthNull(vec![]),
+            args: Some(Compound4args {
+                tag: "test".to_string(),
+                minor_version: 1, // v4.1 — should be accepted
+                argarray: vec![NfsArgOp::Opputrootfh(())],
+            }),
+        };
+        let (_request, reply) = server.compound(msg, request).await;
+        match reply {
+            ReplyBody::MsgAccepted(accepted) => match accepted.reply_data {
+                AcceptBody::Success(res) => {
+                    assert_eq!(res.status, NfsStat4::Nfs4Ok);
+                    assert_eq!(res.resarray.len(), 1);
                 }
                 _ => panic!("Expected Success"),
             },

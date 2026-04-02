@@ -5,6 +5,7 @@ use vfs::{MemoryFS, VfsPath};
 use crate::server::clientmanager::ClientManagerHandle;
 use crate::server::export_manager::ExportManagerHandle;
 use crate::server::filemanager::FileManagerHandle;
+use crate::server::nfs41::SessionManager;
 use crate::server::request::NfsRequest;
 
 use nextnfs_proto::nfs4_proto::{
@@ -32,7 +33,7 @@ pub async fn create_nfs40_server(_principal: Option<String>) -> NfsRequest<'stat
         Some(file_manager),
         boot_time,
         None,
-        None,
+        Some(SessionManager::new()),
     )
 }
 

@@ -19,7 +19,7 @@ use serde_derive::{Deserialize, Serialize};
 /*
  * Sizes
  */
-const NFS4_VERIFIER_SIZE: usize = 8;
+pub const NFS4_VERIFIER_SIZE: usize = 8;
 const NFS4_OTHER_SIZE: usize = 12;
 // const NFS4_OPAQUE_LIMIT: u32 = 1024;
 
