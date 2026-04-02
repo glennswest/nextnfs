@@ -567,23 +567,23 @@ pub enum Create4res {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct DelegPurge4args {
-    clientid: Clientid4,
+    pub clientid: Clientid4,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct DelegPurge4res {
-    status: NfsStat4,
+    pub status: NfsStat4,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct DelegReturn4args {
     /* CURRENT_FH: delegated file */
-    deleg_stateid: Stateid4,
+    pub deleg_stateid: Stateid4,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct DelegReturn4res {
-    saved_fhtatus: NfsStat4,
+    pub status: NfsStat4,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, FromPrimitive, ToPrimitive, Serialize)]
@@ -969,8 +969,8 @@ pub enum OpenClaimType4 {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct OpenClaimDelegateCur4 {
-    delegate_stateid: Stateid4,
-    file: Component4,
+    pub delegate_stateid: Stateid4,
+    pub file: Component4,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1041,23 +1041,23 @@ pub struct OpenReadDelegation4 {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct OpenWriteDelegation4 {
     /* Stateid for delegation */
-    stateid: Stateid4,
+    pub stateid: Stateid4,
     /* Pre-recalled flag for
     delegations obtained
     by reclaim
     (CLAIM_PREVIOUS). */
-    recall: bool,
+    pub recall: bool,
     /* Defines condition that
     the client must check to
     determine whether the
     file needs to be flushed
     to the server on close. */
-    space_limit: NfsSpaceLimit4,
+    pub space_limit: NfsSpaceLimit4,
     /* Defines users who don't
     need an ACCESS call as
     part of a delegated
     open. */
-    permissions: Nfsace4,
+    pub permissions: Nfsace4,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

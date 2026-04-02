@@ -55,6 +55,8 @@ mod op_access;
 mod op_close;
 mod op_commit;
 mod op_create;
+mod op_delegpurge;
+mod op_delegreturn;
 mod op_getattr;
 mod op_link;
 mod op_lock;
@@ -455,9 +457,9 @@ impl NfsProtoImpl for NFS40Server {
                             op_readlink::Readlink4args.execute(request).await
                         }
 
-                        // delegation (not yet supported)
-                        NfsArgOp::Opdelegpurge(_) => self.operation_not_supported(request),
-                        NfsArgOp::Opdelegreturn(_) => self.operation_not_supported(request),
+                        // delegation
+                        NfsArgOp::Opdelegpurge(args) => args.execute(request).await,
+                        NfsArgOp::Opdelegreturn(args) => args.execute(request).await,
 
                         // locking
                         NfsArgOp::Oplink(args) => args.execute(request).await,

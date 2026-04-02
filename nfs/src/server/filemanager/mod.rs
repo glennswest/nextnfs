@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use nextnfs_proto::nfs4_proto::{
-    Attrlist4, FileAttr, FileAttrValue, FsLocations4, NfsFh4, NfsStat4,
+    Attrlist4, FileAttr, FileAttrValue, FsLocations4, NfsFh4, NfsStat4, Stateid4,
     ACL4_SUPPORT_ALLOW_ACL, FH4_PERSISTENT,
 };
 
@@ -22,6 +22,14 @@ use tokio::sync::mpsc;
 use tracing::{debug, error};
 use vfs::VfsPath;
 
+/// Delegation held on a file by a client.
+#[derive(Debug, Clone)]
+pub struct DelegationState {
+    pub client_id: u64,
+    pub stateid: Stateid4,
+    pub is_write: bool,
+}
+
 #[derive(Debug)]
 pub struct FileManager {
     pub root: VfsPath,
@@ -38,6 +46,8 @@ pub struct FileManager {
     pub boot_time: u64,
     pub receiver: mpsc::Receiver<FileManagerMessage>,
     pub cachedb: HashMap<NfsFh4, WriteCacheHandle>,
+    /// Delegation state: filehandle ID → delegation info.
+    pub delegations: HashMap<NfsFh4, DelegationState>,
 }
 
 impl FileManager {
@@ -64,6 +74,7 @@ impl FileManager {
             fhdb: FilehandleDb::default(),
             lockdb: LockingStateDb::default(),
             cachedb: HashMap::new(),
+            delegations: HashMap::new(),
         };
         fmanager.root_fh();
         fmanager
@@ -230,6 +241,18 @@ impl FileManager {
                 let result = self.open_named_attr_dir(req.fileid, req.createdir);
                 let _ = req.respond_to.send(result);
             }
+            FileManagerMessage::GrantDelegation(req) => {
+                let result = self.grant_delegation(req.filehandle_id, req.client_id, req.is_write);
+                let _ = req.respond_to.send(result);
+            }
+            FileManagerMessage::ReturnDelegation(req) => {
+                let result = self.return_delegation(&req.filehandle_id, &req.deleg_stateid);
+                let _ = req.respond_to.send(result);
+            }
+            FileManagerMessage::GetDelegation(req) => {
+                let result = self.delegations.get(&req.filehandle_id).cloned();
+                let _ = req.respond_to.send(result);
+            }
         }
     }
 
@@ -240,6 +263,52 @@ impl FileManager {
         } else {
             self.export_root.join(rel.trim_start_matches('/'))
         }
+    }
+
+    fn grant_delegation(
+        &mut self,
+        filehandle_id: NfsFh4,
+        client_id: u64,
+        is_write: bool,
+    ) -> Option<Stateid4> {
+        // Don't grant if another client already has a delegation
+        if let Some(existing) = self.delegations.get(&filehandle_id) {
+            if existing.client_id != client_id {
+                return None; // Conflict — another client holds delegation
+            }
+            // Same client already has delegation — return existing stateid
+            return Some(existing.stateid.clone());
+        }
+        // Don't grant write delegation if file has any open locks from other clients
+        // (simplified: grant read delegations freely, write only if no other opens)
+        let stateid = self.make_stateid();
+        let state = DelegationState {
+            client_id,
+            stateid: stateid.clone(),
+            is_write,
+        };
+        self.delegations.insert(filehandle_id, state);
+        Some(stateid)
+    }
+
+    fn return_delegation(&mut self, filehandle_id: &NfsFh4, deleg_stateid: &Stateid4) -> NfsStat4 {
+        if let Some(existing) = self.delegations.get(filehandle_id) {
+            if &existing.stateid == deleg_stateid {
+                self.delegations.remove(filehandle_id);
+                return NfsStat4::Nfs4Ok;
+            }
+            return NfsStat4::Nfs4errBadStateid;
+        }
+        NfsStat4::Nfs4errBadStateid
+    }
+
+    fn make_stateid(&mut self) -> Stateid4 {
+        self.next_stateid_id += 1;
+        let seqid = self.next_stateid_id as u32;
+        let mut other = [0u8; 12];
+        other[0..4].copy_from_slice(&(self.boot_time as u32).to_be_bytes());
+        other[4..12].copy_from_slice(&self.next_stateid_id.to_be_bytes());
+        Stateid4 { seqid, other }
     }
 
     fn open_named_attr_dir(&mut self, fileid: u64, createdir: bool) -> Option<Filehandle> {

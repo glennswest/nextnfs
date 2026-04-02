@@ -3,18 +3,25 @@ use tracing::{debug, error};
 
 use crate::server::{
     filemanager::Filehandle,
-    nfs40::{ChangeInfo4, Open4res, Open4resok, OpenDelegation4, OPEN4_RESULT_CONFIRM},
+    nfs40::{
+        ChangeInfo4, Open4res, Open4resok, OpenDelegation4, OpenReadDelegation4,
+        OPEN4_RESULT_CONFIRM,
+    },
     operation::NfsOperation,
     request::NfsRequest,
     response::NfsOpResponse,
 };
 
 use nextnfs_proto::nfs4_proto::{
-    Attrlist4, CreateHow4, FileAttr, NfsResOp4, NfsStat4, Open4args, OpenClaim4, OpenFlag4,
-    Stateid4,
+    Attrlist4, CreateHow4, FileAttr, Nfsace4, NfsResOp4, NfsStat4, Open4args, OpenClaim4,
+    OpenFlag4, Stateid4, ACE4_ACCESS_ALLOWED_ACE_TYPE,
 };
 
-async fn open_for_reading<'a>(file: &String, mut request: NfsRequest<'a>) -> NfsOpResponse<'a> {
+async fn open_for_reading<'a>(
+    args: &Open4args,
+    file: &String,
+    mut request: NfsRequest<'a>,
+) -> NfsOpResponse<'a> {
     let filehandle = match request.current_filehandle() {
         Some(fh) => fh,
         None => {
@@ -53,7 +60,27 @@ async fn open_for_reading<'a>(file: &String, mut request: NfsRequest<'a>) -> Nfs
         }
     };
 
+    let fh_id = filehandle.id;
     request.set_filehandle(filehandle);
+
+    // Attempt to grant a read delegation
+    let delegation = match request
+        .file_manager()
+        .grant_delegation(fh_id, args.owner.clientid, false)
+        .await
+    {
+        Some(stateid) => OpenDelegation4::Read(OpenReadDelegation4 {
+            stateid,
+            recall: false,
+            permissions: Nfsace4 {
+                acetype: ACE4_ACCESS_ALLOWED_ACE_TYPE,
+                flag: 0,
+                access_mask: 0x00000001, // ACE4_READ_DATA
+                who: "EVERYONE@".to_string(),
+            },
+        }),
+        None => OpenDelegation4::None,
+    };
 
     NfsOpResponse {
         request,
@@ -67,11 +94,9 @@ async fn open_for_reading<'a>(file: &String, mut request: NfsRequest<'a>) -> Nfs
                 before: 0,
                 after: 0,
             },
-            // OPEN4_RESULT_CONFIRM indicates that the client MUST execute an
-            // OPEN_CONFIRM operation before using the open file.
             rflags: OPEN4_RESULT_CONFIRM,
             attrset: Attrlist4::<FileAttr>::new(None),
-            delegation: OpenDelegation4::None,
+            delegation,
         }))),
         status: NfsStat4::Nfs4Ok,
     }
@@ -318,7 +343,7 @@ impl NfsOperation for Open4args {
         match &self.openhow {
             OpenFlag4::Open4Nocreate => {
                 // Open a file for reading
-                open_for_reading(file, request).await
+                open_for_reading(self, file, request).await
             }
             OpenFlag4::How(how) => {
                 // Open a file for writing

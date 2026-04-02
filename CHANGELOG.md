@@ -9,7 +9,8 @@
 - **feat:** NFSv4 ACLs — synthesize POSIX mode-based ACLs (owner/group/everyone ALLOW ACEs), ACL XDR serialize/deserialize, ACE type/flag/mask constants, GETATTR Acl support on real files and pseudo-root, mode_to_acl() conversion, 6 new tests
 - **feat:** FsLocations attribute — GETATTR returns fs_locations4 (RFC 7530 §7.7), XDR serialize/deserialize for pathname4 arrays, local export returns fs_root=["/"] with empty locations, supported on real files and pseudo-root, 3 new tests
 - **feat:** Named attributes (OPENATTR) — opens per-file named attribute directory via `.nfs4attrs/<fileid>/`, createdir flag creates on demand, hidden from READDIR, NamedAttr GETATTR now reports true, 6 new tests
-- **chore:** 531 workspace tests (59 proto + 466 server + 6 nfstest), 0 clippy warnings
+- **feat:** File delegations — OPEN grants read delegations (OPEN_DELEGATE_READ) with stateid tracking, DELEGRETURN returns delegations, DELEGPURGE purges reclaim state, delegation conflict detection per-file, 4 new tests
+- **chore:** 535 workspace tests (59 proto + 470 server + 6 nfstest), 0 clippy warnings
 
 ### 2026-03-25
 - **feat:** OverlayFS VFS backend (overlay.rs) — merges writable upper with read-only lower layers, whiteout markers (OCI spec), copy-up on write, merged directory listings, 31 tests

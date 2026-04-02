@@ -32,6 +32,9 @@ pub enum FileManagerMessage {
     TestLock(TestLockRequest),
     ReleaseLockOwner(ReleaseLockOwnerRequest),
     OpenNamedAttrDir(OpenNamedAttrDirRequest),
+    GrantDelegation(GrantDelegationRequest),
+    ReturnDelegation(ReturnDelegationRequest),
+    GetDelegation(GetDelegationRequest),
     CloseFile(),
     GetWriteCacheHandle(WriteCacheHandleRequest),
     DropWriteCacheHandle(DropCacheHandleRequest),
@@ -96,6 +99,24 @@ pub struct OpenNamedAttrDirRequest {
     pub fileid: u64,
     pub createdir: bool,
     pub respond_to: oneshot::Sender<Option<Filehandle>>,
+}
+
+pub struct GrantDelegationRequest {
+    pub filehandle_id: NfsFh4,
+    pub client_id: u64,
+    pub is_write: bool,
+    pub respond_to: oneshot::Sender<Option<Stateid4>>,
+}
+
+pub struct ReturnDelegationRequest {
+    pub filehandle_id: NfsFh4,
+    pub deleg_stateid: Stateid4,
+    pub respond_to: oneshot::Sender<NfsStat4>,
+}
+
+pub struct GetDelegationRequest {
+    pub filehandle_id: NfsFh4,
+    pub respond_to: oneshot::Sender<Option<super::DelegationState>>,
 }
 
 pub struct LockFileRequest {
@@ -465,6 +486,60 @@ impl FileManagerHandle {
                 nfs_error: NfsStat4::Nfs4errServerfault,
             }),
         }
+    }
+
+    pub async fn grant_delegation(
+        &self,
+        filehandle_id: NfsFh4,
+        client_id: u64,
+        is_write: bool,
+    ) -> Option<Stateid4> {
+        let (tx, rx) = oneshot::channel();
+        let req = GrantDelegationRequest {
+            filehandle_id,
+            client_id,
+            is_write,
+            respond_to: tx,
+        };
+        if let Err(e) = self.sender.send(FileManagerMessage::GrantDelegation(req)).await {
+            error!("filemanager actor gone: {}", e);
+            return None;
+        }
+        rx.await.unwrap_or(None)
+    }
+
+    pub async fn return_delegation(
+        &self,
+        filehandle_id: NfsFh4,
+        deleg_stateid: Stateid4,
+    ) -> NfsStat4 {
+        let (tx, rx) = oneshot::channel();
+        let req = ReturnDelegationRequest {
+            filehandle_id,
+            deleg_stateid,
+            respond_to: tx,
+        };
+        if let Err(e) = self.sender.send(FileManagerMessage::ReturnDelegation(req)).await {
+            error!("filemanager actor gone: {}", e);
+            return NfsStat4::Nfs4errServerfault;
+        }
+        rx.await.unwrap_or(NfsStat4::Nfs4errServerfault)
+    }
+
+    pub async fn get_delegation(
+        &self,
+        filehandle_id: NfsFh4,
+    ) -> Option<super::DelegationState> {
+        let (tx, rx) = oneshot::channel();
+        let req = GetDelegationRequest {
+            filehandle_id,
+            respond_to: tx,
+        };
+        if let Err(e) = self.sender.send(FileManagerMessage::GetDelegation(req)).await {
+            error!("filemanager actor gone: {}", e);
+            return None;
+        }
+        rx.await.unwrap_or(None)
     }
 
     pub async fn open_named_attr_dir(
