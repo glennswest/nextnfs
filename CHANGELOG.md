@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### 2026-04-02
+- **feat:** Missing GETATTR attributes — FilesAvail/FilesFree/FilesTotal (inode counts for `df -i`), TimeDelta (1ns server time granularity), TimeCreate (birth time), MountedOnFileid, CaseInsensitive/CasePreserving; XDR serialize/deserialize, 6 new tests
+- **chore:** 499 workspace tests (56 proto + 437 server + 6 nfstest), 0 clippy warnings
+
 ### 2026-03-25
 - **feat:** OverlayFS VFS backend (overlay.rs) — merges writable upper with read-only lower layers, whiteout markers (OCI spec), copy-up on write, merged directory listings, 31 tests
 - **feat:** Export manager overlay integration — AddOverlayExport message, PhysicalFS-backed OverlayFS creation, path validation, 9 new tests
