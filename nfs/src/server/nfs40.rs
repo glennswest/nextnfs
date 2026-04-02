@@ -63,6 +63,7 @@ mod op_locku;
 mod op_lookup;
 mod op_open;
 mod op_open_downgrade;
+mod op_openattr;
 mod op_openconfirm;
 pub mod op_pseudo;
 mod op_putfh;
@@ -468,8 +469,7 @@ impl NfsProtoImpl for NFS40Server {
                         NfsArgOp::Opnverify(args) => args.execute(request).await,
                         NfsArgOp::Opverify(args) => args.execute(request).await,
 
-                        // misc not yet supported
-                        NfsArgOp::Opopenattr(_) => self.operation_not_supported(request),
+                        NfsArgOp::Opopenattr(args) => args.execute(request).await,
                         NfsArgOp::OpopenDowngrade(args) => args.execute(request).await,
                         NfsArgOp::OpSecinfo(args) => args.execute(request).await,
 

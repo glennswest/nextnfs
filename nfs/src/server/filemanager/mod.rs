@@ -226,6 +226,10 @@ impl FileManager {
             FileManagerMessage::UpdateFilehandle(req) => {
                 self.update_filehandle(req);
             }
+            FileManagerMessage::OpenNamedAttrDir(req) => {
+                let result = self.open_named_attr_dir(req.fileid, req.createdir);
+                let _ = req.respond_to.send(result);
+            }
         }
     }
 
@@ -236,6 +240,32 @@ impl FileManager {
         } else {
             self.export_root.join(rel.trim_start_matches('/'))
         }
+    }
+
+    fn open_named_attr_dir(&mut self, fileid: u64, createdir: bool) -> Option<Filehandle> {
+        let attrs_root = match self.root.join(".nfs4attrs") {
+            Ok(p) => p,
+            Err(_) => return None,
+        };
+        let attr_dir = match attrs_root.join(fileid.to_string()) {
+            Ok(p) => p,
+            Err(_) => return None,
+        };
+        if attr_dir.exists().unwrap_or(false) {
+            return Some(self.get_filehandle(&attr_dir));
+        }
+        if !createdir {
+            return None;
+        }
+        // Create .nfs4attrs/ if needed
+        if !attrs_root.exists().unwrap_or(false) && attrs_root.create_dir().is_err() {
+            return None;
+        }
+        // Create .nfs4attrs/<fileid>/
+        if attr_dir.create_dir().is_err() {
+            return None;
+        }
+        Some(self.get_filehandle(&attr_dir))
     }
 
     fn touch_filehandle(&mut self, filehandle: Filehandle) {
@@ -464,7 +494,7 @@ impl FileManager {
                     answer_attrs.push(FileAttr::SymlinkSupport);
                 }
                 FileAttr::NamedAttr => {
-                    attrs.push(FileAttrValue::NamedAttr(false));
+                    attrs.push(FileAttrValue::NamedAttr(true));
                     answer_attrs.push(FileAttr::NamedAttr);
                 }
                 FileAttr::Acl => {

@@ -1101,13 +1101,13 @@ pub enum Open4res {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct OpenAttr4args {
     /* CURRENT_FH: object */
-    createdir: bool,
+    pub createdir: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct OpenAttr4res {
     /* CURRENT_FH: named attr directory */
-    status: NfsStat4,
+    pub status: NfsStat4,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

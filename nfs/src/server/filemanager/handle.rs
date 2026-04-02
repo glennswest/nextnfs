@@ -31,6 +31,7 @@ pub enum FileManagerMessage {
     UnlockFile(UnlockFileRequest),
     TestLock(TestLockRequest),
     ReleaseLockOwner(ReleaseLockOwnerRequest),
+    OpenNamedAttrDir(OpenNamedAttrDirRequest),
     CloseFile(),
     GetWriteCacheHandle(WriteCacheHandleRequest),
     DropWriteCacheHandle(DropCacheHandleRequest),
@@ -89,6 +90,12 @@ pub struct WriteCacheHandleRequest {
 
 pub struct DropCacheHandleRequest {
     pub filehandle_id: NfsFh4,
+}
+
+pub struct OpenNamedAttrDirRequest {
+    pub fileid: u64,
+    pub createdir: bool,
+    pub respond_to: oneshot::Sender<Option<Filehandle>>,
 }
 
 pub struct LockFileRequest {
@@ -460,6 +467,28 @@ impl FileManagerHandle {
         }
     }
 
+    pub async fn open_named_attr_dir(
+        &self,
+        fileid: u64,
+        createdir: bool,
+    ) -> Result<Filehandle, FileManagerError> {
+        let (tx, rx) = oneshot::channel();
+        let req = OpenNamedAttrDirRequest {
+            fileid,
+            createdir,
+            respond_to: tx,
+        };
+        if let Err(e) = self.sender.send(FileManagerMessage::OpenNamedAttrDir(req)).await {
+            error!("filemanager actor gone: {}", e);
+            return Err(FileManagerError { nfs_error: NfsStat4::Nfs4errServerfault });
+        }
+        match rx.await {
+            Ok(Some(fh)) => Ok(fh),
+            Ok(None) => Err(FileManagerError { nfs_error: NfsStat4::Nfs4errNoent }),
+            Err(_) => Err(FileManagerError { nfs_error: NfsStat4::Nfs4errServerfault }),
+        }
+    }
+
     pub async fn drop_write_cache_handle(&self, filehandle_id: NfsFh4) {
         if let Err(e) = self.sender.send(FileManagerMessage::DropWriteCacheHandle(
             DropCacheHandleRequest { filehandle_id },
@@ -602,7 +631,7 @@ impl FileManagerHandle {
                     answer_attrs.push(FileAttr::SymlinkSupport);
                 }
                 FileAttr::NamedAttr => {
-                    attrs.push(FileAttrValue::NamedAttr(false));
+                    attrs.push(FileAttrValue::NamedAttr(true));
                     answer_attrs.push(FileAttr::NamedAttr);
                 }
                 FileAttr::Acl => {

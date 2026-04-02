@@ -77,6 +77,10 @@ impl NfsOperation for Readdir4args {
         let mut dircount_actual = 0;
         for (i, entry) in dir.enumerate() {
             let name = entry.filename();
+            // Hide the named-attribute store from directory listings
+            if name == ".nfs4attrs" {
+                continue;
+            }
             fnames.push(name.clone());
             if (i + 2) >= self.cookie as usize {
                 dircount_actual = dircount_actual + 8 + name.len() + 5;

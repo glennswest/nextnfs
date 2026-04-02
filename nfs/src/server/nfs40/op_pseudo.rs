@@ -81,7 +81,7 @@ pub fn pseudo_root_getattr(
             }
             FileAttr::NamedAttr => {
                 answer_attrs.push(FileAttr::NamedAttr);
-                attrs.push(FileAttrValue::NamedAttr(false));
+                attrs.push(FileAttrValue::NamedAttr(true));
             }
             FileAttr::Fsid => {
                 answer_attrs.push(FileAttr::Fsid);
@@ -324,7 +324,7 @@ fn pseudo_export_entry_attrs(
             }
             FileAttr::NamedAttr => {
                 answer_attrs.push(FileAttr::NamedAttr);
-                attrs.push(FileAttrValue::NamedAttr(false));
+                attrs.push(FileAttrValue::NamedAttr(true));
             }
             FileAttr::Acl => {
                 answer_attrs.push(FileAttr::Acl);
