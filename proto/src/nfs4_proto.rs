@@ -115,12 +115,19 @@ pub enum NfsStat4 {
     Nfs4errAdminRevoked = 10047,      /* lock-Owner state revoked */
     Nfs4errCbPathDown = 10048,        /* callback path down       */
     // NFSv4.1 error codes (RFC 5661)
+    Nfs4errBadIomode = 10049,         /* invalid layout I/O mode  */
+    Nfs4errBadLayout = 10050,         /* invalid layout            */
     Nfs4errBadSession = 10052,        /* session not found        */
     Nfs4errBadSlot = 10053,           /* slot_id out of range     */
-    Nfs4errSeqMisordered = 10058,     /* sequence op misordered   */
-    Nfs4errSeqFalseRetry = 10059,     /* false retry on slot      */
-    Nfs4errConnNotBoundToSession = 10063, /* conn not bound to ses */
+    Nfs4errConnNotBoundToSession = 10055, /* conn not bound to ses */
+    Nfs4errLayoutTrylater = 10058,    /* layout busy, try later   */
+    Nfs4errLayoutUnavailable = 10059, /* no pNFS layout available */
+    Nfs4errNomatchingLayout = 10060,  /* no matching layout       */
+    Nfs4errRecallconflict = 10061,    /* layout recall conflict   */
+    Nfs4errUnknownLayouttype = 10062, /* unknown layout type      */
+    Nfs4errSeqMisordered = 10063,     /* sequence op misordered   */
     Nfs4errOpNotInSession = 10071,    /* op requires session      */
+    Nfs4errSeqFalseRetry = 10076,     /* false retry on slot      */
 }
 
 pub struct FileAttrFlags {}
@@ -1696,6 +1703,150 @@ pub struct ReclaimComplete4res {
 }
 
 /*
+ * pNFS layout types (RFC 5661 §12)
+ */
+
+/// Layout type identifier.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[repr(u32)]
+pub enum LayoutType4 {
+    LayoutNfsv4Files = 1,
+    LayoutOsd2Objects = 2,
+    LayoutBlockVolume = 3,
+    LayoutFlexFiles = 4,
+}
+
+/// Layout I/O mode.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[repr(u32)]
+pub enum LayoutIomode4 {
+    LayoutiomodeRead = 1,
+    LayoutiomodeRw = 2,
+}
+
+/// Device ID (16 bytes per RFC 5661 §3.3.14).
+pub type DeviceId4 = [u8; 16];
+
+/* GETDEVICEINFO (op 47) */
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct GetDeviceInfo4args {
+    #[serde(with = "serde_xdr::opaque_data::fixed_length")]
+    pub gdia_device_id: DeviceId4,
+    pub gdia_layout_type: LayoutType4,
+    pub gdia_maxcount: u32,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum GetDeviceInfo4res {
+    Resok4(GetDeviceInfo4resok),
+    Err(NfsStat4),
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct GetDeviceInfo4resok {
+    pub gdir_notification: u32,
+}
+
+/* GETDEVICELIST (op 48) — deprecated in RFC 8881 but still on the wire */
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct GetDeviceList4args {
+    pub gdla_layout_type: LayoutType4,
+    pub gdla_maxdevices: u32,
+    pub gdla_cookie: u64,
+    #[serde(with = "serde_xdr::opaque_data::fixed_length")]
+    pub gdla_cookieverf: [u8; 8],
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum GetDeviceList4res {
+    Resok4(GetDeviceList4resok),
+    Err(NfsStat4),
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct GetDeviceList4resok {
+    pub gdlr_cookie: u64,
+    #[serde(with = "serde_xdr::opaque_data::fixed_length")]
+    pub gdlr_cookieverf: [u8; 8],
+    pub gdlr_eof: bool,
+}
+
+/* LAYOUTGET (op 50) */
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct LayoutGet4args {
+    pub loga_signal_layout_avail: bool,
+    pub loga_layout_type: LayoutType4,
+    pub loga_iomode: LayoutIomode4,
+    pub loga_offset: u64,
+    pub loga_length: u64,
+    pub loga_minlength: u64,
+    pub loga_stateid: Stateid4,
+    pub loga_maxcount: u32,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum LayoutGet4res {
+    Resok4(LayoutGet4resok),
+    Err(NfsStat4),
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct LayoutGet4resok {
+    pub logr_return_on_close: bool,
+    pub logr_stateid: Stateid4,
+}
+
+/* LAYOUTCOMMIT (op 49) */
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct LayoutCommit4args {
+    pub loca_offset: u64,
+    pub loca_length: u64,
+    pub loca_reclaim: bool,
+    pub loca_stateid: Stateid4,
+    pub loca_last_write_offset: bool,
+    pub loca_layout_type: LayoutType4,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum LayoutCommit4res {
+    Resok4(LayoutCommit4resok),
+    Err(NfsStat4),
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct LayoutCommit4resok {
+    pub locr_newsize: bool,
+}
+
+/* LAYOUTRETURN (op 51) */
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[repr(u32)]
+pub enum LayoutReturnType4 {
+    LayoutreturnFile = 1,
+    LayoutreturnFsid = 2,
+    LayoutreturnAll = 3,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct LayoutReturn4args {
+    pub lora_reclaim: bool,
+    pub lora_layout_type: LayoutType4,
+    pub lora_iomode: LayoutIomode4,
+    pub lora_return_type: LayoutReturnType4,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum LayoutReturn4res {
+    Resok4(LayoutReturn4resok),
+    Err(NfsStat4),
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct LayoutReturn4resok {
+    pub lorr_present: bool,
+}
+
+/*
  * NFSv4.2 types (RFC 7862)
  */
 
@@ -1943,6 +2094,12 @@ pub enum NfsArgOp {
     OpcreateSession(CreateSession4args) = 43,
     OpdestroySession(DestroySession4args) = 44,
     OpfreeStateid(FreeStateid4args) = 45,
+    // pNFS operations (RFC 5661 §12)
+    OpgetdeviceInfo(GetDeviceInfo4args) = 47,
+    OpgetdeviceList(GetDeviceList4args) = 48,
+    OplayoutCommit(LayoutCommit4args) = 49,
+    OplayoutGet(LayoutGet4args) = 50,
+    OplayoutReturn(LayoutReturn4args) = 51,
     Opsequence(Sequence4args) = 53,
     OptestStateid(TestStateid4args) = 55,
     OpdestroyClientid(DestroyClientId4args) = 57,
@@ -2005,6 +2162,12 @@ pub enum NfsResOp4 {
     OpcreateSession(CreateSession4res) = 43,
     OpdestroySession(DestroySession4res) = 44,
     OpfreeStateid(FreeStateid4res) = 45,
+    // pNFS operations (RFC 5661 §12)
+    OpgetdeviceInfo(GetDeviceInfo4res) = 47,
+    OpgetdeviceList(GetDeviceList4res) = 48,
+    OplayoutCommit(LayoutCommit4res) = 49,
+    OplayoutGet(LayoutGet4res) = 50,
+    OplayoutReturn(LayoutReturn4res) = 51,
     Opsequence(Sequence4res) = 53,
     OptestStateid(TestStateid4res) = 55,
     OpdestroyClientid(DestroyClientId4res) = 57,

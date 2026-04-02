@@ -47,7 +47,23 @@ fn op_name(arg: &NfsArgOp) -> &'static str {
         NfsArgOp::Opverify(_) => "VERIFY",
         NfsArgOp::Opwrite(_) => "WRITE",
         NfsArgOp::OpreleaseLockOwner(_) => "RELEASE_LOCKOWNER",
-        _ => "UNKNOWN",
+        NfsArgOp::OpbindConnToSession(_) => "BIND_CONN_TO_SESSION",
+        NfsArgOp::OpexchangeId(_) => "EXCHANGE_ID",
+        NfsArgOp::OpcreateSession(_) => "CREATE_SESSION",
+        NfsArgOp::OpdestroySession(_) => "DESTROY_SESSION",
+        NfsArgOp::OpfreeStateid(_) => "FREE_STATEID",
+        NfsArgOp::OpgetdeviceInfo(_) => "GETDEVICEINFO",
+        NfsArgOp::OpgetdeviceList(_) => "GETDEVICELIST",
+        NfsArgOp::OplayoutCommit(_) => "LAYOUTCOMMIT",
+        NfsArgOp::OplayoutGet(_) => "LAYOUTGET",
+        NfsArgOp::OplayoutReturn(_) => "LAYOUTRETURN",
+        NfsArgOp::Opsequence(_) => "SEQUENCE",
+        NfsArgOp::OptestStateid(_) => "TEST_STATEID",
+        NfsArgOp::OpdestroyClientid(_) => "DESTROY_CLIENTID",
+        NfsArgOp::OpreclaimComplete(_) => "RECLAIM_COMPLETE",
+        NfsArgOp::Opallocate(_) => "ALLOCATE",
+        NfsArgOp::Opcopy(_) => "COPY",
+        NfsArgOp::Opseek(_) => "SEEK",
     }
 }
 
@@ -92,6 +108,12 @@ mod op_free_stateid;
 mod op_reclaim_complete;
 mod op_sequence;
 mod op_test_stateid;
+// pNFS layout operations (RFC 5661 §12)
+mod op_getdeviceinfo;
+mod op_getdevicelist;
+mod op_layoutcommit;
+mod op_layoutget;
+mod op_layoutreturn;
 // NFSv4.2 operations (RFC 7862)
 mod op_allocate;
 mod op_copy;
@@ -499,6 +521,13 @@ impl NfsProtoImpl for NFS40Server {
                         NfsArgOp::OpbindConnToSession(args) => args.execute(request).await,
                         NfsArgOp::OpfreeStateid(args) => args.execute(request).await,
                         NfsArgOp::OptestStateid(args) => args.execute(request).await,
+
+                        // pNFS layout operations (RFC 5661 §12)
+                        NfsArgOp::OpgetdeviceInfo(args) => args.execute(request).await,
+                        NfsArgOp::OpgetdeviceList(args) => args.execute(request).await,
+                        NfsArgOp::OplayoutCommit(args) => args.execute(request).await,
+                        NfsArgOp::OplayoutGet(args) => args.execute(request).await,
+                        NfsArgOp::OplayoutReturn(args) => args.execute(request).await,
 
                         // NFSv4.2 operations (RFC 7862)
                         NfsArgOp::Opallocate(args) => args.execute(request).await,
