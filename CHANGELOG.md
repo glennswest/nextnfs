@@ -10,7 +10,8 @@
 - **feat:** FsLocations attribute — GETATTR returns fs_locations4 (RFC 7530 §7.7), XDR serialize/deserialize for pathname4 arrays, local export returns fs_root=["/"] with empty locations, supported on real files and pseudo-root, 3 new tests
 - **feat:** Named attributes (OPENATTR) — opens per-file named attribute directory via `.nfs4attrs/<fileid>/`, createdir flag creates on demand, hidden from READDIR, NamedAttr GETATTR now reports true, 6 new tests
 - **feat:** File delegations — OPEN grants read delegations (OPEN_DELEGATE_READ) with stateid tracking, DELEGRETURN returns delegations, DELEGPURGE purges reclaim state, delegation conflict detection per-file, 4 new tests
-- **chore:** 535 workspace tests (59 proto + 470 server + 6 nfstest), 0 clippy warnings
+- **feat:** RPC-over-TLS transport encryption (RFC 9289) — tokio-rustls TLS acceptor wrapping TCP connections, PEM cert/key loading, ServerBuilder `.tls()` method, TOML config `tls_cert`/`tls_key` fields, ConnectionContext struct for clean parameter passing, generic `handle_connection<T>` over any AsyncRead+AsyncWrite transport, 3 new tests
+- **chore:** 538 workspace tests (59 proto + 473 server + 6 nfstest), 0 clippy warnings
 
 ### 2026-03-25
 - **feat:** OverlayFS VFS backend (overlay.rs) — merges writable upper with read-only lower layers, whiteout markers (OCI spec), copy-up on write, merged directory listings, 31 tests

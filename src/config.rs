@@ -23,6 +23,12 @@ pub struct ServerConfig {
     /// Directory for state recovery files (near-zero grace period)
     #[serde(default)]
     pub state_dir: Option<String>,
+    /// TLS certificate file path (PEM) for RPC-over-TLS (RFC 9289)
+    #[serde(default)]
+    pub tls_cert: Option<String>,
+    /// TLS private key file path (PEM) for RPC-over-TLS (RFC 9289)
+    #[serde(default)]
+    pub tls_key: Option<String>,
 }
 
 #[derive(Deserialize, Clone)]
@@ -80,6 +86,8 @@ impl Default for ServerConfig {
             listen: default_listen(),
             api_listen: default_api_listen(),
             state_dir: None,
+            tls_cert: None,
+            tls_key: None,
         }
     }
 }

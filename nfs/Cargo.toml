@@ -33,7 +33,11 @@ num-derive = "0.4"
 async-trait = "0.1"
 socket2 = "0.5"
 libc = "0.2"
+tokio-rustls = "0.26"
+rustls = "0.23"
+rustls-pemfile = "2"
 
 [dev-dependencies]
 tracing-test = "0.2"
 tempfile = "3"
+rcgen = "0.13"

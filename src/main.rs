@@ -162,7 +162,7 @@ async fn run_server(
     config_path: Option<PathBuf>,
 ) {
     // Load config and merge with CLI args
-    let (exports, listen, api_listen, state_dir) = if let Some(config_path) = config_path {
+    let (exports, listen, api_listen, state_dir, tls_cert, tls_key) = if let Some(config_path) = config_path {
         match config::Config::load(&config_path) {
             Ok(cfg) => {
                 let resolved = cfg.resolved_exports();
@@ -177,6 +177,8 @@ async fn run_server(
                     cfg.server.api_listen
                 };
                 let state_dir = cfg.server.state_dir.map(PathBuf::from);
+                let tls_cert = cfg.server.tls_cert.map(PathBuf::from);
+                let tls_key = cfg.server.tls_key.map(PathBuf::from);
                 if resolved.is_empty() {
                     // No exports in config — use CLI export path
                     let name = export_path
@@ -198,9 +200,11 @@ async fn run_server(
                         listen,
                         api,
                         state_dir,
+                        tls_cert,
+                        tls_key,
                     )
                 } else {
-                    (resolved, listen, api, state_dir)
+                    (resolved, listen, api, state_dir, tls_cert, tls_key)
                 }
             }
             Err(e) => {
@@ -227,6 +231,8 @@ async fn run_server(
             }],
             listen_addr,
             api_listen_addr,
+            None,
+            None,
             None,
         )
     };
@@ -318,6 +324,10 @@ async fn run_server(
         }
         builder.state_dir(sd.clone());
         info!(state_dir = %sd.display(), "state recovery enabled");
+    }
+    if let (Some(cert), Some(key)) = (tls_cert, tls_key) {
+        info!(cert = %cert.display(), key = %key.display(), "RPC-over-TLS enabled (RFC 9289)");
+        builder.tls(cert, key);
     }
     let server = builder.build();
 
