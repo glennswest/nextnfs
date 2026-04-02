@@ -29,6 +29,12 @@ pub struct ServerConfig {
     /// TLS private key file path (PEM) for RPC-over-TLS (RFC 9289)
     #[serde(default)]
     pub tls_key: Option<String>,
+    /// RDMA device name for NFS-over-RDMA (RFC 8166/8267), e.g. "mlx5_0"
+    #[serde(default)]
+    pub rdma_device: Option<String>,
+    /// RDMA listen port (default 20049, per RFC 8267 §5.2.1)
+    #[serde(default)]
+    pub rdma_port: Option<u16>,
 }
 
 #[derive(Deserialize, Clone)]
@@ -88,6 +94,8 @@ impl Default for ServerConfig {
             state_dir: None,
             tls_cert: None,
             tls_key: None,
+            rdma_device: None,
+            rdma_port: None,
         }
     }
 }

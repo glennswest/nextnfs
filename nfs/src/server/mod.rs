@@ -4,6 +4,7 @@ pub mod filemanager;
 pub mod nfs40;
 pub mod nfs41;
 pub mod nfs42;
+pub mod rdma;
 pub mod operation;
 pub mod overlay;
 pub mod request;
