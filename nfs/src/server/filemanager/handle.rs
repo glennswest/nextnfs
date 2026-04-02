@@ -9,7 +9,7 @@ use nextnfs_proto::nfs4_proto::{
     Stateid4, ACE4_ACCESS_ALLOWED_ACE_TYPE, ACE4_APPEND_DATA, ACE4_DELETE, ACE4_DELETE_CHILD,
     ACE4_EXECUTE, ACE4_IDENTIFIER_GROUP, ACE4_READ_ACL, ACE4_READ_ATTRIBUTES, ACE4_READ_DATA,
     ACE4_SYNCHRONIZE, ACE4_WRITE_ACL, ACE4_WRITE_ATTRIBUTES, ACE4_WRITE_DATA,
-    ACE4_WRITE_OWNER, ACL4_SUPPORT_ALLOW_ACL, FH4_PERSISTENT,
+    ACE4_WRITE_OWNER, ACL4_SUPPORT_ALLOW_ACL, FH4_PERSISTENT, FsLocations4,
 };
 
 use super::{
@@ -763,6 +763,14 @@ impl FileManagerHandle {
                     attrs.push(FileAttrValue::FilesTotal(val));
                     answer_attrs.push(FileAttr::FilesTotal);
                 }
+                FileAttr::FsLocations => {
+                    // Local export — fs_root is "/" (root of export), no referral locations
+                    attrs.push(FileAttrValue::FsLocations(FsLocations4 {
+                        fs_root: vec!["/".to_string()],
+                        locations: vec![],
+                    }));
+                    answer_attrs.push(FileAttr::FsLocations);
+                }
                 FileAttr::TimeDelta => {
                     // Server time granularity: 1 nanosecond
                     attrs.push(FileAttrValue::TimeDelta(Nfstime4 { seconds: 0, nseconds: 1 }));
@@ -859,6 +867,7 @@ impl FileManagerHandle {
             FileAttr::FilesAvail,
             FileAttr::FilesFree,
             FileAttr::FilesTotal,
+            FileAttr::FsLocations,
             FileAttr::Homogeneous,
             FileAttr::Maxfilesize,
             FileAttr::Maxlink,

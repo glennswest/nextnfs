@@ -1,6 +1,6 @@
 use nextnfs_proto::nfs4_proto::{
-    Attrlist4, Entry4, Fattr4, FileAttr, FileAttrValue, Fsid4, NfsFh4, NfsFtype4, NfsStat4,
-    Nfstime4,
+    Attrlist4, Entry4, Fattr4, FileAttr, FileAttrValue, FsLocations4, Fsid4, NfsFh4, NfsFtype4,
+    NfsStat4, Nfstime4,
 };
 
 use crate::server::export_manager::ExportManagerHandle;
@@ -142,6 +142,13 @@ pub fn pseudo_root_getattr(
             FileAttr::AclSupport => {
                 answer_attrs.push(FileAttr::AclSupport);
                 attrs.push(FileAttrValue::AclSupport(0));
+            }
+            FileAttr::FsLocations => {
+                answer_attrs.push(FileAttr::FsLocations);
+                attrs.push(FileAttrValue::FsLocations(FsLocations4 {
+                    fs_root: vec!["/".to_string()],
+                    locations: vec![],
+                }));
             }
             FileAttr::Maxfilesize => {
                 answer_attrs.push(FileAttr::Maxfilesize);
@@ -326,6 +333,13 @@ fn pseudo_export_entry_attrs(
             FileAttr::AclSupport => {
                 answer_attrs.push(FileAttr::AclSupport);
                 attrs.push(FileAttrValue::AclSupport(0));
+            }
+            FileAttr::FsLocations => {
+                answer_attrs.push(FileAttr::FsLocations);
+                attrs.push(FileAttrValue::FsLocations(FsLocations4 {
+                    fs_root: vec!["/".to_string()],
+                    locations: vec![],
+                }));
             }
             FileAttr::Maxfilesize => {
                 answer_attrs.push(FileAttr::Maxfilesize);

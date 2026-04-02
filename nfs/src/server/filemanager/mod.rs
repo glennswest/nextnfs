@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use nextnfs_proto::nfs4_proto::{
-    Attrlist4, FileAttr, FileAttrValue, NfsFh4, NfsStat4, ACL4_SUPPORT_ALLOW_ACL,
-    FH4_PERSISTENT,
+    Attrlist4, FileAttr, FileAttrValue, FsLocations4, NfsFh4, NfsStat4,
+    ACL4_SUPPORT_ALLOW_ACL, FH4_PERSISTENT,
 };
 
 mod filehandle;
@@ -475,6 +475,13 @@ impl FileManager {
                 FileAttr::AclSupport => {
                     attrs.push(FileAttrValue::AclSupport(ACL4_SUPPORT_ALLOW_ACL));
                     answer_attrs.push(FileAttr::AclSupport);
+                }
+                FileAttr::FsLocations => {
+                    attrs.push(FileAttrValue::FsLocations(FsLocations4 {
+                        fs_root: vec!["/".to_string()],
+                        locations: vec![],
+                    }));
+                    answer_attrs.push(FileAttr::FsLocations);
                 }
                 FileAttr::Fsid => {
                     attrs.push(FileAttrValue::Fsid(fh.attr_fsid));

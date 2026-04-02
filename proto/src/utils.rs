@@ -378,6 +378,47 @@ impl FattrRaw {
                     attr_vals.push(FileAttrValue::FilesTotal(val));
                     offset += 8;
                 }
+                FileAttr::FsLocations => {
+                    // fs_locations4: pathname4 fs_root, fs_location4 locations<>
+                    // pathname4 = component4<> = string array
+                    fn read_pathname4(buf: &[u8], off: &mut usize) -> Option<Vec<String>> {
+                        if *off + 4 > buf.len() { return None; }
+                        let count = u32::from_be_bytes(buf[*off..*off + 4].try_into().unwrap()) as usize;
+                        *off += 4;
+                        let mut components = Vec::with_capacity(count);
+                        for _ in 0..count {
+                            if *off + 4 > buf.len() { return None; }
+                            let slen = u32::from_be_bytes(buf[*off..*off + 4].try_into().unwrap()) as usize;
+                            *off += 4;
+                            let padded = (slen + 3) & !3;
+                            if *off + padded > buf.len() { return None; }
+                            components.push(String::from_utf8_lossy(&buf[*off..*off + slen]).to_string());
+                            *off += padded;
+                        }
+                        Some(components)
+                    }
+                    let mut off = offset;
+                    if let Some(fs_root) = read_pathname4(buf, &mut off) {
+                        if off + 4 <= buf.len() {
+                            let loc_count = u32::from_be_bytes(buf[off..off + 4].try_into().unwrap()) as usize;
+                            off += 4;
+                            let mut locations = Vec::with_capacity(loc_count);
+                            let mut ok = true;
+                            for _ in 0..loc_count {
+                                // server<> is also a string array
+                                if let Some(server) = read_pathname4(buf, &mut off) {
+                                    if let Some(rootpath) = read_pathname4(buf, &mut off) {
+                                        locations.push(crate::nfs4_proto::FsLocation4 { server, rootpath });
+                                    } else { ok = false; break; }
+                                } else { ok = false; break; }
+                            }
+                            if ok {
+                                attr_vals.push(FileAttrValue::FsLocations(crate::nfs4_proto::FsLocations4 { fs_root, locations }));
+                                offset = off;
+                            } else { break; }
+                        } else { break; }
+                    } else { break; }
+                }
                 FileAttr::CaseInsensitive => {
                     if offset + 4 > buf.len() { break; }
                     let val = u32::from_be_bytes(buf[offset..offset + 4].try_into().unwrap());
@@ -732,6 +773,25 @@ impl Attrlist4<FileAttrValue> {
                 }
                 FileAttrValue::FilesTotal(v) => {
                     buffer.extend_from_slice(v.to_be_bytes().as_ref());
+                }
+                FileAttrValue::FsLocations(v) => {
+                    // pathname4 = component4<> (array of strings)
+                    fn write_pathname4(buf: &mut Vec<u8>, path: &[String]) {
+                        buf.extend_from_slice((path.len() as u32).to_be_bytes().as_ref());
+                        for component in path {
+                            let bytes = component.as_bytes();
+                            buf.extend_from_slice((bytes.len() as u32).to_be_bytes().as_ref());
+                            buf.extend_from_slice(bytes);
+                            let pad = (4 - (bytes.len() % 4)) % 4;
+                            buf.resize(buf.len() + pad, 0);
+                        }
+                    }
+                    write_pathname4(&mut buffer, &v.fs_root);
+                    buffer.extend_from_slice((v.locations.len() as u32).to_be_bytes().as_ref());
+                    for loc in &v.locations {
+                        write_pathname4(&mut buffer, &loc.server);
+                        write_pathname4(&mut buffer, &loc.rootpath);
+                    }
                 }
                 FileAttrValue::TimeCreate(v) => {
                     buffer.extend_from_slice(v.seconds.to_be_bytes().as_ref());
@@ -1103,5 +1163,62 @@ mod tests {
         // First 4 bytes = ACE count
         let ace_count = u32::from_be_bytes(bytes[0..4].try_into().unwrap());
         assert_eq!(ace_count, 3);
+    }
+
+    #[test]
+    fn test_fs_locations_serialize_roundtrip() {
+        use crate::nfs4_proto::{FsLocation4, FsLocations4};
+
+        let fs_locs = FsLocations4 {
+            fs_root: vec!["export".to_string(), "data".to_string()],
+            locations: vec![
+                FsLocation4 {
+                    server: vec!["server1.example.com".to_string()],
+                    rootpath: vec!["backup".to_string(), "data".to_string()],
+                },
+            ],
+        };
+
+        let attr_vals = Attrlist4(vec![FileAttrValue::FsLocations(fs_locs)]);
+        let bytes = attr_vals.to_bytes();
+        assert!(!bytes.is_empty());
+
+        // Deserialize via FattrRaw
+        let raw = FattrRaw { attrmask: vec![], attr_vals: bytes };
+        let result = raw.attrvalues_from_bytes(&[FileAttr::FsLocations]);
+        assert_eq!(result.len(), 1);
+        match &result[0] {
+            FileAttrValue::FsLocations(v) => {
+                assert_eq!(v.fs_root, vec!["export".to_string(), "data".to_string()]);
+                assert_eq!(v.locations.len(), 1);
+                assert_eq!(v.locations[0].server, vec!["server1.example.com".to_string()]);
+                assert_eq!(v.locations[0].rootpath, vec!["backup".to_string(), "data".to_string()]);
+            }
+            _ => panic!("expected FsLocations"),
+        }
+    }
+
+    #[test]
+    fn test_fs_locations_empty_locations() {
+        use crate::nfs4_proto::FsLocations4;
+
+        let fs_locs = FsLocations4 {
+            fs_root: vec!["/".to_string()],
+            locations: vec![],
+        };
+
+        let attr_vals = Attrlist4(vec![FileAttrValue::FsLocations(fs_locs)]);
+        let bytes = attr_vals.to_bytes();
+
+        let raw = FattrRaw { attrmask: vec![], attr_vals: bytes };
+        let result = raw.attrvalues_from_bytes(&[FileAttr::FsLocations]);
+        assert_eq!(result.len(), 1);
+        match &result[0] {
+            FileAttrValue::FsLocations(v) => {
+                assert_eq!(v.fs_root, vec!["/".to_string()]);
+                assert!(v.locations.is_empty());
+            }
+            _ => panic!("expected FsLocations"),
+        }
     }
 }

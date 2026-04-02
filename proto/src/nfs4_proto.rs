@@ -191,14 +191,14 @@ pub struct Fsid4 {
  */
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct FsLocation4 {
-    server: Vec<Utf8strCis>,
-    rootpath: Pathname4,
+    pub server: Vec<Utf8strCis>,
+    pub rootpath: Pathname4,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct FsLocations4 {
-    fs_root: Pathname4,
-    locations: Vec<FsLocation4>,
+    pub fs_root: Pathname4,
+    pub locations: Vec<FsLocation4>,
 }
 
 /*
@@ -674,7 +674,7 @@ pub enum FileAttrValue {
     FilesAvail(u64) = 21,
     FilesFree(u64) = 22,
     FilesTotal(u64) = 23,
-    FsLocations = 24,
+    FsLocations(FsLocations4) = 24,
     Hidden = 25,
     Homogeneous(bool) = 26,
     Maxfilesize(u64) = 27,

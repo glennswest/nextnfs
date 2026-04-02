@@ -7,7 +7,8 @@
 - **feat:** Per-export access controls — IP ACL with CIDR subnet matching (IPv4/IPv6), SquashMode (none/root_squash/all_squash) with configurable anon_uid/anon_gid, enforcement in PUTFH/PUTROOTFH (NFS4ERR_ACCESS), Owner/OwnerGroup squash in GETATTR, TOML config support, 15 new tests
 - **feat:** CLAIM_PREVIOUS grace period state reclaim — 90s grace period on startup (skipped if state recovery succeeds), NFS4ERR_GRACE for mutating ops during grace, OPEN CLAIM_PREVIOUS reclaims open state on existing files, CreateOpenState actor message for lock-free reclaim, 2 new tests
 - **feat:** NFSv4 ACLs — synthesize POSIX mode-based ACLs (owner/group/everyone ALLOW ACEs), ACL XDR serialize/deserialize, ACE type/flag/mask constants, GETATTR Acl support on real files and pseudo-root, mode_to_acl() conversion, 6 new tests
-- **chore:** 522 workspace tests (57 proto + 459 server + 6 nfstest), 0 clippy warnings
+- **feat:** FsLocations attribute — GETATTR returns fs_locations4 (RFC 7530 §7.7), XDR serialize/deserialize for pathname4 arrays, local export returns fs_root=["/"] with empty locations, supported on real files and pseudo-root, 3 new tests
+- **chore:** 525 workspace tests (59 proto + 460 server + 6 nfstest), 0 clippy warnings
 
 ### 2026-03-25
 - **feat:** OverlayFS VFS backend (overlay.rs) — merges writable upper with read-only lower layers, whiteout markers (OCI spec), copy-up on write, merged directory listings, 31 tests

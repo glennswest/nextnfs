@@ -527,4 +527,27 @@ mod tests {
             panic!("Expected Opgetattr with AclSupport");
         }
     }
+
+    #[tokio::test]
+    async fn test_getattr_fs_locations() {
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let args = Getattr4args {
+            attr_request: Attrlist4(vec![FileAttr::FsLocations]),
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        if let Some(NfsResOp4::Opgetattr(Getattr4resok {
+            obj_attributes: Some(fattr), ..
+        })) = response.result
+        {
+            if let FileAttrValue::FsLocations(v) = &fattr.attr_vals.0[0] {
+                assert_eq!(v.fs_root, vec!["/".to_string()]);
+                assert!(v.locations.is_empty());
+            } else {
+                panic!("Expected FsLocations value");
+            }
+        } else {
+            panic!("Expected Opgetattr with FsLocations");
+        }
+    }
 }
