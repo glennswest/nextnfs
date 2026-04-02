@@ -10,8 +10,8 @@ use nextnfs_proto::nfs4_proto::{
 };
 
 use super::{
-    caching::run_file_write_cache, caching::WriteCache, filehandle::Filehandle, run_file_manager,
-    FileManager,
+    caching::run_file_write_cache, caching::WriteCache, filehandle::Filehandle,
+    locking::LockingState, run_file_manager, FileManager,
 };
 use crate::server::filemanager::NfsFh4;
 
@@ -20,6 +20,7 @@ pub enum FileManagerMessage {
     GetFilehandle(GetFilehandleRequest),
     GetFilehandleAttrs(GetFilehandleAttrsRequest),
     CreateFile(CreateFileRequest),
+    CreateOpenState(CreateOpenStateRequest),
     RemoveFile(RemoveFileRequest),
     TouchFile(TouchFileRequest),
     UpdateFilehandle(Filehandle),
@@ -56,6 +57,16 @@ pub struct CreateFileRequest {
     pub share_deny: u32,
     pub verifier: Option<[u8; 8]>,
     pub respond_to: oneshot::Sender<Option<Filehandle>>,
+}
+
+/// Request to create open state on an existing file (CLAIM_PREVIOUS reclaim).
+pub struct CreateOpenStateRequest {
+    pub path: VfsPath,
+    pub client_id: u64,
+    pub owner: Vec<u8>,
+    pub share_access: u32,
+    pub share_deny: u32,
+    pub respond_to: oneshot::Sender<Option<LockingState>>,
 }
 
 pub struct RemoveFileRequest {
@@ -308,6 +319,40 @@ impl FileManagerHandle {
                     nfs_error: NfsStat4::Nfs4errNoent,
                 })
             }
+            Err(_) => Err(FileManagerError {
+                nfs_error: NfsStat4::Nfs4errServerfault,
+            }),
+        }
+    }
+
+    /// Create open state on an existing file (for CLAIM_PREVIOUS reclaim).
+    /// Returns the LockingState with stateid for the reclaimed open.
+    pub async fn create_open_state(
+        &self,
+        path: VfsPath,
+        client_id: u64,
+        owner: Vec<u8>,
+        access: u32,
+        deny: u32,
+    ) -> Result<LockingState, FileManagerError> {
+        let (tx, rx) = oneshot::channel();
+        let req = CreateOpenStateRequest {
+            path,
+            client_id,
+            owner,
+            share_access: access,
+            share_deny: deny,
+            respond_to: tx,
+        };
+        if let Err(e) = self.sender.send(FileManagerMessage::CreateOpenState(req)).await {
+            error!("filemanager actor gone: {}", e);
+            return Err(FileManagerError { nfs_error: NfsStat4::Nfs4errServerfault });
+        }
+        match rx.await {
+            Ok(Some(lock)) => Ok(lock),
+            Ok(None) => Err(FileManagerError {
+                nfs_error: NfsStat4::Nfs4errStale,
+            }),
             Err(_) => Err(FileManagerError {
                 nfs_error: NfsStat4::Nfs4errServerfault,
             }),

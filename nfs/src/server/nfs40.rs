@@ -87,6 +87,8 @@ use tracing::{debug, error};
 #[derive(Debug, Clone)]
 pub struct NFS40Server {
     pub session_manager: SessionManager,
+    /// Grace period flag — true while server is in grace period (reclaim only).
+    pub in_grace: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl NFS40Server {
@@ -306,6 +308,7 @@ impl NfsProtoImpl for NFS40Server {
     fn new() -> Self {
         Self {
             session_manager: SessionManager::new(),
+            in_grace: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 
@@ -378,6 +381,37 @@ impl NfsProtoImpl for NFS40Server {
                                 }),
                             }),
                         );
+                    }
+
+                    // Grace period enforcement: reject mutating ops during grace
+                    // (RFC 7530 §9.14) — reclaim ops (CLAIM_PREVIOUS) are exempt
+                    let in_grace = self.in_grace.load(std::sync::atomic::Ordering::Relaxed);
+                    if in_grace {
+                        let deny = match &arg {
+                            // OPEN with CREATE (new file) denied during grace
+                            NfsArgOp::Opopen(args) => matches!(&args.claim, OpenClaim4::ClaimNull(_))
+                                && matches!(&args.openhow, OpenFlag4::How(_)),
+                            // Mutating directory ops denied during grace
+                            NfsArgOp::Opcreate(_) | NfsArgOp::Opremove(_) | NfsArgOp::Oprename(_) => true,
+                            // Non-reclaim LOCK denied during grace
+                            NfsArgOp::Oplock(_) => true,
+                            // WRITE/SETATTR/LINK denied during grace
+                            NfsArgOp::Opwrite(_) | NfsArgOp::Opsetattr(_) | NfsArgOp::Oplink(_) => true,
+                            _ => false,
+                        };
+                        if deny {
+                            return (
+                                request,
+                                ReplyBody::MsgAccepted(AcceptedReply {
+                                    verf: OpaqueAuth::AuthNull(Vec::<u8>::new()),
+                                    reply_data: AcceptBody::Success(Compound4res {
+                                        status: NfsStat4::Nfs4errGrace,
+                                        tag: "".to_string(),
+                                        resarray,
+                                    }),
+                                }),
+                            );
+                        }
                     }
 
                     let response = match arg {

@@ -134,6 +134,21 @@ impl FileManager {
                     let _ = req.respond_to.send(None);
                 }
             }
+            FileManagerMessage::CreateOpenState(req) => {
+                // CLAIM_PREVIOUS: create open lock state on an existing file
+                let fh = self.get_filehandle(&req.path);
+                let stateid = self.get_new_lockingstate_id();
+                let lock = LockingState::new_shared_reservation(
+                    fh.id,
+                    stateid,
+                    req.client_id,
+                    req.owner,
+                    req.share_access,
+                    req.share_deny,
+                );
+                self.lockdb.insert(lock.clone());
+                let _ = req.respond_to.send(Some(lock));
+            }
             FileManagerMessage::LockFile(req) => {
                 let result = self.handle_lock(
                     &req.filehandle_id,

@@ -72,6 +72,7 @@ impl NFSServer {
         info!(%self.bind, "nextnfs NFSv4 server listening");
 
         let client_manager_handle = ClientManagerHandle::new();
+        let nfs40 = self.service_0.as_ref().unwrap();
 
         // Near-zero grace period: restore client state from snapshot
         if let Some(ref state_dir) = self.state_dir {
@@ -86,10 +87,24 @@ impl NFSServer {
                         "state recovery complete — grace period skipped"
                     );
                     recovery.clear();
+                    // No grace period needed — state was recovered
                 }
                 Err(e) => {
-                    info!(reason = %e, "no state recovery — normal grace period applies");
+                    info!(reason = %e, "no state recovery — entering grace period");
+                    nfs40.in_grace.store(true, std::sync::atomic::Ordering::Relaxed);
                 }
+            }
+        }
+
+        // Start grace period expiry timer (90s = lease_time)
+        {
+            let grace_flag = nfs40.in_grace.clone();
+            if grace_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                tokio::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_secs(90)).await;
+                    grace_flag.store(false, std::sync::atomic::Ordering::Relaxed);
+                    info!("grace period expired — normal operations resumed");
+                });
             }
         }
 

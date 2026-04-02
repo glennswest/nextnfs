@@ -212,6 +212,59 @@ impl NfsOperation for Open4args {
             "Operation 18: OPEN - Open a Regular File {:?}, with request {:?}",
             self, request
         );
+        // CLAIM_PREVIOUS — Reclaim open state from a previous server instance.
+        // Current filehandle is the FILE (not directory), so handle before dir check.
+        if let OpenClaim4::ClaimPrevious(_delegation_type) = &self.claim {
+            let fh = match request.current_filehandle() {
+                Some(fh) => fh.clone(),
+                None => {
+                    error!("CLAIM_PREVIOUS: no current filehandle");
+                    return NfsOpResponse {
+                        request,
+                        result: None,
+                        status: NfsStat4::Nfs4errNofilehandle,
+                    };
+                }
+            };
+            // Register an open lock for this reclaimed file
+            match request.file_manager().create_open_state(
+                fh.file.clone(),
+                self.owner.clientid,
+                self.owner.owner.clone(),
+                self.share_access,
+                self.share_deny,
+            ).await {
+                Ok(lock) => {
+                    return NfsOpResponse {
+                        request,
+                        result: Some(NfsResOp4::Opopen(Open4res::Resok4(Open4resok {
+                            stateid: Stateid4 {
+                                seqid: lock.seqid,
+                                other: lock.stateid,
+                            },
+                            cinfo: ChangeInfo4 {
+                                atomic: false,
+                                before: 0,
+                                after: 0,
+                            },
+                            rflags: 0, // No CONFIRM needed for reclaim
+                            attrset: Attrlist4::<FileAttr>::new(None),
+                            delegation: OpenDelegation4::None,
+                        }))),
+                        status: NfsStat4::Nfs4Ok,
+                    };
+                }
+                Err(e) => {
+                    error!("CLAIM_PREVIOUS: failed to create open state: {:?}", e);
+                    return NfsOpResponse {
+                        request,
+                        result: None,
+                        status: e.nfs_error,
+                    };
+                }
+            }
+        }
+
         // open sets the current filehandle to the looked up filehandle
         let current_filehandle = request.current_filehandle();
         let filehandle = match current_filehandle {
@@ -238,11 +291,8 @@ impl NfsOperation for Open4args {
         }
 
         let file = match &self.claim {
-            // CLAIM_NULL:  For the client, this is a new OPEN request, and there is
-            // no previous state associated with the file for the client.
             OpenClaim4::ClaimNull(file) => file,
-            // NFS4ERR_NOTSUPP is returned if the server does not support this
-            // claim type.
+            // Delegation claim types — not yet supported (requires callback channel)
             _ => {
                 error!("Unsupported OpenClaim4 {:?}", self.claim);
                 return NfsOpResponse {
@@ -395,10 +445,67 @@ mod tests {
                 owner: b"test".to_vec(),
             },
             openhow: OpenFlag4::Open4Nocreate,
-            claim: OpenClaim4::ClaimPrevious(nextnfs_proto::nfs4_proto::OpenDelegationType4::OpenDelegateNone),
+            // CLAIM_DELEGATE_PREV is unsupported (requires callback channel)
+            claim: OpenClaim4::ClaimDelegatePrev("delegfile".to_string()),
         };
         let response = args.execute(request).await;
         assert_eq!(response.status, NfsStat4::Nfs4errNotsupp);
+    }
+
+    #[tokio::test]
+    async fn test_open_claim_previous_reclaim() {
+        let mut request = create_nfs40_server_with_root_fh(None).await;
+        // Create a file first, then reclaim it with CLAIM_PREVIOUS
+        let root_file = request.current_filehandle().unwrap().file.clone();
+        root_file.join("reclaim.txt").unwrap().create_file().unwrap();
+        let fh = request.file_manager()
+            .get_filehandle_for_path("reclaim.txt".to_string())
+            .await.unwrap();
+        request.set_filehandle(fh);
+
+        let args = Open4args {
+            seqid: 1,
+            share_access: 1,
+            share_deny: 0,
+            owner: OpenOwner4 {
+                clientid: 1,
+                owner: b"reclaim_owner".to_vec(),
+            },
+            openhow: OpenFlag4::Open4Nocreate,
+            claim: OpenClaim4::ClaimPrevious(
+                nextnfs_proto::nfs4_proto::OpenDelegationType4::OpenDelegateNone,
+            ),
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        // CLAIM_PREVIOUS should not require OPEN_CONFIRM (rflags = 0)
+        match &response.result {
+            Some(NfsResOp4::Opopen(Open4res::Resok4(resok))) => {
+                assert_eq!(resok.rflags, 0);
+            }
+            other => panic!("Expected Opopen Resok4, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_open_claim_previous_no_filehandle() {
+        let request = create_nfs40_server(None).await;
+        let args = Open4args {
+            seqid: 1,
+            share_access: 1,
+            share_deny: 0,
+            owner: OpenOwner4 {
+                clientid: 1,
+                owner: b"test".to_vec(),
+            },
+            openhow: OpenFlag4::Open4Nocreate,
+            claim: OpenClaim4::ClaimPrevious(
+                nextnfs_proto::nfs4_proto::OpenDelegationType4::OpenDelegateNone,
+            ),
+        };
+        let response = args.execute(request).await;
+        // Without a current filehandle, CLAIM_PREVIOUS fails before reaching reclaim
+        assert_ne!(response.status, NfsStat4::Nfs4Ok);
     }
 
     #[tokio::test]
