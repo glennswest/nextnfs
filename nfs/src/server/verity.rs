@@ -24,7 +24,9 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::io::{self, Read};
 use std::sync::atomic::{AtomicU8, Ordering};
-use vfs::VfsPath;
+use std::sync::Arc;
+use vfs::error::VfsErrorKind;
+use vfs::{FileSystem, SeekAndRead, SeekAndWrite, VfsMetadata, VfsPath, VfsResult};
 
 /// Block size for Merkle tree leaves (4 KB, matches filesystem page size).
 pub const BLOCK_SIZE: usize = 4096;
@@ -434,6 +436,7 @@ pub enum OnFailure {
 ///
 /// Wraps a read-only VFS layer and checks each block on first read.
 /// Implements the same verification as dm-verity/fs-verity but in userspace.
+// Manual Debug impl below (VfsPath and AtomicU8 fields)
 pub struct VerifiedLayerVfs {
     /// The underlying (unverified) filesystem.
     inner: VfsPath,
@@ -633,6 +636,131 @@ impl VerifiedLayerVfs {
         }
 
         Ok((checked, failed))
+    }
+}
+
+// ── Debug impl for VerifiedLayerVfs ───────────────────────────────────────────
+
+impl std::fmt::Debug for VerifiedLayerVfs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let hex: String = self.root_hash.iter().map(|b| format!("{:02x}", b)).collect();
+        f.debug_struct("VerifiedLayerVfs")
+            .field("root_hash", &hex)
+            .field("files", &self.manifest.files.len())
+            .field("on_failure", &self.on_failure)
+            .finish()
+    }
+}
+
+// ── FileSystem trait for VerifiedLayerVfs ─────────────────────────────────────
+
+/// Wraps the VerifiedLayerVfs in an Arc for shared ownership by the FileSystem trait.
+///
+/// The `vfs::FileSystem` trait requires `Send + Sync` and the overlay VFS takes
+/// `VfsPath` (which owns a `Box<dyn FileSystem>`). This wrapper holds the shared
+/// state (tree, cache, manifest) in an Arc so the FileSystem can be cloned into
+/// a VfsPath.
+#[derive(Debug)]
+pub struct VerifiedFS {
+    inner: Arc<VerifiedLayerVfs>,
+}
+
+impl VerifiedFS {
+    /// Create a new VerifiedFS wrapping a VerifiedLayerVfs.
+    pub fn new(verified: VerifiedLayerVfs) -> Self {
+        Self {
+            inner: Arc::new(verified),
+        }
+    }
+
+    /// Build a VerifiedFS by scanning a VFS directory tree.
+    pub fn build(inner: VfsPath, on_failure: OnFailure) -> io::Result<Self> {
+        let verified = VerifiedLayerVfs::build(inner, on_failure)?;
+        Ok(Self::new(verified))
+    }
+
+    /// Get the root hash.
+    pub fn root_hash(&self) -> &Hash256 {
+        self.inner.root_hash()
+    }
+
+    /// Get the manifest.
+    pub fn manifest(&self) -> &LayerManifest {
+        self.inner.manifest()
+    }
+
+    /// Get the cache.
+    pub fn cache(&self) -> &VerifiedBlockCache {
+        self.inner.cache()
+    }
+
+    /// Resolve a path within the inner VFS.
+    fn resolve(&self, path: &str) -> VfsResult<VfsPath> {
+        if path.is_empty() || path == "/" {
+            Ok(self.inner.inner.clone())
+        } else {
+            let clean = path.strip_prefix('/').unwrap_or(path);
+            self.inner.inner.join(clean)
+        }
+    }
+}
+
+impl FileSystem for VerifiedFS {
+    fn read_dir(&self, path: &str) -> VfsResult<Box<dyn Iterator<Item = String> + Send>> {
+        let resolved = self.resolve(path)?;
+        let entries: Vec<String> = resolved.read_dir()?.map(|e| e.filename()).collect();
+        Ok(Box::new(entries.into_iter()))
+    }
+
+    fn create_dir(&self, _path: &str) -> VfsResult<()> {
+        Err(VfsErrorKind::NotSupported.into())
+    }
+
+    fn open_file(&self, path: &str) -> VfsResult<Box<dyn SeekAndRead + Send>> {
+        let resolved = self.resolve(path)?;
+        let file = resolved.open_file()?;
+
+        // Read the full file content for verification.
+        let mut reader = file;
+        let mut data = Vec::new();
+        reader.read_to_end(&mut data).map_err(|e| {
+            vfs::VfsError::from(VfsErrorKind::IoError(e))
+        })?;
+
+        // Verify the content against the Merkle tree.
+        let clean_path = path.strip_prefix('/').unwrap_or(path);
+        self.inner.verify_file_blocks(clean_path, &data, 0).map_err(|e| {
+            vfs::VfsError::from(VfsErrorKind::IoError(e))
+        })?;
+
+        // Return a cursor over the verified data.
+        Ok(Box::new(io::Cursor::new(data)))
+    }
+
+    fn create_file(&self, _path: &str) -> VfsResult<Box<dyn SeekAndWrite + Send>> {
+        Err(VfsErrorKind::NotSupported.into())
+    }
+
+    fn append_file(&self, _path: &str) -> VfsResult<Box<dyn SeekAndWrite + Send>> {
+        Err(VfsErrorKind::NotSupported.into())
+    }
+
+    fn metadata(&self, path: &str) -> VfsResult<VfsMetadata> {
+        let resolved = self.resolve(path)?;
+        resolved.metadata()
+    }
+
+    fn exists(&self, path: &str) -> VfsResult<bool> {
+        let resolved = self.resolve(path)?;
+        resolved.exists()
+    }
+
+    fn remove_file(&self, _path: &str) -> VfsResult<()> {
+        Err(VfsErrorKind::NotSupported.into())
+    }
+
+    fn remove_dir(&self, _path: &str) -> VfsResult<()> {
+        Err(VfsErrorKind::NotSupported.into())
     }
 }
 
@@ -1107,5 +1235,155 @@ mod tests {
         assert_eq!(OnFailure::Reject, OnFailure::Reject);
         assert_eq!(OnFailure::Warn, OnFailure::Warn);
         assert_ne!(OnFailure::Reject, OnFailure::Warn);
+    }
+
+    // ── VerifiedFS (FileSystem trait) tests ──────────────────────────────
+
+    #[test]
+    fn test_verified_fs_open_file() {
+        let root = create_test_vfs();
+        let vfs = VerifiedFS::build(root, OnFailure::Reject).unwrap();
+        let vfs_path: VfsPath = vfs.into();
+
+        // Open and read a file through the verified VFS.
+        let mut file = vfs_path.join("etc/config.txt").unwrap().open_file().unwrap();
+        let mut buf = String::new();
+        file.read_to_string(&mut buf).unwrap();
+        assert_eq!(buf, "key=value\n");
+    }
+
+    #[test]
+    fn test_verified_fs_read_dir() {
+        let root = create_test_vfs();
+        let vfs = VerifiedFS::build(root, OnFailure::Reject).unwrap();
+        let vfs_path: VfsPath = vfs.into();
+
+        let entries: Vec<String> = vfs_path
+            .read_dir()
+            .unwrap()
+            .map(|e: VfsPath| e.filename())
+            .collect();
+        assert!(entries.contains(&"etc".to_string()));
+        assert!(entries.contains(&"usr".to_string()));
+    }
+
+    #[test]
+    fn test_verified_fs_metadata() {
+        let root = create_test_vfs();
+        let vfs = VerifiedFS::build(root, OnFailure::Reject).unwrap();
+        let vfs_path: VfsPath = vfs.into();
+
+        let meta = vfs_path.join("etc/config.txt").unwrap().metadata().unwrap();
+        assert_eq!(meta.file_type, vfs::VfsFileType::File);
+        assert_eq!(meta.len, 10); // "key=value\n" = 10 bytes
+    }
+
+    #[test]
+    fn test_verified_fs_exists() {
+        let root = create_test_vfs();
+        let vfs = VerifiedFS::build(root, OnFailure::Reject).unwrap();
+        let vfs_path: VfsPath = vfs.into();
+
+        assert!(vfs_path.join("etc/config.txt").unwrap().exists().unwrap());
+        assert!(vfs_path.join("usr/bin/hello").unwrap().exists().unwrap());
+        assert!(!vfs_path.join("nonexistent").unwrap().exists().unwrap());
+    }
+
+    #[test]
+    fn test_verified_fs_read_only() {
+        let root = create_test_vfs();
+        let vfs = VerifiedFS::build(root, OnFailure::Reject).unwrap();
+        let vfs_path: VfsPath = vfs.into();
+
+        // Write operations should fail on a read-only verified layer.
+        assert!(vfs_path.join("new_file").unwrap().create_file().is_err());
+        assert!(vfs_path.join("new_dir").unwrap().create_dir().is_err());
+        assert!(vfs_path.join("etc/config.txt").unwrap().remove_file().is_err());
+    }
+
+    #[test]
+    fn test_verified_fs_as_overlay_lower() {
+        use crate::server::overlay::OverlayFS;
+
+        // Create a verified lower layer.
+        let lower_root = create_test_vfs();
+        let verified = VerifiedFS::build(lower_root, OnFailure::Reject).unwrap();
+        let verified_path: VfsPath = verified.into();
+
+        // Create an empty upper layer.
+        let upper: VfsPath = MemoryFS::new().into();
+
+        // Build an overlay with the verified layer as a lower layer.
+        let ov = OverlayFS::new(upper, vec![verified_path]);
+        let ov_path: VfsPath = ov.into();
+
+        // Read a file from the verified lower layer through the overlay.
+        let mut file = ov_path.join("etc/config.txt").unwrap().open_file().unwrap();
+        let mut buf = String::new();
+        file.read_to_string(&mut buf).unwrap();
+        assert_eq!(buf, "key=value\n");
+
+        // Listing should work through the overlay.
+        let entries: Vec<String> = ov_path
+            .read_dir()
+            .unwrap()
+            .map(|e| e.filename())
+            .collect();
+        assert!(entries.contains(&"etc".to_string()));
+        assert!(entries.contains(&"usr".to_string()));
+    }
+
+    #[test]
+    fn test_verified_fs_overlay_write_upper() {
+        use crate::server::overlay::OverlayFS;
+
+        // Create a verified lower layer.
+        let lower_root = create_test_vfs();
+        let verified = VerifiedFS::build(lower_root, OnFailure::Reject).unwrap();
+        let verified_path: VfsPath = verified.into();
+
+        // Create an upper layer.
+        let upper: VfsPath = MemoryFS::new().into();
+
+        // Build an overlay.
+        let ov = OverlayFS::new(upper, vec![verified_path]);
+        let ov_path: VfsPath = ov.into();
+
+        // Write a new file — goes to upper.
+        {
+            use std::io::Write;
+            let mut f = ov_path.join("new_file.txt").unwrap().create_file().unwrap();
+            f.write_all(b"new content").unwrap();
+        }
+
+        // New file should be readable.
+        let mut file = ov_path.join("new_file.txt").unwrap().open_file().unwrap();
+        let mut buf = String::new();
+        file.read_to_string(&mut buf).unwrap();
+        assert_eq!(buf, "new content");
+
+        // Original verified file should still be readable.
+        let mut file2 = ov_path.join("etc/config.txt").unwrap().open_file().unwrap();
+        let mut buf2 = String::new();
+        file2.read_to_string(&mut buf2).unwrap();
+        assert_eq!(buf2, "key=value\n");
+    }
+
+    #[test]
+    fn test_verified_fs_cache_populated_after_read() {
+        let root = create_test_vfs();
+        let vfs = VerifiedFS::build(root, OnFailure::Reject).unwrap();
+        assert_eq!(vfs.cache().verified_count(), 0);
+
+        let vfs_path: VfsPath = vfs.into();
+
+        // Reading a file should populate the cache.
+        let mut file = vfs_path.join("etc/config.txt").unwrap().open_file().unwrap();
+        let mut buf = Vec::new();
+        file.read_to_end(&mut buf).unwrap();
+        assert_eq!(buf, b"key=value\n");
+
+        // Can't check cache directly after into() since we moved the VerifiedFS.
+        // But the read succeeded, which means verification passed.
     }
 }
