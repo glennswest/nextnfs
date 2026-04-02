@@ -37,15 +37,30 @@ impl NfsOperation for SecInfo4args {
             };
         }
 
-        // Return supported security flavors: AUTH_SYS and AUTH_NONE
-        // We don't support RPCSEC_GSS (Kerberos)
+        // Return supported security flavors: AUTH_SYS, AUTH_NONE, and RPCSEC_GSS
         // Per RFC 7530 S16.31.4, the current filehandle is consumed (set to absent)
         // after SECINFO completes.
+        let krb5_oid: Vec<u64> = vec![1, 2, 840, 113554, 1, 2, 2];
         NfsOpResponse {
             request,
             result: Some(NfsResOp4::OpSecinfo(SecInfo4res::Resok4(vec![
                 SeCinfo4::AuthSys,
                 SeCinfo4::AuthNone,
+                SeCinfo4::FlavorInfo(RpcSecGssInfo {
+                    oid: krb5_oid.clone(),
+                    qop: 0,
+                    service: RpcGssSvc::RpcGssSvcNone,
+                }),
+                SeCinfo4::FlavorInfo(RpcSecGssInfo {
+                    oid: krb5_oid.clone(),
+                    qop: 0,
+                    service: RpcGssSvc::RpcGssSvcIntegrity,
+                }),
+                SeCinfo4::FlavorInfo(RpcSecGssInfo {
+                    oid: krb5_oid,
+                    qop: 0,
+                    service: RpcGssSvc::RpcGssSvcPrivacy,
+                }),
             ]))),
             status: NfsStat4::Nfs4Ok,
         }
@@ -74,9 +89,13 @@ mod tests {
         assert_eq!(response.status, NfsStat4::Nfs4Ok);
         match response.result {
             Some(NfsResOp4::OpSecinfo(SecInfo4res::Resok4(flavors))) => {
-                assert_eq!(flavors.len(), 2);
+                assert_eq!(flavors.len(), 5);
                 assert_eq!(flavors[0], SeCinfo4::AuthSys);
                 assert_eq!(flavors[1], SeCinfo4::AuthNone);
+                // krb5, krb5i, krb5p
+                assert!(matches!(flavors[2], SeCinfo4::FlavorInfo(ref info) if info.service == RpcGssSvc::RpcGssSvcNone));
+                assert!(matches!(flavors[3], SeCinfo4::FlavorInfo(ref info) if info.service == RpcGssSvc::RpcGssSvcIntegrity));
+                assert!(matches!(flavors[4], SeCinfo4::FlavorInfo(ref info) if info.service == RpcGssSvc::RpcGssSvcPrivacy));
             }
             _ => panic!("Expected SECINFO Resok4"),
         }

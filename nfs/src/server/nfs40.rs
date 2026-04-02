@@ -57,6 +57,7 @@ fn op_name(arg: &NfsArgOp) -> &'static str {
         NfsArgOp::OplayoutCommit(_) => "LAYOUTCOMMIT",
         NfsArgOp::OplayoutGet(_) => "LAYOUTGET",
         NfsArgOp::OplayoutReturn(_) => "LAYOUTRETURN",
+        NfsArgOp::OpsecinfoNoName(_) => "SECINFO_NO_NAME",
         NfsArgOp::Opsequence(_) => "SEQUENCE",
         NfsArgOp::OptestStateid(_) => "TEST_STATEID",
         NfsArgOp::OpdestroyClientid(_) => "DESTROY_CLIENTID",
@@ -93,6 +94,7 @@ mod op_remove;
 mod op_rename;
 mod op_renew;
 mod op_secinfo;
+mod op_secinfo_no_name;
 mod op_set_clientid;
 mod op_set_clientid_confirm;
 mod op_setattr;
@@ -396,6 +398,9 @@ impl NfsProtoImpl for NFS40Server {
                     );
                 }
 
+                // Store auth credentials in request for operation handlers
+                request.set_auth_cred(msg.cred.clone());
+
                 let mut resarray = Vec::with_capacity(args.argarray.len());
                 for arg in args.argarray {
                     let operation = op_name(&arg);
@@ -528,6 +533,7 @@ impl NfsProtoImpl for NFS40Server {
                         NfsArgOp::OplayoutCommit(args) => args.execute(request).await,
                         NfsArgOp::OplayoutGet(args) => args.execute(request).await,
                         NfsArgOp::OplayoutReturn(args) => args.execute(request).await,
+                        NfsArgOp::OpsecinfoNoName(args) => args.execute(request).await,
 
                         // NFSv4.2 operations (RFC 7862)
                         NfsArgOp::Opallocate(args) => args.execute(request).await,

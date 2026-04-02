@@ -1,6 +1,7 @@
 use std::{collections::HashMap, sync::Arc, time::SystemTime};
 
 use nextnfs_proto::nfs4_proto::{NfsFh4, NfsStat4};
+use nextnfs_proto::rpc_proto::OpaqueAuth;
 use tracing::error;
 
 use tokio::sync::Mutex;
@@ -47,6 +48,8 @@ pub struct NfsRequest<'a> {
     // Session context set by SEQUENCE handler
     pub session_id: Option<[u8; 16]>,
     pub sequence_slotid: Option<u32>,
+    // RPC auth credentials from the calling client
+    auth_cred: Option<OpaqueAuth>,
 }
 
 impl<'a> NfsRequest<'a> {
@@ -83,6 +86,7 @@ impl<'a> NfsRequest<'a> {
             session_manager,
             session_id: None,
             sequence_slotid: None,
+            auth_cred: None,
         }
     }
 
@@ -177,6 +181,37 @@ impl<'a> NfsRequest<'a> {
             Some(ac) => ac.check_client(&self.client_addr),
             None => true,
         }
+    }
+
+    /// Set the RPC auth credentials for this request.
+    pub fn set_auth_cred(&mut self, cred: OpaqueAuth) {
+        self.auth_cred = Some(cred);
+    }
+
+    /// Get the RPC auth credentials.
+    pub fn auth_cred(&self) -> Option<&OpaqueAuth> {
+        self.auth_cred.as_ref()
+    }
+
+    /// Get the effective UID from AUTH_SYS credentials, or 0 (root) if not AUTH_SYS.
+    pub fn auth_uid(&self) -> u32 {
+        match &self.auth_cred {
+            Some(OpaqueAuth::AuthUnix(auth)) => auth.uid,
+            _ => 0,
+        }
+    }
+
+    /// Get the effective GID from AUTH_SYS credentials, or 0 (root) if not AUTH_SYS.
+    pub fn auth_gid(&self) -> u32 {
+        match &self.auth_cred {
+            Some(OpaqueAuth::AuthUnix(auth)) => auth.gid,
+            _ => 0,
+        }
+    }
+
+    /// Check if the client is using RPCSEC_GSS authentication.
+    pub fn is_gss_auth(&self) -> bool {
+        matches!(&self.auth_cred, Some(OpaqueAuth::AuthGss(_)))
     }
 
     pub fn set_filehandle(&mut self, filehandle: Filehandle) {
@@ -396,5 +431,44 @@ mod tests {
         request.set_filehandle_with_export(fh.clone());
         assert!(request.current_filehandle().is_some());
         assert!(request.current_export_id().is_some());
+    }
+
+    #[tokio::test]
+    async fn test_request_no_auth_initially() {
+        let request = create_nfs40_server(None).await;
+        assert!(request.auth_cred().is_none());
+        assert_eq!(request.auth_uid(), 0);
+        assert_eq!(request.auth_gid(), 0);
+        assert!(!request.is_gss_auth());
+    }
+
+    #[tokio::test]
+    async fn test_request_auth_sys() {
+        use nextnfs_proto::rpc_proto::AuthUnix;
+        let mut request = create_nfs40_server(None).await;
+        request.set_auth_cred(OpaqueAuth::AuthUnix(AuthUnix {
+            stamp: 0,
+            machinename: "testhost".to_string(),
+            uid: 1000,
+            gid: 1000,
+            gids: vec![1000, 100],
+        }));
+        assert_eq!(request.auth_uid(), 1000);
+        assert_eq!(request.auth_gid(), 1000);
+        assert!(!request.is_gss_auth());
+    }
+
+    #[tokio::test]
+    async fn test_request_auth_gss() {
+        use nextnfs_proto::rpc_proto::RpcSecGssCred;
+        let mut request = create_nfs40_server(None).await;
+        request.set_auth_cred(OpaqueAuth::AuthGss(RpcSecGssCred {
+            gss_proc: 0,
+            seq_num: 1,
+            service: 1,
+            handle: vec![0xAB, 0xCD],
+        }));
+        assert!(request.is_gss_auth());
+        assert_eq!(request.auth_uid(), 0); // GSS doesn't carry UID directly
     }
 }

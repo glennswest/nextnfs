@@ -1322,9 +1322,9 @@ pub enum RpcGssSvc {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RpcSecGssInfo {
-    oid: SecOid4,
-    qop: Qop4,
-    service: RpcGssSvc,
+    pub oid: SecOid4,
+    pub qop: Qop4,
+    pub service: RpcGssSvc,
 }
 
 /* RPCSEC_GSS has a value of '6'.  See RFC 2203 */
@@ -1343,6 +1343,22 @@ type SecInfo4resok = Vec<SeCinfo4>;
 pub enum SecInfo4res {
     Resok4(SecInfo4resok),
 }
+
+/* SECINFO_NO_NAME (op 52, RFC 5661 §18.45) */
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[repr(u32)]
+pub enum SecinfoStyle4 {
+    SecinfoStyle4CurrentFh = 0,
+    SecinfoStyle4Parent = 1,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct SecinfoNoName4args {
+    pub sina_style: SecinfoStyle4,
+}
+
+/// SECINFO_NO_NAME returns the same result as SECINFO.
+pub type SecinfoNoName4res = SecInfo4res;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SetAttr4args {
@@ -2100,6 +2116,7 @@ pub enum NfsArgOp {
     OplayoutCommit(LayoutCommit4args) = 49,
     OplayoutGet(LayoutGet4args) = 50,
     OplayoutReturn(LayoutReturn4args) = 51,
+    OpsecinfoNoName(SecinfoNoName4args) = 52,
     Opsequence(Sequence4args) = 53,
     OptestStateid(TestStateid4args) = 55,
     OpdestroyClientid(DestroyClientId4args) = 57,
@@ -2168,6 +2185,7 @@ pub enum NfsResOp4 {
     OplayoutCommit(LayoutCommit4res) = 49,
     OplayoutGet(LayoutGet4res) = 50,
     OplayoutReturn(LayoutReturn4res) = 51,
+    OpsecinfoNoName(SecinfoNoName4res) = 52,
     Opsequence(Sequence4res) = 53,
     OptestStateid(TestStateid4res) = 55,
     OpdestroyClientid(DestroyClientId4res) = 57,

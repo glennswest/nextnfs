@@ -20,6 +20,20 @@ pub struct AuthUnix {
     pub gids: Vec<u32>,
 }
 
+/// RPCSEC_GSS credential (RFC 2203 §5.2.2).
+#[derive(Clone, Debug)]
+pub struct RpcSecGssCred {
+    /// GSS procedure: RPCSEC_GSS_DATA(0), INIT(1), CONTINUE_INIT(2), DESTROY(3).
+    pub gss_proc: u32,
+    /// Sequence number for data integrity.
+    pub seq_num: u32,
+    /// GSS service: None(1), Integrity(2), Privacy(3).
+    pub service: u32,
+    /// Context handle (opaque, server-assigned).
+    pub handle: Vec<u8>,
+}
+
+/// RPC authentication credentials (RFC 5531 §8.2).
 #[derive(Clone, Debug)]
 #[repr(u32)]
 pub enum OpaqueAuth {
@@ -28,6 +42,8 @@ pub enum OpaqueAuth {
     // not supported
     AuthShort = 2,
     AuthDes = 3,
+    /// RPCSEC_GSS (RFC 2203) — flavor 6.
+    AuthGss(RpcSecGssCred) = 6,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -261,5 +277,51 @@ mod tests {
         assert_eq!(cb.prog, 100003);
         assert_eq!(cb.vers, 4);
         assert_eq!(cb.proc, 1);
+    }
+
+    #[test]
+    fn test_rpcsec_gss_cred_fields() {
+        let cred = RpcSecGssCred {
+            gss_proc: 0,  // RPCSEC_GSS_DATA
+            seq_num: 42,
+            service: 1,   // rpc_gss_svc_none
+            handle: vec![0xDE, 0xAD],
+        };
+        assert_eq!(cred.gss_proc, 0);
+        assert_eq!(cred.seq_num, 42);
+        assert_eq!(cred.service, 1);
+        assert_eq!(cred.handle, vec![0xDE, 0xAD]);
+    }
+
+    #[test]
+    fn test_auth_gss_variant() {
+        let auth = OpaqueAuth::AuthGss(RpcSecGssCred {
+            gss_proc: 1,  // RPCSEC_GSS_INIT
+            seq_num: 0,
+            service: 2,   // rpc_gss_svc_integrity
+            handle: vec![],
+        });
+        assert!(matches!(auth, OpaqueAuth::AuthGss(_)));
+    }
+
+    #[test]
+    fn test_auth_gss_roundtrip() {
+        let auth = OpaqueAuth::AuthGss(RpcSecGssCred {
+            gss_proc: 0,
+            seq_num: 99,
+            service: 3,  // rpc_gss_svc_privacy
+            handle: vec![1, 2, 3, 4, 5, 6, 7, 8],
+        });
+        let bytes = serde_xdr::to_bytes(&auth).unwrap();
+        let decoded: OpaqueAuth = serde_xdr::from_bytes(&bytes).unwrap();
+        match decoded {
+            OpaqueAuth::AuthGss(cred) => {
+                assert_eq!(cred.gss_proc, 0);
+                assert_eq!(cred.seq_num, 99);
+                assert_eq!(cred.service, 3);
+                assert_eq!(cred.handle, vec![1, 2, 3, 4, 5, 6, 7, 8]);
+            }
+            _ => panic!("Expected AuthGss after roundtrip"),
+        }
     }
 }

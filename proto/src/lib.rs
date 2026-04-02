@@ -183,6 +183,37 @@ pub fn from_bytes(buffer: Vec<u8>) -> Result<RpcCallMsg, anyhow::Error> {
                 let auth: AuthUnix = from_reader(&mut body_cursor)?;
                 Ok(OpaqueAuth::AuthUnix(auth))
             }
+            6 => {
+                // RPCSEC_GSS (RFC 2203 §5.2.2): parse credential body
+                if body.len() >= 12 {
+                    let mut pos = 0usize;
+                    let gss_proc = u32::from_be_bytes(body[pos..pos + 4].try_into().unwrap());
+                    pos += 4;
+                    let seq_num = u32::from_be_bytes(body[pos..pos + 4].try_into().unwrap());
+                    pos += 4;
+                    let service = u32::from_be_bytes(body[pos..pos + 4].try_into().unwrap());
+                    pos += 4;
+                    let handle = if pos + 4 <= body.len() {
+                        let handle_len = u32::from_be_bytes(body[pos..pos + 4].try_into().unwrap()) as usize;
+                        pos += 4;
+                        if pos + handle_len <= body.len() {
+                            body[pos..pos + handle_len].to_vec()
+                        } else {
+                            Vec::new()
+                        }
+                    } else {
+                        Vec::new()
+                    };
+                    Ok(OpaqueAuth::AuthGss(rpc_proto::RpcSecGssCred {
+                        gss_proc,
+                        seq_num,
+                        service,
+                        handle,
+                    }))
+                } else {
+                    Ok(OpaqueAuth::AuthNull(Vec::new()))
+                }
+            }
             _ => Ok(OpaqueAuth::AuthNull(body)), // unsupported → treat as opaque
         }
     };
