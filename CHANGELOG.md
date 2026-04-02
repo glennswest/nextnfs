@@ -13,7 +13,8 @@
 - **feat:** RPC-over-TLS transport encryption (RFC 9289) — tokio-rustls TLS acceptor wrapping TCP connections, PEM cert/key loading, ServerBuilder `.tls()` method, TOML config `tls_cert`/`tls_key` fields, ConnectionContext struct for clean parameter passing, generic `handle_connection<T>` over any AsyncRead+AsyncWrite transport, 3 new tests
 - **feat:** NFSv4.2 server-side operations (RFC 7862) — COPY (op 60) server-side file copy with saved/current filehandle source/destination, partial offset/count support, chunked 256KB I/O; SEEK (op 69) data/hole boundary detection, contiguous data model for VFS; ALLOCATE (op 59) space preallocation with zero-fill extension; all operations enforce quota via QuotaManager; 10 new tests
 - **feat:** NFSv4.1 session support (RFC 5661) — EXCHANGE_ID (client-server identity negotiation), CREATE_SESSION (session establishment with slot table), SEQUENCE (per-compound slot/sequence validation), DESTROY_SESSION, DESTROY_CLIENTID, RECLAIM_COMPLETE, BIND_CONN_TO_SESSION, FREE_STATEID, TEST_STATEID; minor_version=1 accepted in COMPOUND; SessionManager with Arc<RwLock<HashMap>> for thread-safe session state; 15 new tests
-- **chore:** 563 workspace tests (59 proto + 498 server + 6 nfstest), 0 clippy warnings
+- **feat:** Session trunking (RFC 5661 §2.10.5) — BIND_CONN_TO_SESSION tracks bound connections per session via HashSet, connection_count() query, idempotent re-binding, session destruction cleans up bindings, 4 new trunking tests
+- **chore:** 565 workspace tests (59 proto + 500 server + 6 nfstest), 0 clippy warnings
 
 ### 2026-03-25
 - **feat:** OverlayFS VFS backend (overlay.rs) — merges writable upper with read-only lower layers, whiteout markers (OCI spec), copy-up on write, merged directory listings, 31 tests

@@ -1,20 +1,22 @@
-//! NFSv4.1 session layer skeleton.
+//! NFSv4.1 session layer (RFC 5661).
 //!
-//! NFSv4.1 (RFC 5661) adds sessions on top of v4.0.  Currently the server
-//! rejects v4.1 COMPOUND requests with NFS4ERR_MINOR_VERS_MISMATCH so that
-//! Linux clients auto-negotiate down to v4.0.
-//!
-//! This module provides the session management types needed when v4.1 support
-//! is enabled in the future.  Key operations:
+//! Provides session management for NFSv4.1 COMPOUND requests. Key operations:
 //!
 //! - EXCHANGE_ID — register client, get client ID + server owner
 //! - CREATE_SESSION — create session with fore/back channel attrs
-//! - SEQUENCE — must be first op in every v4.1 COMPOUND
-//! - DESTROY_SESSION — clean up
+//! - SEQUENCE — must be first op in every v4.1 COMPOUND; slot/sequence validation
+//! - BIND_CONN_TO_SESSION — associate additional connections (trunking)
+//! - DESTROY_SESSION / DESTROY_CLIENTID — cleanup
 //! - RECLAIM_COMPLETE — signal end of grace/reclaim period
-//! - DESTROY_CLIENTID — remove client state
+//!
+//! ## Session Trunking (RFC 5661 §2.10.5)
+//!
+//! Multiple TCP connections can be bound to a single session via
+//! BIND_CONN_TO_SESSION. This enables bandwidth aggregation (session
+//! trunking) and failover (client-ID trunking). The server tracks bound
+//! connections per session for auditing and cleanup.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -32,6 +34,9 @@ pub struct Session {
     pub slots: Vec<SlotState>,
     /// Fore-channel attributes negotiated at CREATE_SESSION.
     pub fore_channel_attrs: ChannelAttrs,
+    /// Bound connections for session trunking (RFC 5661 §2.10.5).
+    /// Tracks client addresses bound via BIND_CONN_TO_SESSION.
+    pub bound_connections: HashSet<String>,
 }
 
 /// State of a single sequence slot.
@@ -111,6 +116,7 @@ impl SessionManager {
                 .map(|_| SlotState::default())
                 .collect(),
             fore_channel_attrs: ChannelAttrs::default(),
+            bound_connections: HashSet::new(),
         };
 
         let mut sessions = self.sessions.write().await;
@@ -128,6 +134,26 @@ impl SessionManager {
     pub async fn destroy_session(&self, id: &SessionId) -> bool {
         let mut sessions = self.sessions.write().await;
         sessions.remove(id).is_some()
+    }
+
+    /// Bind a connection to a session (BIND_CONN_TO_SESSION for trunking).
+    pub async fn bind_connection(&self, id: &SessionId, addr: String) -> bool {
+        let mut sessions = self.sessions.write().await;
+        if let Some(session) = sessions.get_mut(id) {
+            session.bound_connections.insert(addr);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Get the number of bound connections for a session.
+    pub async fn connection_count(&self, id: &SessionId) -> usize {
+        let sessions = self.sessions.read().await;
+        sessions
+            .get(id)
+            .map(|s| s.bound_connections.len())
+            .unwrap_or(0)
     }
 
     /// Destroy all sessions for a client (DESTROY_CLIENTID).
@@ -253,6 +279,31 @@ mod tests {
             assert_eq!(slot.sequence_id, 0);
             assert!(slot.cached_reply.is_none());
         }
+    }
+
+    #[tokio::test]
+    async fn test_bind_connection_trunking() {
+        let mgr = SessionManager::new();
+        let cid = mgr.allocate_client_id().await;
+        let session = mgr.create_session(cid, 4).await;
+
+        // Bind multiple connections to the same session
+        assert!(mgr.bind_connection(&session.id, "192.168.1.10:12345".to_string()).await);
+        assert!(mgr.bind_connection(&session.id, "192.168.1.10:54321".to_string()).await);
+        assert!(mgr.bind_connection(&session.id, "192.168.1.20:12345".to_string()).await);
+
+        assert_eq!(mgr.connection_count(&session.id).await, 3);
+
+        // Binding same address again is idempotent (HashSet)
+        assert!(mgr.bind_connection(&session.id, "192.168.1.10:12345".to_string()).await);
+        assert_eq!(mgr.connection_count(&session.id).await, 3);
+    }
+
+    #[tokio::test]
+    async fn test_bind_connection_nonexistent_session() {
+        let mgr = SessionManager::new();
+        assert!(!mgr.bind_connection(&[0xFF; 16], "10.0.0.1:80".to_string()).await);
+        assert_eq!(mgr.connection_count(&[0xFF; 16]).await, 0);
     }
 
     #[tokio::test]

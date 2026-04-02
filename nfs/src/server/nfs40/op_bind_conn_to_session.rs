@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use crate::server::{operation::NfsOperation, request::NfsRequest, response::NfsOpResponse};
 use nextnfs_proto::nfs4_proto::{
@@ -15,7 +15,6 @@ impl NfsOperation for BindConnToSession4args {
             &self.bctsa_sessid[..4]
         );
 
-        // Verify session exists
         let sm = match request.session_manager() {
             Some(sm) => sm.clone(),
             None => {
@@ -27,6 +26,7 @@ impl NfsOperation for BindConnToSession4args {
             }
         };
 
+        // Verify session exists
         let session = match sm.get_session(&self.bctsa_sessid).await {
             Some(s) => s,
             None => {
@@ -38,6 +38,18 @@ impl NfsOperation for BindConnToSession4args {
                 };
             }
         };
+
+        // Track this connection binding for session trunking (RFC 5661 §2.10.5)
+        let client_addr = request.client_addr().to_string();
+        sm.bind_connection(&self.bctsa_sessid, client_addr.clone())
+            .await;
+        let conn_count = sm.connection_count(&self.bctsa_sessid).await;
+        info!(
+            session = ?&self.bctsa_sessid[..4],
+            client = %client_addr,
+            connections = conn_count,
+            "session trunking: connection bound"
+        );
 
         // Accept the binding — fore channel only (no callback channel yet)
         NfsOpResponse {
