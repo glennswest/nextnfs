@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-use nextnfs_server::export_manager::{ExportManagerHandle, QosConfig};
+use nextnfs_server::export_manager::{AccessConfig, ExportManagerHandle, QosConfig, SquashMode};
 use nextnfs_server::NFSServer;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
@@ -190,6 +190,10 @@ async fn run_server(
                             read_only: false,
                             max_ops_per_sec: 0,
                             max_bytes_per_sec: 0,
+                            clients: vec![],
+                            squash: String::new(),
+                            anon_uid: 65534,
+                            anon_gid: 65534,
                         }],
                         listen,
                         api,
@@ -216,6 +220,10 @@ async fn run_server(
                 read_only: false,
                 max_ops_per_sec: 0,
                 max_bytes_per_sec: 0,
+                clients: vec![],
+                squash: String::new(),
+                anon_uid: 65534,
+                anon_gid: 65534,
             }],
             listen_addr,
             api_listen_addr,
@@ -267,6 +275,27 @@ async fn run_server(
                         max_ops_per_sec = entry.max_ops_per_sec,
                         max_bytes_per_sec = entry.max_bytes_per_sec,
                         "QoS rate limiting configured"
+                    );
+                }
+                // Apply access control config from TOML if specified
+                if !entry.clients.is_empty() || !entry.squash.is_empty() {
+                    let squash = match entry.squash.as_str() {
+                        "root_squash" => SquashMode::RootSquash,
+                        "all_squash" => SquashMode::AllSquash,
+                        _ => SquashMode::None,
+                    };
+                    let access = AccessConfig {
+                        clients: entry.clients.clone(),
+                        squash,
+                        anon_uid: entry.anon_uid,
+                        anon_gid: entry.anon_gid,
+                    };
+                    let _ = export_manager.set_access(&entry.name, access).await;
+                    info!(
+                        name = %entry.name,
+                        clients = ?entry.clients,
+                        squash = %entry.squash,
+                        "access control configured"
                     );
                 }
             }

@@ -7,7 +7,7 @@ use tokio::sync::Mutex;
 
 use super::{
     clientmanager::ClientManagerHandle,
-    export_manager::{ExportManagerHandle, ExportStats, QuotaManager, RateLimiter},
+    export_manager::{AccessControl, ExportManagerHandle, ExportStats, QuotaManager, RateLimiter},
     filemanager::{FileManagerHandle, Filehandle},
     nfs40::op_pseudo,
     nfs41::SessionManager,
@@ -31,6 +31,8 @@ pub struct NfsRequest<'a> {
     rate_limiter: Option<Arc<Mutex<RateLimiter>>>,
     // cached per-export quota manager
     quota_manager: Option<Arc<QuotaManager>>,
+    // cached per-export access control
+    access_control: Option<Arc<AccessControl>>,
     // current export id (extracted from filehandle)
     current_export_id: Option<u8>,
     // time the server was booted
@@ -72,6 +74,7 @@ impl<'a> NfsRequest<'a> {
             export_stats: None,
             rate_limiter: None,
             quota_manager: None,
+            access_control: None,
             current_export_id: None,
             boot_time,
             request_time,
@@ -126,6 +129,7 @@ impl<'a> NfsRequest<'a> {
             self.export_stats = None;
             self.rate_limiter = None;
             self.quota_manager = None;
+            self.access_control = None;
             return;
         }
         if let Some((info, fm)) = self.export_manager.get_export_by_id(export_id).await {
@@ -133,6 +137,7 @@ impl<'a> NfsRequest<'a> {
             self.export_stats = Some(info.stats);
             self.rate_limiter = Some(info.rate_limiter);
             self.quota_manager = Some(info.quota_manager);
+            self.access_control = Some(info.access_control);
         }
     }
 
@@ -158,6 +163,20 @@ impl<'a> NfsRequest<'a> {
     /// Get the cached per-export quota manager.
     pub fn quota_manager(&self) -> Option<&Arc<QuotaManager>> {
         self.quota_manager.as_ref()
+    }
+
+    /// Get the cached per-export access control.
+    pub fn access_control(&self) -> Option<&Arc<AccessControl>> {
+        self.access_control.as_ref()
+    }
+
+    /// Check if the current client is allowed to access the current export.
+    /// Returns true if allowed (no ACL or client matches).
+    pub fn check_client_access(&self) -> bool {
+        match self.access_control.as_ref() {
+            Some(ac) => ac.check_client(&self.client_addr),
+            None => true,
+        }
     }
 
     pub fn set_filehandle(&mut self, filehandle: Filehandle) {

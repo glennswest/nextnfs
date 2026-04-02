@@ -35,6 +35,17 @@ impl NfsOperation for PutFh4args {
             request.set_export(export_id).await;
         }
 
+        // Check client IP against export ACL
+        if !request.check_client_access() {
+            return NfsOpResponse {
+                request,
+                result: Some(NfsResOp4::Opputfh(PutFh4res {
+                    status: NfsStat4::Nfs4errAccess,
+                })),
+                status: NfsStat4::Nfs4errAccess,
+            };
+        }
+
         if let Some(fh) = request.get_filehandle_from_cache(self.object) {
             request.set_filehandle(fh);
             return NfsOpResponse {

@@ -99,6 +99,14 @@ impl NFS40Server {
             // Single export mode: PUTROOTFH goes directly to the export root
             let export = &exports[0];
             request.set_export(export.export_id).await;
+            // Check client IP against export ACL
+            if !request.check_client_access() {
+                return NfsOpResponse {
+                    request,
+                    result: None,
+                    status: NfsStat4::Nfs4errAccess,
+                };
+            }
             match request.file_manager().get_root_filehandle().await {
                 Ok(filehandle) => {
                     let _ = request.set_filehandle_id(filehandle.id).await;

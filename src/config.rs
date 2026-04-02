@@ -45,7 +45,22 @@ pub struct ExportEntry {
     /// Maximum bytes per second for reads+writes (0 = unlimited)
     #[serde(default)]
     pub max_bytes_per_sec: u64,
+    /// Allowed client IP addresses or CIDR subnets (empty = allow all)
+    #[serde(default)]
+    pub clients: Vec<String>,
+    /// UID/GID squash mode: "none", "root_squash", "all_squash"
+    #[serde(default)]
+    pub squash: String,
+    /// Anonymous UID for squashed requests (default 65534)
+    #[serde(default = "default_anon_uid")]
+    pub anon_uid: u32,
+    /// Anonymous GID for squashed requests (default 65534)
+    #[serde(default = "default_anon_gid")]
+    pub anon_gid: u32,
 }
+
+fn default_anon_uid() -> u32 { 65534 }
+fn default_anon_gid() -> u32 { 65534 }
 
 fn default_listen() -> String {
     "0.0.0.0:2049".to_string()
@@ -104,6 +119,10 @@ impl Config {
                         read_only: single.read_only,
                         max_ops_per_sec: 0,
                         max_bytes_per_sec: 0,
+                        clients: vec![],
+                        squash: String::new(),
+                        anon_uid: 65534,
+                        anon_gid: 65534,
                     },
                 );
             }

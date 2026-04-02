@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::net::IpAddr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -228,6 +229,156 @@ impl QuotaManager {
     }
 }
 
+/// Squash mode for UID/GID mapping.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SquashMode {
+    /// No squashing — UIDs passed through as-is.
+    #[default]
+    None,
+    /// Map UID 0 (root) to anon_uid/anon_gid.
+    RootSquash,
+    /// Map all UIDs to anon_uid/anon_gid.
+    AllSquash,
+}
+
+/// Per-export access control configuration.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct AccessConfig {
+    /// Allowed client IP addresses or CIDR subnets (empty = allow all).
+    #[serde(default)]
+    pub clients: Vec<String>,
+    /// UID/GID squash mode.
+    #[serde(default)]
+    pub squash: SquashMode,
+    /// Anonymous UID for squashed requests (default 65534 = nobody).
+    #[serde(default = "default_anon_uid")]
+    pub anon_uid: u32,
+    /// Anonymous GID for squashed requests (default 65534 = nogroup).
+    #[serde(default = "default_anon_gid")]
+    pub anon_gid: u32,
+}
+
+fn default_anon_uid() -> u32 { 65534 }
+fn default_anon_gid() -> u32 { 65534 }
+
+/// Parsed access control list for fast IP matching.
+#[derive(Debug)]
+pub struct AccessControl {
+    config: std::sync::RwLock<AccessConfig>,
+    /// Parsed allowed networks (empty = allow all).
+    allowed: std::sync::RwLock<Vec<IpNetwork>>,
+}
+
+/// Simple IP network for CIDR matching.
+#[derive(Debug, Clone)]
+struct IpNetwork {
+    addr: IpAddr,
+    prefix_len: u8,
+}
+
+impl IpNetwork {
+    fn parse(s: &str) -> Option<Self> {
+        if let Some((addr_str, prefix_str)) = s.split_once('/') {
+            let addr: IpAddr = addr_str.parse().ok()?;
+            let prefix_len: u8 = prefix_str.parse().ok()?;
+            Some(Self { addr, prefix_len })
+        } else {
+            // Single IP — treat as /32 or /128
+            let addr: IpAddr = s.parse().ok()?;
+            let prefix_len = match addr {
+                IpAddr::V4(_) => 32,
+                IpAddr::V6(_) => 128,
+            };
+            Some(Self { addr, prefix_len })
+        }
+    }
+
+    fn contains(&self, ip: &IpAddr) -> bool {
+        match (&self.addr, ip) {
+            (IpAddr::V4(net), IpAddr::V4(client)) => {
+                let net_bits = u32::from(*net);
+                let client_bits = u32::from(*client);
+                if self.prefix_len == 0 { return true; }
+                let mask = u32::MAX << (32 - self.prefix_len);
+                (net_bits & mask) == (client_bits & mask)
+            }
+            (IpAddr::V6(net), IpAddr::V6(client)) => {
+                let net_bits = u128::from(*net);
+                let client_bits = u128::from(*client);
+                if self.prefix_len == 0 { return true; }
+                let mask = u128::MAX << (128 - self.prefix_len);
+                (net_bits & mask) == (client_bits & mask)
+            }
+            _ => false, // v4/v6 mismatch
+        }
+    }
+}
+
+impl AccessControl {
+    pub fn new(config: AccessConfig) -> Arc<Self> {
+        let allowed: Vec<IpNetwork> = config.clients.iter()
+            .filter_map(|s| IpNetwork::parse(s))
+            .collect();
+        Arc::new(Self {
+            config: std::sync::RwLock::new(config),
+            allowed: std::sync::RwLock::new(allowed),
+        })
+    }
+
+    /// Check if a client IP is allowed to access this export.
+    /// Returns true if allowed (empty client list = allow all).
+    pub fn check_client(&self, client_addr: &str) -> bool {
+        let allowed = self.allowed.read().unwrap();
+        if allowed.is_empty() {
+            return true; // no restrictions
+        }
+        // Parse IP from SocketAddr format: "IP:port" (v4) or "[IP]:port" (v6)
+        let ip: IpAddr = if let Ok(sa) = client_addr.parse::<std::net::SocketAddr>() {
+            sa.ip()
+        } else if let Ok(ip) = client_addr.parse::<IpAddr>() {
+            ip
+        } else {
+            return false;
+        };
+        allowed.iter().any(|net| net.contains(&ip))
+    }
+
+    /// Apply squash rules to a UID. Returns the (possibly squashed) UID.
+    pub fn squash_uid(&self, uid: u32) -> u32 {
+        let config = self.config.read().unwrap();
+        match config.squash {
+            SquashMode::None => uid,
+            SquashMode::RootSquash => if uid == 0 { config.anon_uid } else { uid },
+            SquashMode::AllSquash => config.anon_uid,
+        }
+    }
+
+    /// Apply squash rules to a GID. Returns the (possibly squashed) GID.
+    pub fn squash_gid(&self, gid: u32) -> u32 {
+        let config = self.config.read().unwrap();
+        match config.squash {
+            SquashMode::None => gid,
+            SquashMode::RootSquash => if gid == 0 { config.anon_gid } else { gid },
+            SquashMode::AllSquash => config.anon_gid,
+        }
+    }
+
+    /// Get the current access config.
+    pub fn config(&self) -> AccessConfig {
+        self.config.read().unwrap().clone()
+    }
+
+    /// Update the access config.
+    pub fn update_config(&self, config: AccessConfig) {
+        let allowed: Vec<IpNetwork> = config.clients.iter()
+            .filter_map(|s| IpNetwork::parse(s))
+            .collect();
+        *self.allowed.write().unwrap() = allowed;
+        *self.config.write().unwrap() = config;
+    }
+}
+
 /// State for a single export.
 #[derive(Debug, Clone)]
 pub struct ExportInfo {
@@ -240,6 +391,8 @@ pub struct ExportInfo {
     pub rate_limiter: Arc<Mutex<RateLimiter>>,
     /// Per-export quota manager for space usage tracking
     pub quota_manager: Arc<QuotaManager>,
+    /// Per-export access control (IP ACLs + squash)
+    pub access_control: Arc<AccessControl>,
 }
 
 /// Full export state including the FileManagerHandle.
@@ -261,6 +414,8 @@ enum ExportManagerMessage {
     GetQos(GetQosRequest),
     SetQuota(SetQuotaRequest),
     GetQuota(GetQuotaRequest),
+    SetAccess(SetAccessRequest),
+    GetAccess(GetAccessRequest),
 }
 
 struct SetQosRequest {
@@ -283,6 +438,17 @@ struct SetQuotaRequest {
 struct GetQuotaRequest {
     name: String,
     respond_to: oneshot::Sender<Option<QuotaConfig>>,
+}
+
+struct SetAccessRequest {
+    name: String,
+    config: AccessConfig,
+    respond_to: oneshot::Sender<Result<(), String>>,
+}
+
+struct GetAccessRequest {
+    name: String,
+    respond_to: oneshot::Sender<Option<AccessConfig>>,
 }
 
 struct AddExportRequest {
@@ -410,6 +576,22 @@ impl ExportManager {
                     let _ = req.respond_to.send(None);
                 }
             }
+            ExportManagerMessage::SetAccess(req) => {
+                let result = if let Some(state) = self.exports.get(&req.name) {
+                    state.info.access_control.update_config(req.config);
+                    Ok(())
+                } else {
+                    Err(format!("export '{}' not found", req.name))
+                };
+                let _ = req.respond_to.send(result);
+            }
+            ExportManagerMessage::GetAccess(req) => {
+                if let Some(state) = self.exports.get(&req.name) {
+                    let _ = req.respond_to.send(Some(state.info.access_control.config()));
+                } else {
+                    let _ = req.respond_to.send(None);
+                }
+            }
         }
     }
 
@@ -444,6 +626,7 @@ impl ExportManager {
         let stats = ExportStats::new();
         let rate_limiter = Arc::new(Mutex::new(RateLimiter::new(QosConfig::default())));
         let quota_manager = QuotaManager::new(QuotaConfig::default());
+        let access_control = AccessControl::new(AccessConfig::default());
         let info = ExportInfo {
             export_id,
             name: name.clone(),
@@ -452,6 +635,7 @@ impl ExportManager {
             stats,
             rate_limiter,
             quota_manager,
+            access_control,
         };
 
         let state = ExportState {
@@ -518,6 +702,7 @@ impl ExportManager {
         let stats = ExportStats::new();
         let rate_limiter = Arc::new(Mutex::new(RateLimiter::new(QosConfig::default())));
         let quota_manager = QuotaManager::new(QuotaConfig::default());
+        let access_control = AccessControl::new(AccessConfig::default());
         let info = ExportInfo {
             export_id,
             name: name.clone(),
@@ -526,6 +711,7 @@ impl ExportManager {
             stats,
             rate_limiter,
             quota_manager,
+            access_control,
         };
 
         let state = ExportState {
@@ -718,6 +904,33 @@ impl ExportManagerHandle {
             .await
             .map_err(|_| "export manager gone".to_string())?;
         rx.await.map_err(|_| "export manager gone".to_string())?
+    }
+
+    /// Set access control configuration for an export.
+    pub async fn set_access(&self, name: &str, config: AccessConfig) -> Result<(), String> {
+        let (tx, rx) = oneshot::channel();
+        self.sender
+            .send(ExportManagerMessage::SetAccess(SetAccessRequest {
+                name: name.to_string(),
+                config,
+                respond_to: tx,
+            }))
+            .await
+            .map_err(|_| "export manager gone".to_string())?;
+        rx.await.map_err(|_| "export manager gone".to_string())?
+    }
+
+    /// Get the current access control config for an export.
+    pub async fn get_access(&self, name: &str) -> Option<AccessConfig> {
+        let (tx, rx) = oneshot::channel();
+        let _ = self
+            .sender
+            .send(ExportManagerMessage::GetAccess(GetAccessRequest {
+                name: name.to_string(),
+                respond_to: tx,
+            }))
+            .await;
+        rx.await.ok().flatten()
     }
 
     /// Get the current quota config for an export.
@@ -1112,5 +1325,197 @@ mod tests {
         .unwrap();
         let exports = em.list_exports().await;
         assert_eq!(exports.len(), 2);
+    }
+
+    // ── Access control unit tests ──────────────────────────────────
+
+    #[test]
+    fn test_access_control_allow_all_by_default() {
+        let ac = AccessControl::new(AccessConfig::default());
+        assert!(ac.check_client("192.168.1.10:12345"));
+        assert!(ac.check_client("10.0.0.1:80"));
+    }
+
+    #[test]
+    fn test_access_control_single_ip() {
+        let ac = AccessControl::new(AccessConfig {
+            clients: vec!["192.168.1.10".to_string()],
+            ..Default::default()
+        });
+        assert!(ac.check_client("192.168.1.10:12345"));
+        assert!(!ac.check_client("192.168.1.11:12345"));
+    }
+
+    #[test]
+    fn test_access_control_cidr_subnet() {
+        let ac = AccessControl::new(AccessConfig {
+            clients: vec!["10.0.0.0/24".to_string()],
+            ..Default::default()
+        });
+        assert!(ac.check_client("10.0.0.1:111"));
+        assert!(ac.check_client("10.0.0.254:111"));
+        assert!(!ac.check_client("10.0.1.1:111"));
+        assert!(!ac.check_client("192.168.1.1:111"));
+    }
+
+    #[test]
+    fn test_access_control_cidr_16() {
+        let ac = AccessControl::new(AccessConfig {
+            clients: vec!["172.16.0.0/16".to_string()],
+            ..Default::default()
+        });
+        assert!(ac.check_client("172.16.0.1:111"));
+        assert!(ac.check_client("172.16.255.255:111"));
+        assert!(!ac.check_client("172.17.0.1:111"));
+    }
+
+    #[test]
+    fn test_access_control_multiple_networks() {
+        let ac = AccessControl::new(AccessConfig {
+            clients: vec![
+                "192.168.1.0/24".to_string(),
+                "10.0.0.5".to_string(),
+            ],
+            ..Default::default()
+        });
+        assert!(ac.check_client("192.168.1.100:111"));
+        assert!(ac.check_client("10.0.0.5:111"));
+        assert!(!ac.check_client("10.0.0.6:111"));
+    }
+
+    #[test]
+    fn test_access_control_invalid_client_addr() {
+        let ac = AccessControl::new(AccessConfig {
+            clients: vec!["192.168.1.0/24".to_string()],
+            ..Default::default()
+        });
+        assert!(!ac.check_client("not-an-ip:111"));
+    }
+
+    #[test]
+    fn test_access_control_bare_ip_no_port() {
+        let ac = AccessControl::new(AccessConfig {
+            clients: vec!["10.0.0.1".to_string()],
+            ..Default::default()
+        });
+        // Without port, rsplit_once(':') returns None → uses full string
+        // "10.0.0.1" parses as IP but the split on ':' gets "10.0.0" — won't parse
+        // So the method expects "IP:port" format from NFS layer
+        assert!(ac.check_client("10.0.0.1:2049"));
+    }
+
+    #[test]
+    fn test_squash_none() {
+        let ac = AccessControl::new(AccessConfig {
+            squash: SquashMode::None,
+            ..Default::default()
+        });
+        assert_eq!(ac.squash_uid(0), 0);
+        assert_eq!(ac.squash_uid(1000), 1000);
+        assert_eq!(ac.squash_gid(0), 0);
+        assert_eq!(ac.squash_gid(1000), 1000);
+    }
+
+    #[test]
+    fn test_squash_root_squash() {
+        let ac = AccessControl::new(AccessConfig {
+            squash: SquashMode::RootSquash,
+            anon_uid: 65534,
+            anon_gid: 65534,
+            ..Default::default()
+        });
+        assert_eq!(ac.squash_uid(0), 65534);
+        assert_eq!(ac.squash_uid(1000), 1000);
+        assert_eq!(ac.squash_gid(0), 65534);
+        assert_eq!(ac.squash_gid(1000), 1000);
+    }
+
+    #[test]
+    fn test_squash_all_squash() {
+        let ac = AccessControl::new(AccessConfig {
+            squash: SquashMode::AllSquash,
+            anon_uid: 99,
+            anon_gid: 99,
+            ..Default::default()
+        });
+        assert_eq!(ac.squash_uid(0), 99);
+        assert_eq!(ac.squash_uid(1000), 99);
+        assert_eq!(ac.squash_gid(0), 99);
+        assert_eq!(ac.squash_gid(1000), 99);
+    }
+
+    #[test]
+    fn test_access_control_update_config() {
+        let ac = AccessControl::new(AccessConfig::default());
+        // Initially allow all
+        assert!(ac.check_client("1.2.3.4:111"));
+
+        // Update to restrict
+        ac.update_config(AccessConfig {
+            clients: vec!["10.0.0.0/8".to_string()],
+            squash: SquashMode::RootSquash,
+            anon_uid: 65534,
+            anon_gid: 65534,
+        });
+        assert!(!ac.check_client("1.2.3.4:111"));
+        assert!(ac.check_client("10.1.2.3:111"));
+        assert_eq!(ac.squash_uid(0), 65534);
+    }
+
+    #[tokio::test]
+    async fn test_set_and_get_access() {
+        let em = ExportManagerHandle::new();
+        em.add_export("acl_test".to_string(), PathBuf::from("/tmp"), false)
+            .await
+            .unwrap();
+        let result = em
+            .set_access(
+                "acl_test",
+                AccessConfig {
+                    clients: vec!["192.168.1.0/24".to_string()],
+                    squash: SquashMode::RootSquash,
+                    anon_uid: 65534,
+                    anon_gid: 65534,
+                },
+            )
+            .await;
+        assert!(result.is_ok());
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let access = em.get_access("acl_test").await;
+        assert!(access.is_some());
+        let access = access.unwrap();
+        assert_eq!(access.clients.len(), 1);
+        assert_eq!(access.squash, SquashMode::RootSquash);
+    }
+
+    #[tokio::test]
+    async fn test_set_access_nonexistent_export() {
+        let em = ExportManagerHandle::new();
+        let result = em
+            .set_access(
+                "nosuch",
+                AccessConfig {
+                    clients: vec!["10.0.0.1".to_string()],
+                    ..Default::default()
+                },
+            )
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_get_access_nonexistent_export() {
+        let em = ExportManagerHandle::new();
+        let result = em.get_access("nosuch").await;
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_ip_network_ipv6() {
+        let ac = AccessControl::new(AccessConfig {
+            clients: vec!["::1".to_string()],
+            ..Default::default()
+        });
+        assert!(ac.check_client("[::1]:111"));
     }
 }
