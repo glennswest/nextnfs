@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### 2026-03-25
+- **feat:** OverlayFS VFS backend (overlay.rs) — merges writable upper with read-only lower layers, whiteout markers (OCI spec), copy-up on write, merged directory listings, 31 tests
+- **feat:** Export manager overlay integration — AddOverlayExport message, PhysicalFS-backed OverlayFS creation, path validation, 9 new tests
+- **feat:** dm-verity Merkle hash tree library (verity.rs) — SHA-256 Merkle tree builder, block verification, compact binary serialization, VFS directory tree scanning, LayerManifest with per-file content/metadata hashes, VerifiedBlockCache atomic bitset, 32 tests
+- **feat:** VerifiedFS wrapper implementing vfs::FileSystem trait — verified lower layer usable as drop-in in OverlayFS, read-time integrity verification, 8 new tests
+- **chore:** 487 workspace tests (56 proto + 425 server + 6 nfstest), 0 clippy warnings
+
 ## [v0.11.0] — 2026-03-25
 
 ### Added
