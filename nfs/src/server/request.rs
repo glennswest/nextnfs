@@ -280,6 +280,11 @@ impl<'a> NfsRequest<'a> {
         self.saved_filehandle.as_ref()
     }
 
+    /// Set the saved filehandle directly (used by COPY tests).
+    pub fn set_saved_filehandle(&mut self, filehandle: Filehandle) {
+        self.saved_filehandle = Some(filehandle);
+    }
+
     pub async fn close(&self) {}
 
     /// Set quota manager directly (for testing).

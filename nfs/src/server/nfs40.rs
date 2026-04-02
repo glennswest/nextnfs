@@ -82,6 +82,10 @@ mod op_set_clientid_confirm;
 mod op_setattr;
 mod op_verify;
 mod op_write;
+// NFSv4.2 operations (RFC 7862)
+mod op_allocate;
+mod op_copy;
+mod op_seek;
 
 use super::NfsProtoImpl;
 use super::nfs41::SessionManager;
@@ -475,7 +479,12 @@ impl NfsProtoImpl for NFS40Server {
                         NfsArgOp::OpopenDowngrade(args) => args.execute(request).await,
                         NfsArgOp::OpSecinfo(args) => args.execute(request).await,
 
-                        // NFSv4.1/v4.2 ops — handled properly in compound() version routing
+                        // NFSv4.2 operations (RFC 7862)
+                        NfsArgOp::Opallocate(args) => args.execute(request).await,
+                        NfsArgOp::Opcopy(args) => args.execute(request).await,
+                        NfsArgOp::Opseek(args) => args.execute(request).await,
+
+                        // NFSv4.1 ops — handled in compound() version routing
                         _ => self.operation_not_supported(request),
                     };
                     let res = response.result;
