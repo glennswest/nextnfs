@@ -5,7 +5,7 @@ use vfs::VfsPath;
 use std::path::PathBuf;
 
 use nextnfs_proto::nfs4_proto::{
-    Attrlist4, FileAttr, FileAttrValue, NfsLease4, NfsLockType4, NfsStat4, Stateid4,
+    Attrlist4, FileAttr, FileAttrValue, NfsLease4, NfsLockType4, NfsStat4, Nfstime4, Stateid4,
     ACL4_SUPPORT_ALLOW_ACL, FH4_PERSISTENT,
 };
 
@@ -635,6 +635,49 @@ impl FileManagerHandle {
                     attrs.push(FileAttrValue::ChownRestricted(true));
                     answer_attrs.push(FileAttr::ChownRestricted);
                 }
+                FileAttr::CaseInsensitive => {
+                    attrs.push(FileAttrValue::CaseInsensitive(false));
+                    answer_attrs.push(FileAttr::CaseInsensitive);
+                }
+                FileAttr::CasePreserving => {
+                    attrs.push(FileAttrValue::CasePreserving(true));
+                    answer_attrs.push(FileAttr::CasePreserving);
+                }
+                FileAttr::FilesAvail => {
+                    let val = quota_info.map_or(u64::MAX, |q| {
+                        if q.space_total == 0 { u64::MAX } else { q.space_avail / 4096 }
+                    });
+                    attrs.push(FileAttrValue::FilesAvail(val));
+                    answer_attrs.push(FileAttr::FilesAvail);
+                }
+                FileAttr::FilesFree => {
+                    let val = quota_info.map_or(u64::MAX, |q| {
+                        if q.space_total == 0 { u64::MAX } else { q.space_free / 4096 }
+                    });
+                    attrs.push(FileAttrValue::FilesFree(val));
+                    answer_attrs.push(FileAttr::FilesFree);
+                }
+                FileAttr::FilesTotal => {
+                    let val = quota_info.map_or(u64::MAX, |q| {
+                        if q.space_total == 0 { u64::MAX } else { q.space_total / 4096 }
+                    });
+                    attrs.push(FileAttrValue::FilesTotal(val));
+                    answer_attrs.push(FileAttr::FilesTotal);
+                }
+                FileAttr::TimeDelta => {
+                    // Server time granularity: 1 nanosecond
+                    attrs.push(FileAttrValue::TimeDelta(Nfstime4 { seconds: 0, nseconds: 1 }));
+                    answer_attrs.push(FileAttr::TimeDelta);
+                }
+                FileAttr::TimeCreate => {
+                    // Use modify time as creation time (VFS doesn't expose birth time)
+                    attrs.push(FileAttrValue::TimeCreate(filehandle.attr_time_modify));
+                    answer_attrs.push(FileAttr::TimeCreate);
+                }
+                FileAttr::MountedOnFileid => {
+                    attrs.push(FileAttrValue::MountedOnFileid(filehandle.attr_fileid));
+                    answer_attrs.push(FileAttr::MountedOnFileid);
+                }
                 _ => {}
             }
         }
@@ -709,9 +752,14 @@ impl FileManagerHandle {
             FileAttr::AclSupport,
             FileAttr::Archive,
             FileAttr::Cansettime,
+            FileAttr::CaseInsensitive,
+            FileAttr::CasePreserving,
             FileAttr::ChownRestricted,
             FileAttr::Filehandle,
             FileAttr::Fileid,
+            FileAttr::FilesAvail,
+            FileAttr::FilesFree,
+            FileAttr::FilesTotal,
             FileAttr::Homogeneous,
             FileAttr::Maxfilesize,
             FileAttr::Maxlink,
@@ -731,8 +779,11 @@ impl FileManagerHandle {
             FileAttr::SpaceTotal,
             FileAttr::SpaceUsed,
             FileAttr::TimeAccess,
+            FileAttr::TimeCreate,
+            FileAttr::TimeDelta,
             FileAttr::TimeMetadata,
             FileAttr::TimeModify,
+            FileAttr::MountedOnFileid,
         ]))
     }
 

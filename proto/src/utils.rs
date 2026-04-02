@@ -360,6 +360,50 @@ impl FattrRaw {
                     attr_vals.push(FileAttrValue::MountedOnFileid(val));
                     offset += 8;
                 }
+                FileAttr::FilesAvail => {
+                    if offset + 8 > buf.len() { break; }
+                    let val = u64::from_be_bytes(buf[offset..offset + 8].try_into().unwrap());
+                    attr_vals.push(FileAttrValue::FilesAvail(val));
+                    offset += 8;
+                }
+                FileAttr::FilesFree => {
+                    if offset + 8 > buf.len() { break; }
+                    let val = u64::from_be_bytes(buf[offset..offset + 8].try_into().unwrap());
+                    attr_vals.push(FileAttrValue::FilesFree(val));
+                    offset += 8;
+                }
+                FileAttr::FilesTotal => {
+                    if offset + 8 > buf.len() { break; }
+                    let val = u64::from_be_bytes(buf[offset..offset + 8].try_into().unwrap());
+                    attr_vals.push(FileAttrValue::FilesTotal(val));
+                    offset += 8;
+                }
+                FileAttr::CaseInsensitive => {
+                    if offset + 4 > buf.len() { break; }
+                    let val = u32::from_be_bytes(buf[offset..offset + 4].try_into().unwrap());
+                    attr_vals.push(FileAttrValue::CaseInsensitive(val != 0));
+                    offset += 4;
+                }
+                FileAttr::CasePreserving => {
+                    if offset + 4 > buf.len() { break; }
+                    let val = u32::from_be_bytes(buf[offset..offset + 4].try_into().unwrap());
+                    attr_vals.push(FileAttrValue::CasePreserving(val != 0));
+                    offset += 4;
+                }
+                FileAttr::TimeCreate => {
+                    if offset + 12 > buf.len() { break; }
+                    let seconds = i64::from_be_bytes(buf[offset..offset + 8].try_into().unwrap());
+                    let nseconds = u32::from_be_bytes(buf[offset + 8..offset + 12].try_into().unwrap());
+                    attr_vals.push(FileAttrValue::TimeCreate(crate::nfs4_proto::Nfstime4 { seconds, nseconds }));
+                    offset += 12;
+                }
+                FileAttr::TimeDelta => {
+                    if offset + 12 > buf.len() { break; }
+                    let seconds = i64::from_be_bytes(buf[offset..offset + 8].try_into().unwrap());
+                    let nseconds = u32::from_be_bytes(buf[offset + 8..offset + 12].try_into().unwrap());
+                    attr_vals.push(FileAttrValue::TimeDelta(crate::nfs4_proto::Nfstime4 { seconds, nseconds }));
+                    offset += 12;
+                }
                 FileAttr::TimeAccess => {
                     if offset + 12 > buf.len() { break; }
                     let seconds = i64::from_be_bytes(buf[offset..offset + 8].try_into().unwrap());
@@ -634,8 +678,31 @@ impl Attrlist4<FileAttrValue> {
                 FileAttrValue::Cansettime(v) => {
                     buffer.extend_from_slice((*v as u32).to_be_bytes().as_ref());
                 }
+                FileAttrValue::CaseInsensitive(v) => {
+                    buffer.extend_from_slice((*v as u32).to_be_bytes().as_ref());
+                }
+                FileAttrValue::CasePreserving(v) => {
+                    buffer.extend_from_slice((*v as u32).to_be_bytes().as_ref());
+                }
                 FileAttrValue::ChownRestricted(v) => {
                     buffer.extend_from_slice((*v as u32).to_be_bytes().as_ref());
+                }
+                FileAttrValue::FilesAvail(v) => {
+                    buffer.extend_from_slice(v.to_be_bytes().as_ref());
+                }
+                FileAttrValue::FilesFree(v) => {
+                    buffer.extend_from_slice(v.to_be_bytes().as_ref());
+                }
+                FileAttrValue::FilesTotal(v) => {
+                    buffer.extend_from_slice(v.to_be_bytes().as_ref());
+                }
+                FileAttrValue::TimeCreate(v) => {
+                    buffer.extend_from_slice(v.seconds.to_be_bytes().as_ref());
+                    buffer.extend_from_slice(v.nseconds.to_be_bytes().as_ref());
+                }
+                FileAttrValue::TimeDelta(v) => {
+                    buffer.extend_from_slice(v.seconds.to_be_bytes().as_ref());
+                    buffer.extend_from_slice(v.nseconds.to_be_bytes().as_ref());
                 }
                 _ => {}
             }

@@ -303,4 +303,152 @@ mod tests {
             panic!("Expected Opgetattr with SupportedAttrs");
         }
     }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_getattr_files_avail_free_total() {
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let args = Getattr4args {
+            attr_request: Attrlist4(vec![
+                FileAttr::FilesAvail,
+                FileAttr::FilesFree,
+                FileAttr::FilesTotal,
+            ]),
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        if let Some(NfsResOp4::Opgetattr(Getattr4resok {
+            obj_attributes: Some(fattr), ..
+        })) = response.result
+        {
+            assert_eq!(fattr.attrmask.len(), 3);
+        } else {
+            panic!("Expected Opgetattr with 3 file count attributes");
+        }
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_getattr_time_delta() {
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let args = Getattr4args {
+            attr_request: Attrlist4(vec![FileAttr::TimeDelta]),
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        if let Some(NfsResOp4::Opgetattr(Getattr4resok {
+            obj_attributes: Some(fattr), ..
+        })) = response.result
+        {
+            assert_eq!(fattr.attrmask.len(), 1);
+            if let FileAttrValue::TimeDelta(td) = &fattr.attr_vals.0[0] {
+                assert_eq!(td.seconds, 0);
+                assert_eq!(td.nseconds, 1);
+            } else {
+                panic!("Expected TimeDelta value");
+            }
+        } else {
+            panic!("Expected Opgetattr with TimeDelta");
+        }
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_getattr_case_attrs() {
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let args = Getattr4args {
+            attr_request: Attrlist4(vec![
+                FileAttr::CaseInsensitive,
+                FileAttr::CasePreserving,
+            ]),
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        if let Some(NfsResOp4::Opgetattr(Getattr4resok {
+            obj_attributes: Some(fattr), ..
+        })) = response.result
+        {
+            assert_eq!(fattr.attrmask.len(), 2);
+            if let FileAttrValue::CaseInsensitive(ci) = &fattr.attr_vals.0[0] {
+                assert!(!ci); // POSIX is case-sensitive
+            } else {
+                panic!("Expected CaseInsensitive value");
+            }
+            if let FileAttrValue::CasePreserving(cp) = &fattr.attr_vals.0[1] {
+                assert!(cp); // POSIX preserves case
+            } else {
+                panic!("Expected CasePreserving value");
+            }
+        } else {
+            panic!("Expected Opgetattr with case attributes");
+        }
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_getattr_mounted_on_fileid() {
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let args = Getattr4args {
+            attr_request: Attrlist4(vec![FileAttr::MountedOnFileid]),
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        if let Some(NfsResOp4::Opgetattr(Getattr4resok {
+            obj_attributes: Some(fattr), ..
+        })) = response.result
+        {
+            assert_eq!(fattr.attrmask.len(), 1);
+        } else {
+            panic!("Expected Opgetattr with MountedOnFileid");
+        }
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_getattr_time_create() {
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let args = Getattr4args {
+            attr_request: Attrlist4(vec![FileAttr::TimeCreate]),
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        if let Some(NfsResOp4::Opgetattr(Getattr4resok {
+            obj_attributes: Some(fattr), ..
+        })) = response.result
+        {
+            assert_eq!(fattr.attrmask.len(), 1);
+        } else {
+            panic!("Expected Opgetattr with TimeCreate");
+        }
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_getattr_supported_includes_new_attrs() {
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let args = Getattr4args {
+            attr_request: Attrlist4(vec![FileAttr::SupportedAttrs]),
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        if let Some(NfsResOp4::Opgetattr(Getattr4resok {
+            obj_attributes: Some(fattr), ..
+        })) = response.result
+        {
+            if let FileAttrValue::SupportedAttrs(supported) = &fattr.attr_vals.0[0] {
+                assert!(supported.0.contains(&FileAttr::FilesAvail));
+                assert!(supported.0.contains(&FileAttr::FilesFree));
+                assert!(supported.0.contains(&FileAttr::FilesTotal));
+                assert!(supported.0.contains(&FileAttr::TimeDelta));
+                assert!(supported.0.contains(&FileAttr::TimeCreate));
+                assert!(supported.0.contains(&FileAttr::MountedOnFileid));
+                assert!(supported.0.contains(&FileAttr::CaseInsensitive));
+                assert!(supported.0.contains(&FileAttr::CasePreserving));
+            } else {
+                panic!("Expected SupportedAttrs value");
+            }
+        } else {
+            panic!("Expected Opgetattr with SupportedAttrs");
+        }
+    }
 }
