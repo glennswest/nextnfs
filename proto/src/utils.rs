@@ -443,6 +443,28 @@ impl FattrRaw {
                     attr_vals.push(FileAttrValue::OwnerGroup(val));
                     offset += len + (4 - (len % 4)) % 4; // XDR padding to 4-byte boundary
                 }
+                FileAttr::Acl => {
+                    // ACL: u32 count, then count x {u32 type, u32 flag, u32 mask, string who}
+                    if offset + 4 > buf.len() { break; }
+                    let count = u32::from_be_bytes(buf[offset..offset + 4].try_into().unwrap()) as usize;
+                    offset += 4;
+                    let mut aces = Vec::with_capacity(count);
+                    for _ in 0..count {
+                        if offset + 12 > buf.len() { break; }
+                        let acetype = u32::from_be_bytes(buf[offset..offset + 4].try_into().unwrap());
+                        let flag = u32::from_be_bytes(buf[offset + 4..offset + 8].try_into().unwrap());
+                        let access_mask = u32::from_be_bytes(buf[offset + 8..offset + 12].try_into().unwrap());
+                        offset += 12;
+                        if offset + 4 > buf.len() { break; }
+                        let who_len = u32::from_be_bytes(buf[offset..offset + 4].try_into().unwrap()) as usize;
+                        offset += 4;
+                        if offset + who_len > buf.len() { break; }
+                        let who = String::from_utf8_lossy(&buf[offset..offset + who_len]).to_string();
+                        offset += who_len + (4 - (who_len % 4)) % 4;
+                        aces.push(crate::nfs4_proto::Nfsace4 { acetype, flag, access_mask, who });
+                    }
+                    attr_vals.push(FileAttrValue::Acl(aces));
+                }
                 _ => {
                     // Unknown attribute — can't determine wire size, stop parsing
                     debug!("skipping unhandled attr {:?} in SETATTR deserialization", attr);
@@ -594,6 +616,21 @@ impl Attrlist4<FileAttrValue> {
                 }
                 FileAttrValue::Fileid(v) => {
                     buffer.extend_from_slice(v.to_be_bytes().as_ref());
+                }
+                FileAttrValue::Acl(aces) => {
+                    // ACL: u32 count, then count x {u32 type, u32 flag, u32 mask, string who}
+                    buffer.extend_from_slice((aces.len() as u32).to_be_bytes().as_ref());
+                    for ace in aces {
+                        buffer.extend_from_slice(ace.acetype.to_be_bytes().as_ref());
+                        buffer.extend_from_slice(ace.flag.to_be_bytes().as_ref());
+                        buffer.extend_from_slice(ace.access_mask.to_be_bytes().as_ref());
+                        let who_bytes = ace.who.as_bytes();
+                        buffer.extend_from_slice((who_bytes.len() as u32).to_be_bytes().as_ref());
+                        buffer.extend_from_slice(who_bytes);
+                        // XDR padding to 4-byte boundary
+                        let pad = (4 - (who_bytes.len() % 4)) % 4;
+                        buffer.resize(buffer.len() + pad, 0);
+                    }
                 }
                 FileAttrValue::AclSupport(v) => {
                     buffer.extend_from_slice(v.to_be_bytes().as_ref());
@@ -1032,5 +1069,39 @@ mod tests {
         let bytes = serde_xdr::to_bytes(&auth).unwrap();
         // Should serialize without panic
         assert!(!bytes.is_empty());
+    }
+
+    #[test]
+    fn test_acl_serialize_roundtrip() {
+        use crate::nfs4_proto::{Nfsace4, ACE4_ACCESS_ALLOWED_ACE_TYPE, ACE4_IDENTIFIER_GROUP};
+
+        let aces = vec![
+            Nfsace4 {
+                acetype: ACE4_ACCESS_ALLOWED_ACE_TYPE,
+                flag: 0,
+                access_mask: 0x001F01FF,
+                who: "0".to_string(),
+            },
+            Nfsace4 {
+                acetype: ACE4_ACCESS_ALLOWED_ACE_TYPE,
+                flag: ACE4_IDENTIFIER_GROUP,
+                access_mask: 0x00120089,
+                who: "0".to_string(),
+            },
+            Nfsace4 {
+                acetype: ACE4_ACCESS_ALLOWED_ACE_TYPE,
+                flag: 0,
+                access_mask: 0x00120089,
+                who: "EVERYONE@".to_string(),
+            },
+        ];
+
+        // Serialize via Attrlist4 to_bytes
+        let attr_vals = Attrlist4(vec![FileAttrValue::Acl(aces.clone())]);
+        let bytes = attr_vals.to_bytes();
+        assert!(!bytes.is_empty());
+        // First 4 bytes = ACE count
+        let ace_count = u32::from_be_bytes(bytes[0..4].try_into().unwrap());
+        assert_eq!(ace_count, 3);
     }
 }

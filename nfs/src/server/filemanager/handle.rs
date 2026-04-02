@@ -5,8 +5,11 @@ use vfs::VfsPath;
 use std::path::PathBuf;
 
 use nextnfs_proto::nfs4_proto::{
-    Attrlist4, FileAttr, FileAttrValue, NfsLease4, NfsLockType4, NfsStat4, Nfstime4, Stateid4,
-    ACL4_SUPPORT_ALLOW_ACL, FH4_PERSISTENT,
+    Attrlist4, FileAttr, FileAttrValue, NfsLease4, NfsLockType4, Nfsace4, NfsStat4, Nfstime4,
+    Stateid4, ACE4_ACCESS_ALLOWED_ACE_TYPE, ACE4_APPEND_DATA, ACE4_DELETE, ACE4_DELETE_CHILD,
+    ACE4_EXECUTE, ACE4_IDENTIFIER_GROUP, ACE4_READ_ACL, ACE4_READ_ATTRIBUTES, ACE4_READ_DATA,
+    ACE4_SYNCHRONIZE, ACE4_WRITE_ACL, ACE4_WRITE_ATTRIBUTES, ACE4_WRITE_DATA,
+    ACE4_WRITE_OWNER, ACL4_SUPPORT_ALLOW_ACL, FH4_PERSISTENT,
 };
 
 use super::{
@@ -166,6 +169,52 @@ pub struct QuotaInfo {
 #[derive(Debug, Clone)]
 pub struct FileManagerError {
     pub nfs_error: NfsStat4,
+}
+
+/// Synthesize NFSv4 ACL entries from POSIX mode bits.
+///
+/// Generates three ALLOW ACEs (owner, group, everyone) matching
+/// the traditional POSIX rwx permission model.
+pub fn mode_to_acl(mode: u32, owner: &str, group: &str) -> Vec<Nfsace4> {
+    fn mode_bits_to_mask(bits: u32) -> u32 {
+        let mut mask = ACE4_READ_ATTRIBUTES | ACE4_READ_ACL | ACE4_SYNCHRONIZE;
+        if bits & 4 != 0 {
+            mask |= ACE4_READ_DATA;
+        }
+        if bits & 2 != 0 {
+            mask |= ACE4_WRITE_DATA | ACE4_APPEND_DATA | ACE4_WRITE_ATTRIBUTES
+                | ACE4_WRITE_ACL | ACE4_WRITE_OWNER | ACE4_DELETE | ACE4_DELETE_CHILD;
+        }
+        if bits & 1 != 0 {
+            mask |= ACE4_EXECUTE;
+        }
+        mask
+    }
+
+    let owner_bits = (mode >> 6) & 7;
+    let group_bits = (mode >> 3) & 7;
+    let other_bits = mode & 7;
+
+    vec![
+        Nfsace4 {
+            acetype: ACE4_ACCESS_ALLOWED_ACE_TYPE,
+            flag: 0,
+            access_mask: mode_bits_to_mask(owner_bits),
+            who: owner.to_string(),
+        },
+        Nfsace4 {
+            acetype: ACE4_ACCESS_ALLOWED_ACE_TYPE,
+            flag: ACE4_IDENTIFIER_GROUP,
+            access_mask: mode_bits_to_mask(group_bits),
+            who: group.to_string(),
+        },
+        Nfsace4 {
+            acetype: ACE4_ACCESS_ALLOWED_ACE_TYPE,
+            flag: 0,
+            access_mask: mode_bits_to_mask(other_bits),
+            who: "EVERYONE@".to_string(),
+        },
+    ]
 }
 
 #[derive(Debug, Clone)]
@@ -555,6 +604,11 @@ impl FileManagerHandle {
                 FileAttr::NamedAttr => {
                     attrs.push(FileAttrValue::NamedAttr(false));
                     answer_attrs.push(FileAttr::NamedAttr);
+                }
+                FileAttr::Acl => {
+                    let aces = mode_to_acl(filehandle.attr_mode, &filehandle.attr_owner, &filehandle.attr_owner_group);
+                    attrs.push(FileAttrValue::Acl(aces));
+                    answer_attrs.push(FileAttr::Acl);
                 }
                 FileAttr::AclSupport => {
                     attrs.push(FileAttrValue::AclSupport(ACL4_SUPPORT_ALLOW_ACL));
@@ -1215,5 +1269,51 @@ mod tests {
         // touch on a bad id should not panic
         fm.touch_file(bad_id).await;
         // If we get here, it didn't panic
+    }
+
+    #[test]
+    fn test_mode_to_acl_755() {
+        let aces = mode_to_acl(0o755, "1000", "1000");
+        assert_eq!(aces.len(), 3);
+        // Owner (rwx=7): should have read+write+execute
+        assert!(aces[0].access_mask & ACE4_READ_DATA != 0);
+        assert!(aces[0].access_mask & ACE4_WRITE_DATA != 0);
+        assert!(aces[0].access_mask & ACE4_EXECUTE != 0);
+        assert_eq!(aces[0].who, "1000");
+        // Group (r-x=5): read+execute but not write
+        assert!(aces[1].access_mask & ACE4_READ_DATA != 0);
+        assert!(aces[1].access_mask & ACE4_WRITE_DATA == 0);
+        assert!(aces[1].access_mask & ACE4_EXECUTE != 0);
+        assert_eq!(aces[1].flag, ACE4_IDENTIFIER_GROUP);
+        // Everyone (r-x=5): read+execute
+        assert!(aces[2].access_mask & ACE4_READ_DATA != 0);
+        assert!(aces[2].access_mask & ACE4_EXECUTE != 0);
+        assert_eq!(aces[2].who, "EVERYONE@");
+    }
+
+    #[test]
+    fn test_mode_to_acl_644() {
+        let aces = mode_to_acl(0o644, "0", "0");
+        // Owner (rw-=6): read+write, no execute
+        assert!(aces[0].access_mask & ACE4_READ_DATA != 0);
+        assert!(aces[0].access_mask & ACE4_WRITE_DATA != 0);
+        assert!(aces[0].access_mask & ACE4_EXECUTE == 0);
+        // Group (r--=4): read only
+        assert!(aces[1].access_mask & ACE4_READ_DATA != 0);
+        assert!(aces[1].access_mask & ACE4_WRITE_DATA == 0);
+        // Everyone (r--=4): read only
+        assert!(aces[2].access_mask & ACE4_READ_DATA != 0);
+        assert!(aces[2].access_mask & ACE4_WRITE_DATA == 0);
+    }
+
+    #[test]
+    fn test_mode_to_acl_000() {
+        let aces = mode_to_acl(0o000, "0", "0");
+        // No rwx bits — only base attributes (read_attributes, read_acl, synchronize)
+        assert!(aces[0].access_mask & ACE4_READ_DATA == 0);
+        assert!(aces[0].access_mask & ACE4_WRITE_DATA == 0);
+        assert!(aces[0].access_mask & ACE4_EXECUTE == 0);
+        // But should still have base attributes
+        assert!(aces[0].access_mask & ACE4_READ_ATTRIBUTES != 0);
     }
 }

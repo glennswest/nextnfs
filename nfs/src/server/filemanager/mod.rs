@@ -467,6 +467,11 @@ impl FileManager {
                     attrs.push(FileAttrValue::NamedAttr(false));
                     answer_attrs.push(FileAttr::NamedAttr);
                 }
+                FileAttr::Acl => {
+                    let aces = handle::mode_to_acl(fh.attr_mode, &fh.attr_owner, &fh.attr_owner_group);
+                    attrs.push(FileAttrValue::Acl(aces));
+                    answer_attrs.push(FileAttr::Acl);
+                }
                 FileAttr::AclSupport => {
                     attrs.push(FileAttrValue::AclSupport(ACL4_SUPPORT_ALLOW_ACL));
                     answer_attrs.push(FileAttr::AclSupport);

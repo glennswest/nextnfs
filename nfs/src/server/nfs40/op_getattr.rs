@@ -478,4 +478,53 @@ mod tests {
             panic!("Expected Opgetattr with SupportedAttrs");
         }
     }
+
+    #[tokio::test]
+    async fn test_getattr_acl() {
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let args = Getattr4args {
+            attr_request: Attrlist4(vec![FileAttr::Acl]),
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        if let Some(NfsResOp4::Opgetattr(Getattr4resok {
+            obj_attributes: Some(fattr), ..
+        })) = response.result
+        {
+            if let FileAttrValue::Acl(aces) = &fattr.attr_vals.0[0] {
+                // Should have 3 ACEs: owner, group, everyone
+                assert_eq!(aces.len(), 3);
+                // All should be ALLOW type
+                assert!(aces.iter().all(|a| a.acetype == 0));
+                // Last ACE should be EVERYONE@
+                assert_eq!(aces[2].who, "EVERYONE@");
+            } else {
+                panic!("Expected Acl value");
+            }
+        } else {
+            panic!("Expected Opgetattr with ACL");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_getattr_acl_support() {
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let args = Getattr4args {
+            attr_request: Attrlist4(vec![FileAttr::AclSupport]),
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        if let Some(NfsResOp4::Opgetattr(Getattr4resok {
+            obj_attributes: Some(fattr), ..
+        })) = response.result
+        {
+            if let FileAttrValue::AclSupport(v) = &fattr.attr_vals.0[0] {
+                assert_eq!(*v, 1); // ACL4_SUPPORT_ALLOW_ACL
+            } else {
+                panic!("Expected AclSupport value");
+            }
+        } else {
+            panic!("Expected Opgetattr with AclSupport");
+        }
+    }
 }

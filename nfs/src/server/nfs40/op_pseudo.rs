@@ -135,6 +135,10 @@ pub fn pseudo_root_getattr(
                 answer_attrs.push(FileAttr::TimeModify);
                 attrs.push(FileAttrValue::TimeModify(now));
             }
+            FileAttr::Acl => {
+                answer_attrs.push(FileAttr::Acl);
+                attrs.push(FileAttrValue::Acl(vec![]));
+            }
             FileAttr::AclSupport => {
                 answer_attrs.push(FileAttr::AclSupport);
                 attrs.push(FileAttrValue::AclSupport(0));
@@ -314,6 +318,10 @@ fn pseudo_export_entry_attrs(
             FileAttr::NamedAttr => {
                 answer_attrs.push(FileAttr::NamedAttr);
                 attrs.push(FileAttrValue::NamedAttr(false));
+            }
+            FileAttr::Acl => {
+                answer_attrs.push(FileAttr::Acl);
+                attrs.push(FileAttrValue::Acl(vec![]));
             }
             FileAttr::AclSupport => {
                 answer_attrs.push(FileAttr::AclSupport);

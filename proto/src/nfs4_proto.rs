@@ -219,26 +219,15 @@ type Acetype4 = u32;
 /*
  * Acetype4 values; others can be added as needed.
  */
-// const ACE4_ACCESS_ALLOWED_ACE_TYPE: u32 = 0x00000000;
-// const ACE4_ACCESS_DENIED_ACE_TYPE: u32 = 0x00000001;
-// const ACE4_SYSTEM_AUDIT_ACE_TYPE: u32 = 0x00000002;
-// const ACE4_SYSTEM_ALARM_ACE_TYPE: u32 = 0x00000003;
+pub const ACE4_ACCESS_ALLOWED_ACE_TYPE: u32 = 0x00000000;
+pub const ACE4_ACCESS_DENIED_ACE_TYPE: u32 = 0x00000001;
 
 /*
  * ACE flag
  */
 type Aceflag4 = u32;
 
-/*
- * ACE flag values
- */
-// const ACE4_FILE_INHERIT_ACE: u32 = 0x00000001;
-// const ACE4_DIRECTORY_INHERIT_ACE: u32 = 0x00000002;
-// const ACE4_NO_PROPAGATE_INHERIT_ACE: u32 = 0x00000004;
-// const ACE4_INHERIT_ONLY_ACE: u32 = 0x00000008;
-// const ACE4_SUCCESSFUL_ACCESS_ACE_FLAG: u32 = 0x00000010;
-// const ACE4_FAILED_ACCESS_ACE_FLAG: u32 = 0x00000020;
-// const ACE4_IDENTIFIER_GROUP: u32 = 0x00000040;
+pub const ACE4_IDENTIFIER_GROUP: u32 = 0x00000040;
 
 /*
  * ACE mask
@@ -248,24 +237,23 @@ type Acemask4 = u32;
 /*
  * ACE mask values
  */
-// const ACE4_READ_DATA: u32 = 0x00000001;
-// const ACE4_LIST_DIRECTORY: u32 = 0x00000001;
-// const ACE4_WRITE_DATA: u32 = 0x00000002;
-// const ACE4_ADD_FILE: u32 = 0x00000002;
-// const ACE4_APPEND_DATA: u32 = 0x00000004;
-// const ACE4_ADD_SUBDIRECTORY: u32 = 0x00000004;
-// const ACE4_READ_NAMED_ATTRS: u32 = 0x00000008;
-// const ACE4_WRITE_NAMED_ATTRS: u32 = 0x00000010;
-// const ACE4_EXECUTE: u32 = 0x00000020;
-// const ACE4_DELETE_CHILD: u32 = 0x00000040;
-// const ACE4_READ_ATTRIBUTES: u32 = 0x00000080;
-// const ACE4_WRITE_ATTRIBUTES: u32 = 0x00000100;
-
-// const ACE4_DELETE: u32 = 0x00010000;
-// const ACE4_READ_ACL: u32 = 0x00020000;
-// const ACE4_WRITE_ACL: u32 = 0x00040000;
-// const ACE4_WRITE_OWNER: u32 = 0x00080000;
-// const ACE4_SYNCHRONIZE: u32 = 0x00100000;
+pub const ACE4_READ_DATA: u32 = 0x00000001;
+pub const ACE4_LIST_DIRECTORY: u32 = 0x00000001;
+pub const ACE4_WRITE_DATA: u32 = 0x00000002;
+pub const ACE4_ADD_FILE: u32 = 0x00000002;
+pub const ACE4_APPEND_DATA: u32 = 0x00000004;
+pub const ACE4_ADD_SUBDIRECTORY: u32 = 0x00000004;
+pub const ACE4_READ_NAMED_ATTRS: u32 = 0x00000008;
+pub const ACE4_WRITE_NAMED_ATTRS: u32 = 0x00000010;
+pub const ACE4_EXECUTE: u32 = 0x00000020;
+pub const ACE4_DELETE_CHILD: u32 = 0x00000040;
+pub const ACE4_READ_ATTRIBUTES: u32 = 0x00000080;
+pub const ACE4_WRITE_ATTRIBUTES: u32 = 0x00000100;
+pub const ACE4_DELETE: u32 = 0x00010000;
+pub const ACE4_READ_ACL: u32 = 0x00020000;
+pub const ACE4_WRITE_ACL: u32 = 0x00040000;
+pub const ACE4_WRITE_OWNER: u32 = 0x00080000;
+pub const ACE4_SYNCHRONIZE: u32 = 0x00100000;
 
 /*
  * ACE4_GENERIC_READ - defined as a combination of
@@ -674,7 +662,7 @@ pub enum FileAttrValue {
     UniqueHandles(bool) = 9,
     LeaseTime(NfsLease4) = 10,
     RdattrError(NfsStat4) = 11,
-    Acl = 12,
+    Acl(Vec<Nfsace4>) = 12,
     AclSupport(u32) = 13,
     Archive = 14,
     Cansettime(bool) = 15,
