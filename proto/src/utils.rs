@@ -312,6 +312,42 @@ impl FattrRaw {
                     attr_vals.push(FileAttrValue::Numlinks(val));
                     offset += 4;
                 }
+                FileAttr::QuotaAvailHard => {
+                    if offset + 8 > buf.len() { break; }
+                    let val = u64::from_be_bytes(buf[offset..offset + 8].try_into().unwrap());
+                    attr_vals.push(FileAttrValue::QuotaAvailHard(val));
+                    offset += 8;
+                }
+                FileAttr::QuotaAvailSoft => {
+                    if offset + 8 > buf.len() { break; }
+                    let val = u64::from_be_bytes(buf[offset..offset + 8].try_into().unwrap());
+                    attr_vals.push(FileAttrValue::QuotaAvailSoft(val));
+                    offset += 8;
+                }
+                FileAttr::QuotaUsed => {
+                    if offset + 8 > buf.len() { break; }
+                    let val = u64::from_be_bytes(buf[offset..offset + 8].try_into().unwrap());
+                    attr_vals.push(FileAttrValue::QuotaUsed(val));
+                    offset += 8;
+                }
+                FileAttr::SpaceAvail => {
+                    if offset + 8 > buf.len() { break; }
+                    let val = u64::from_be_bytes(buf[offset..offset + 8].try_into().unwrap());
+                    attr_vals.push(FileAttrValue::SpaceAvail(val));
+                    offset += 8;
+                }
+                FileAttr::SpaceFree => {
+                    if offset + 8 > buf.len() { break; }
+                    let val = u64::from_be_bytes(buf[offset..offset + 8].try_into().unwrap());
+                    attr_vals.push(FileAttrValue::SpaceFree(val));
+                    offset += 8;
+                }
+                FileAttr::SpaceTotal => {
+                    if offset + 8 > buf.len() { break; }
+                    let val = u64::from_be_bytes(buf[offset..offset + 8].try_into().unwrap());
+                    attr_vals.push(FileAttrValue::SpaceTotal(val));
+                    offset += 8;
+                }
                 FileAttr::SpaceUsed => {
                     if offset + 8 > buf.len() { break; }
                     let val = u64::from_be_bytes(buf[offset..offset + 8].try_into().unwrap());
@@ -549,6 +585,24 @@ impl Attrlist4<FileAttrValue> {
                     // XDR padding to 4-byte boundary
                     let pad = (4 - (v.len() % 4)) % 4;
                     buffer.extend_from_slice(&vec![0u8; pad]);
+                }
+                FileAttrValue::QuotaAvailHard(v) => {
+                    buffer.extend_from_slice(v.to_be_bytes().as_ref());
+                }
+                FileAttrValue::QuotaAvailSoft(v) => {
+                    buffer.extend_from_slice(v.to_be_bytes().as_ref());
+                }
+                FileAttrValue::QuotaUsed(v) => {
+                    buffer.extend_from_slice(v.to_be_bytes().as_ref());
+                }
+                FileAttrValue::SpaceAvail(v) => {
+                    buffer.extend_from_slice(v.to_be_bytes().as_ref());
+                }
+                FileAttrValue::SpaceFree(v) => {
+                    buffer.extend_from_slice(v.to_be_bytes().as_ref());
+                }
+                FileAttrValue::SpaceTotal(v) => {
+                    buffer.extend_from_slice(v.to_be_bytes().as_ref());
                 }
                 FileAttrValue::SpaceUsed(v) => {
                     buffer.extend_from_slice(v.to_be_bytes().as_ref());

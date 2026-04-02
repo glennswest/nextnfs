@@ -10,6 +10,8 @@ use crate::server::{
 
 use nextnfs_proto::nfs4_proto::{Fattr4, Getattr4args, Getattr4resok, NfsResOp4};
 
+use crate::server::filemanager::QuotaInfo;
+
 #[async_trait]
 impl NfsOperation for Getattr4args {
     async fn execute<'a>(&self, request: NfsRequest<'a>) -> NfsOpResponse<'a> {
@@ -49,9 +51,22 @@ impl NfsOperation for Getattr4args {
                 }
             }
             Some(filehandle) => {
+                let quota_info = request.quota_manager().map(|qm| {
+                    // 1TB default filesystem size
+                    const DEFAULT_SPACE_TOTAL: u64 = 1_099_511_627_776;
+                    let used = qm.bytes_used();
+                    QuotaInfo {
+                        quota_avail_hard: qm.quota_avail_hard(),
+                        quota_avail_soft: qm.quota_avail_soft(),
+                        quota_used: used,
+                        space_total: DEFAULT_SPACE_TOTAL,
+                        space_free: DEFAULT_SPACE_TOTAL.saturating_sub(used),
+                        space_avail: DEFAULT_SPACE_TOTAL.saturating_sub(used),
+                    }
+                });
                 let resp = request
                     .file_manager()
-                    .filehandle_attrs(&self.attr_request, filehandle);
+                    .filehandle_attrs(&self.attr_request, filehandle, quota_info.as_ref());
 
                 let (answer_attrs, attrs) = match resp {
                     Some(inner) => inner,
@@ -87,7 +102,10 @@ impl NfsOperation for Getattr4args {
 mod tests {
     use crate::{
         server::{
-            nfs40::{Attrlist4, FileAttr, Getattr4args, Getattr4resok, NfsResOp4, NfsStat4},
+            nfs40::{
+                Attrlist4, FileAttr, FileAttrValue, Getattr4args, Getattr4resok, NfsResOp4,
+                NfsStat4,
+            },
             operation::NfsOperation,
         },
         test_utils::{create_nfs40_server, create_nfs40_server_with_root_fh},
@@ -199,6 +217,90 @@ mod tests {
             assert_eq!(fattr.attrmask.len(), 2);
         } else {
             panic!("Expected Opgetattr with attributes");
+        }
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_getattr_quota_attrs() {
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let args = Getattr4args {
+            attr_request: Attrlist4(vec![
+                FileAttr::QuotaAvailHard,
+                FileAttr::QuotaAvailSoft,
+                FileAttr::QuotaUsed,
+            ]),
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        if let Some(NfsResOp4::Opgetattr(Getattr4resok {
+            obj_attributes: Some(fattr), ..
+        })) = response.result
+        {
+            assert_eq!(fattr.attrmask.len(), 3);
+            assert_eq!(fattr.attr_vals.len(), 3);
+            // Default QuotaManager has 0 limits (unlimited) so avail=0, used=0
+            assert!(matches!(fattr.attr_vals.0[0], FileAttrValue::QuotaAvailHard(0)));
+            assert!(matches!(fattr.attr_vals.0[1], FileAttrValue::QuotaAvailSoft(0)));
+            assert!(matches!(fattr.attr_vals.0[2], FileAttrValue::QuotaUsed(0)));
+        } else {
+            panic!("Expected Opgetattr with quota attributes");
+        }
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_getattr_space_attrs() {
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let args = Getattr4args {
+            attr_request: Attrlist4(vec![
+                FileAttr::SpaceAvail,
+                FileAttr::SpaceFree,
+                FileAttr::SpaceTotal,
+            ]),
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        if let Some(NfsResOp4::Opgetattr(Getattr4resok {
+            obj_attributes: Some(fattr), ..
+        })) = response.result
+        {
+            assert_eq!(fattr.attrmask.len(), 3);
+            assert_eq!(fattr.attr_vals.len(), 3);
+            // No QuotaManager in test helper, so values default to 0
+            assert!(matches!(fattr.attr_vals.0[0], FileAttrValue::SpaceAvail(0)));
+            assert!(matches!(fattr.attr_vals.0[1], FileAttrValue::SpaceFree(0)));
+            assert!(matches!(fattr.attr_vals.0[2], FileAttrValue::SpaceTotal(0)));
+        } else {
+            panic!("Expected Opgetattr with space attributes");
+        }
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_getattr_supported_includes_quota() {
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let args = Getattr4args {
+            attr_request: Attrlist4(vec![FileAttr::SupportedAttrs]),
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        if let Some(NfsResOp4::Opgetattr(Getattr4resok {
+            obj_attributes: Some(fattr), ..
+        })) = response.result
+        {
+            if let FileAttrValue::SupportedAttrs(supported) = &fattr.attr_vals.0[0] {
+                assert!(supported.0.contains(&FileAttr::QuotaAvailHard));
+                assert!(supported.0.contains(&FileAttr::QuotaAvailSoft));
+                assert!(supported.0.contains(&FileAttr::QuotaUsed));
+                assert!(supported.0.contains(&FileAttr::SpaceAvail));
+                assert!(supported.0.contains(&FileAttr::SpaceFree));
+                assert!(supported.0.contains(&FileAttr::SpaceTotal));
+            } else {
+                panic!("Expected SupportedAttrs value");
+            }
+        } else {
+            panic!("Expected Opgetattr with SupportedAttrs");
         }
     }
 }

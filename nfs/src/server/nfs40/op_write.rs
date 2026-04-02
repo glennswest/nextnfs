@@ -35,6 +35,17 @@ impl NfsOperation for Write4args {
             }
         };
 
+        // Quota enforcement: check before write
+        if let Some(qm) = request.quota_manager() {
+            if !self.data.is_empty() && !qm.check_write(self.data.len() as u64) {
+                return NfsOpResponse {
+                    request,
+                    result: None,
+                    status: NfsStat4::Nfs4errDquot,
+                };
+            }
+        }
+
         let mut stable = StableHow4::Unstable4;
         let mut count: u32 = self.data.len() as u32;
         if self.stable == StableHow4::Unstable4 {
@@ -106,6 +117,13 @@ impl NfsOperation for Write4args {
             stats.bytes_written.fetch_add(count as u64, Ordering::Relaxed);
         }
 
+        // Record bytes for quota tracking
+        if count > 0 {
+            if let Some(qm) = request.quota_manager() {
+                qm.record_write(count as u64);
+            }
+        }
+
         let boot_time = request.boot_time;
         NfsOpResponse {
             request,
@@ -123,6 +141,7 @@ impl NfsOperation for Write4args {
 mod tests {
     use crate::{
         server::{
+            export_manager::{QuotaConfig, QuotaManager},
             nfs40::{NfsStat4, Stateid4, StableHow4, Write4args},
             operation::NfsOperation,
         },
@@ -342,5 +361,76 @@ mod tests {
         } else {
             panic!("Expected Write4res::Resok4");
         }
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_write_quota_exceeded() {
+        let mut request = create_nfs40_server_with_root_fh(None).await;
+        let root_file = request.current_filehandle().unwrap().file.clone();
+        root_file.join("quota_w.txt").unwrap().create_file().unwrap();
+        let fh = request
+            .file_manager()
+            .get_filehandle_for_path("quota_w.txt".to_string())
+            .await
+            .unwrap();
+        request.set_filehandle(fh);
+
+        // Set a 10-byte hard quota, already used 8
+        let qm = QuotaManager::new(QuotaConfig {
+            hard_limit_bytes: 10,
+            soft_limit_bytes: 5,
+        });
+        qm.record_write(8);
+        request.set_quota_manager(qm);
+
+        // Try to write 5 bytes (would exceed 10-byte hard limit)
+        let args = Write4args {
+            stateid: Stateid4 { seqid: 0, other: [0u8; 12] },
+            offset: 0,
+            stable: StableHow4::FileSync4,
+            data: b"hello".to_vec(),
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4errDquot);
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_write_within_quota() {
+        use crate::server::nfs40::{NfsResOp4, Write4res};
+
+        let mut request = create_nfs40_server_with_root_fh(None).await;
+        let root_file = request.current_filehandle().unwrap().file.clone();
+        root_file.join("quota_ok.txt").unwrap().create_file().unwrap();
+        let fh = request
+            .file_manager()
+            .get_filehandle_for_path("quota_ok.txt".to_string())
+            .await
+            .unwrap();
+        request.set_filehandle(fh);
+
+        // Set a 100-byte hard quota, 0 used
+        let qm = QuotaManager::new(QuotaConfig {
+            hard_limit_bytes: 100,
+            soft_limit_bytes: 50,
+        });
+        request.set_quota_manager(qm.clone());
+
+        let args = Write4args {
+            stateid: Stateid4 { seqid: 0, other: [0u8; 12] },
+            offset: 0,
+            stable: StableHow4::FileSync4,
+            data: b"ok".to_vec(),
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        if let Some(NfsResOp4::Opwrite(Write4res::Resok4(resok))) = response.result {
+            assert_eq!(resok.count, 2);
+        } else {
+            panic!("Expected Write4res::Resok4");
+        }
+        // Verify quota tracking updated
+        assert_eq!(qm.bytes_used(), 2);
     }
 }

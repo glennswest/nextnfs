@@ -40,6 +40,17 @@ impl NfsOperation for Create4args {
             };
         }
 
+        // Quota enforcement: reject creation if hard limit already exceeded
+        if let Some(qm) = request.quota_manager() {
+            if !qm.check_write(0) {
+                return NfsOpResponse {
+                    request,
+                    result: None,
+                    status: NfsStat4::Nfs4errDquot,
+                };
+            }
+        }
+
         let (cinfo, attrset) = match self.objtype {
             Createtype4::Nf4lnk(ref linkdata) => {
                 // Symlink creation: linkdata is the target path
@@ -178,6 +189,7 @@ impl NfsOperation for Create4args {
 mod tests {
     use crate::{
         server::{
+            export_manager::{QuotaConfig, QuotaManager},
             nfs40::{
                 Attrlist4, Create4args, Create4res, Createtype4, Fattr4, NfsResOp4,
                 NfsStat4,
@@ -285,5 +297,29 @@ mod tests {
         };
         let response = args.execute(request).await;
         assert_eq!(response.status, NfsStat4::Nfs4Ok);
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_create_quota_exceeded() {
+        let mut request = create_nfs40_server_with_root_fh(None).await;
+        // Set hard quota already exceeded
+        let qm = QuotaManager::new(QuotaConfig {
+            hard_limit_bytes: 100,
+            soft_limit_bytes: 50,
+        });
+        qm.record_write(200); // over hard limit
+        request.set_quota_manager(qm);
+
+        let args = Create4args {
+            objtype: Createtype4::Nf4dir,
+            objname: "quotadir".to_string(),
+            createattrs: Fattr4 {
+                attrmask: Attrlist4(vec![]),
+                attr_vals: Attrlist4(vec![]),
+            },
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4errDquot);
     }
 }

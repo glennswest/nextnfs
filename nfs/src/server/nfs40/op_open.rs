@@ -96,6 +96,17 @@ async fn open_for_writing<'a>(
 
     debug!("open_for_writing {:?}", fh_path);
 
+    // Quota enforcement: reject file creation if hard limit already exceeded
+    if let Some(qm) = request.quota_manager() {
+        if !qm.check_write(0) {
+            return NfsOpResponse {
+                request,
+                result: None,
+                status: NfsStat4::Nfs4errDquot,
+            };
+        }
+    }
+
     let newfile = match filehandle.file.join(file) {
         Ok(p) => p,
         Err(e) => {

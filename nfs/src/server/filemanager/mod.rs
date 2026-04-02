@@ -10,7 +10,7 @@ mod filehandle;
 pub use filehandle::Filehandle;
 pub use filehandle::RealMeta;
 pub use handle::FileManagerHandle;
-pub use handle::{LockResult, TestLockResult, UnlockResult};
+pub use handle::{LockResult, QuotaInfo, TestLockResult, UnlockResult};
 mod caching;
 mod handle;
 mod locking;
@@ -492,6 +492,30 @@ impl FileManager {
                     attrs.push(FileAttrValue::OwnerGroup(fh.attr_owner_group.clone()));
                     answer_attrs.push(FileAttr::OwnerGroup);
                 }
+                FileAttr::QuotaAvailHard => {
+                    attrs.push(FileAttrValue::QuotaAvailHard(0));
+                    answer_attrs.push(FileAttr::QuotaAvailHard);
+                }
+                FileAttr::QuotaAvailSoft => {
+                    attrs.push(FileAttrValue::QuotaAvailSoft(0));
+                    answer_attrs.push(FileAttr::QuotaAvailSoft);
+                }
+                FileAttr::QuotaUsed => {
+                    attrs.push(FileAttrValue::QuotaUsed(0));
+                    answer_attrs.push(FileAttr::QuotaUsed);
+                }
+                FileAttr::SpaceAvail => {
+                    attrs.push(FileAttrValue::SpaceAvail(0));
+                    answer_attrs.push(FileAttr::SpaceAvail);
+                }
+                FileAttr::SpaceFree => {
+                    attrs.push(FileAttrValue::SpaceFree(0));
+                    answer_attrs.push(FileAttr::SpaceFree);
+                }
+                FileAttr::SpaceTotal => {
+                    attrs.push(FileAttrValue::SpaceTotal(0));
+                    answer_attrs.push(FileAttr::SpaceTotal);
+                }
                 FileAttr::SpaceUsed => {
                     attrs.push(FileAttrValue::SpaceUsed(fh.attr_space_used));
                     answer_attrs.push(FileAttr::SpaceUsed);
@@ -704,6 +728,12 @@ impl FileManager {
             FileAttr::Numlinks,
             FileAttr::Owner,
             FileAttr::OwnerGroup,
+            FileAttr::QuotaAvailHard,
+            FileAttr::QuotaAvailSoft,
+            FileAttr::QuotaUsed,
+            FileAttr::SpaceAvail,
+            FileAttr::SpaceFree,
+            FileAttr::SpaceTotal,
             FileAttr::SpaceUsed,
             FileAttr::TimeAccess,
             FileAttr::TimeMetadata,

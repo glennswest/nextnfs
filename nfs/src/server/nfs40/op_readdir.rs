@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use tracing::{debug, error};
 
 use crate::server::{
+    filemanager::QuotaInfo,
     nfs40::op_pseudo, operation::NfsOperation, request::NfsRequest, response::NfsOpResponse,
 };
 
@@ -129,12 +130,25 @@ impl NfsOperation for Readdir4args {
             cookieverf.truncate(8);
         }
 
+        let quota_info = request.quota_manager().map(|qm| {
+            const DEFAULT_SPACE_TOTAL: u64 = 1_099_511_627_776;
+            let used = qm.bytes_used();
+            QuotaInfo {
+                quota_avail_hard: qm.quota_avail_hard(),
+                quota_avail_soft: qm.quota_avail_soft(),
+                quota_used: used,
+                space_total: DEFAULT_SPACE_TOTAL,
+                space_free: DEFAULT_SPACE_TOTAL.saturating_sub(used),
+                space_avail: DEFAULT_SPACE_TOTAL.saturating_sub(used),
+            }
+        });
+
         let mut tnextentry = None;
         let mut added_entries = 0;
         for (cookie, fh) in filehandles.into_iter().rev() {
             let resp = request
                 .file_manager()
-                .filehandle_attrs(&self.attr_request, &fh);
+                .filehandle_attrs(&self.attr_request, &fh, quota_info.as_ref());
             let (answer_attrs, attrs) = match resp {
                 Some(inner) => inner,
                 None => {

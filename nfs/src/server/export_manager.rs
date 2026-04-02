@@ -144,6 +144,90 @@ pub struct ExportStatsSnapshot {
     pub ops: u64,
 }
 
+/// Per-export quota configuration.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct QuotaConfig {
+    /// Hard limit in bytes (0 = unlimited). Writes exceeding this return NFS4ERR_DQUOT.
+    pub hard_limit_bytes: u64,
+    /// Soft limit in bytes (0 = unlimited). Advisory — reported to clients but not enforced.
+    pub soft_limit_bytes: u64,
+}
+
+/// Per-export quota manager tracking space usage.
+///
+/// Uses atomic counters for lock-free updates from WRITE/CREATE operations.
+/// Follows the same Arc-shared pattern as ExportStats.
+#[derive(Debug)]
+pub struct QuotaManager {
+    config: std::sync::RwLock<QuotaConfig>,
+    bytes_used: AtomicU64,
+}
+
+impl QuotaManager {
+    pub fn new(config: QuotaConfig) -> Arc<Self> {
+        Arc::new(Self {
+            config: std::sync::RwLock::new(config),
+            bytes_used: AtomicU64::new(0),
+        })
+    }
+
+    /// Check if writing `additional_bytes` would exceed the hard quota.
+    /// Returns `true` if the write is allowed.
+    pub fn check_write(&self, additional_bytes: u64) -> bool {
+        let config = self.config.read().unwrap();
+        if config.hard_limit_bytes == 0 {
+            return true; // unlimited
+        }
+        let current = self.bytes_used.load(Ordering::Relaxed);
+        current + additional_bytes <= config.hard_limit_bytes
+    }
+
+    /// Record bytes written (call after successful write).
+    pub fn record_write(&self, bytes: u64) {
+        self.bytes_used.fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    /// Record bytes freed (call after successful remove/truncate).
+    pub fn record_free(&self, bytes: u64) {
+        self.bytes_used.fetch_sub(bytes.min(self.bytes_used.load(Ordering::Relaxed)), Ordering::Relaxed);
+    }
+
+    /// Get current bytes used.
+    pub fn bytes_used(&self) -> u64 {
+        self.bytes_used.load(Ordering::Relaxed)
+    }
+
+    /// Get hard limit remaining (0 if unlimited).
+    pub fn quota_avail_hard(&self) -> u64 {
+        let config = self.config.read().unwrap();
+        if config.hard_limit_bytes == 0 {
+            return u64::MAX;
+        }
+        let used = self.bytes_used.load(Ordering::Relaxed);
+        config.hard_limit_bytes.saturating_sub(used)
+    }
+
+    /// Get soft limit remaining (0 if unlimited).
+    pub fn quota_avail_soft(&self) -> u64 {
+        let config = self.config.read().unwrap();
+        if config.soft_limit_bytes == 0 {
+            return u64::MAX;
+        }
+        let used = self.bytes_used.load(Ordering::Relaxed);
+        config.soft_limit_bytes.saturating_sub(used)
+    }
+
+    /// Get the current quota configuration.
+    pub fn config(&self) -> QuotaConfig {
+        self.config.read().unwrap().clone()
+    }
+
+    /// Update the quota configuration.
+    pub fn update_config(&self, config: QuotaConfig) {
+        *self.config.write().unwrap() = config;
+    }
+}
+
 /// State for a single export.
 #[derive(Debug, Clone)]
 pub struct ExportInfo {
@@ -154,6 +238,8 @@ pub struct ExportInfo {
     pub stats: Arc<ExportStats>,
     /// Per-export rate limiter for QoS enforcement (shared via Arc<Mutex>)
     pub rate_limiter: Arc<Mutex<RateLimiter>>,
+    /// Per-export quota manager for space usage tracking
+    pub quota_manager: Arc<QuotaManager>,
 }
 
 /// Full export state including the FileManagerHandle.
@@ -173,6 +259,8 @@ enum ExportManagerMessage {
     GetExportByName(GetExportByNameRequest),
     SetQos(SetQosRequest),
     GetQos(GetQosRequest),
+    SetQuota(SetQuotaRequest),
+    GetQuota(GetQuotaRequest),
 }
 
 struct SetQosRequest {
@@ -184,6 +272,17 @@ struct SetQosRequest {
 struct GetQosRequest {
     name: String,
     respond_to: oneshot::Sender<Option<QosConfig>>,
+}
+
+struct SetQuotaRequest {
+    name: String,
+    config: QuotaConfig,
+    respond_to: oneshot::Sender<Result<(), String>>,
+}
+
+struct GetQuotaRequest {
+    name: String,
+    respond_to: oneshot::Sender<Option<QuotaConfig>>,
 }
 
 struct AddExportRequest {
@@ -295,6 +394,22 @@ impl ExportManager {
                     let _ = req.respond_to.send(None);
                 }
             }
+            ExportManagerMessage::SetQuota(req) => {
+                let result = if let Some(state) = self.exports.get(&req.name) {
+                    state.info.quota_manager.update_config(req.config);
+                    Ok(())
+                } else {
+                    Err(format!("export '{}' not found", req.name))
+                };
+                let _ = req.respond_to.send(result);
+            }
+            ExportManagerMessage::GetQuota(req) => {
+                if let Some(state) = self.exports.get(&req.name) {
+                    let _ = req.respond_to.send(Some(state.info.quota_manager.config()));
+                } else {
+                    let _ = req.respond_to.send(None);
+                }
+            }
         }
     }
 
@@ -328,6 +443,7 @@ impl ExportManager {
 
         let stats = ExportStats::new();
         let rate_limiter = Arc::new(Mutex::new(RateLimiter::new(QosConfig::default())));
+        let quota_manager = QuotaManager::new(QuotaConfig::default());
         let info = ExportInfo {
             export_id,
             name: name.clone(),
@@ -335,6 +451,7 @@ impl ExportManager {
             read_only,
             stats,
             rate_limiter,
+            quota_manager,
         };
 
         let state = ExportState {
@@ -400,6 +517,7 @@ impl ExportManager {
 
         let stats = ExportStats::new();
         let rate_limiter = Arc::new(Mutex::new(RateLimiter::new(QosConfig::default())));
+        let quota_manager = QuotaManager::new(QuotaConfig::default());
         let info = ExportInfo {
             export_id,
             name: name.clone(),
@@ -407,6 +525,7 @@ impl ExportManager {
             read_only: false,
             stats,
             rate_limiter,
+            quota_manager,
         };
 
         let state = ExportState {
@@ -580,6 +699,33 @@ impl ExportManagerHandle {
         let _ = self
             .sender
             .send(ExportManagerMessage::GetQos(GetQosRequest {
+                name: name.to_string(),
+                respond_to: tx,
+            }))
+            .await;
+        rx.await.ok().flatten()
+    }
+
+    /// Set quota configuration for an export.
+    pub async fn set_quota(&self, name: &str, config: QuotaConfig) -> Result<(), String> {
+        let (tx, rx) = oneshot::channel();
+        self.sender
+            .send(ExportManagerMessage::SetQuota(SetQuotaRequest {
+                name: name.to_string(),
+                config,
+                respond_to: tx,
+            }))
+            .await
+            .map_err(|_| "export manager gone".to_string())?;
+        rx.await.map_err(|_| "export manager gone".to_string())?
+    }
+
+    /// Get the current quota config for an export.
+    pub async fn get_quota(&self, name: &str) -> Option<QuotaConfig> {
+        let (tx, rx) = oneshot::channel();
+        let _ = self
+            .sender
+            .send(ExportManagerMessage::GetQuota(GetQuotaRequest {
                 name: name.to_string(),
                 respond_to: tx,
             }))

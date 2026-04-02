@@ -7,7 +7,7 @@ use tokio::sync::Mutex;
 
 use super::{
     clientmanager::ClientManagerHandle,
-    export_manager::{ExportManagerHandle, ExportStats, RateLimiter},
+    export_manager::{ExportManagerHandle, ExportStats, QuotaManager, RateLimiter},
     filemanager::{FileManagerHandle, Filehandle},
     nfs40::op_pseudo,
     nfs41::SessionManager,
@@ -29,6 +29,8 @@ pub struct NfsRequest<'a> {
     export_stats: Option<Arc<ExportStats>>,
     // cached per-export rate limiter for QoS enforcement
     rate_limiter: Option<Arc<Mutex<RateLimiter>>>,
+    // cached per-export quota manager
+    quota_manager: Option<Arc<QuotaManager>>,
     // current export id (extracted from filehandle)
     current_export_id: Option<u8>,
     // time the server was booted
@@ -69,6 +71,7 @@ impl<'a> NfsRequest<'a> {
             cached_fmanager: default_fmanager,
             export_stats: None,
             rate_limiter: None,
+            quota_manager: None,
             current_export_id: None,
             boot_time,
             request_time,
@@ -122,12 +125,14 @@ impl<'a> NfsRequest<'a> {
             self.cached_fmanager = None;
             self.export_stats = None;
             self.rate_limiter = None;
+            self.quota_manager = None;
             return;
         }
         if let Some((info, fm)) = self.export_manager.get_export_by_id(export_id).await {
             self.cached_fmanager = Some(fm);
             self.export_stats = Some(info.stats);
             self.rate_limiter = Some(info.rate_limiter);
+            self.quota_manager = Some(info.quota_manager);
         }
     }
 
@@ -148,6 +153,11 @@ impl<'a> NfsRequest<'a> {
     /// Get the cached per-export rate limiter for QoS enforcement.
     pub fn rate_limiter(&self) -> Option<&Arc<Mutex<RateLimiter>>> {
         self.rate_limiter.as_ref()
+    }
+
+    /// Get the cached per-export quota manager.
+    pub fn quota_manager(&self) -> Option<&Arc<QuotaManager>> {
+        self.quota_manager.as_ref()
     }
 
     pub fn set_filehandle(&mut self, filehandle: Filehandle) {
@@ -252,6 +262,12 @@ impl<'a> NfsRequest<'a> {
     }
 
     pub async fn close(&self) {}
+
+    /// Set quota manager directly (for testing).
+    #[cfg(test)]
+    pub fn set_quota_manager(&mut self, qm: Arc<QuotaManager>) {
+        self.quota_manager = Some(qm);
+    }
 }
 
 #[cfg(test)]
