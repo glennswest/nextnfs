@@ -37,6 +37,12 @@ fi
 # Set CC for musl target — ring crate needs this
 export CC_x86_64_unknown_linux_musl=musl-gcc
 
+# Fedora ships musl-gcc, not x86_64-linux-musl-gcc — create symlink for Rust linker
+if command -v musl-gcc >/dev/null 2>&1 && ! command -v x86_64-linux-musl-gcc >/dev/null 2>&1; then
+    ln -sf "$(which musl-gcc)" /usr/local/bin/x86_64-linux-musl-gcc
+    echo "  Symlinked musl-gcc -> x86_64-linux-musl-gcc"
+fi
+
 # ── Install Rust if needed ───────────────────────────────────────────────────
 
 if ! command -v rustup >/dev/null 2>&1; then
