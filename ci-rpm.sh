@@ -29,10 +29,13 @@ echo ""
 
 echo "==> Installing build dependencies..."
 if command -v dnf >/dev/null 2>&1; then
-    dnf install -y gcc git rpm-build musl-gcc 2>/dev/null || true
+    dnf install -y gcc git rpm-build musl-gcc musl-libc-static musl-devel kernel-headers perl-FindBin 2>/dev/null || true
 elif command -v apt-get >/dev/null 2>&1; then
-    apt-get update && apt-get install -y gcc git rpm musl-tools 2>/dev/null || true
+    apt-get update && apt-get install -y gcc git rpm musl-tools linux-headers-generic 2>/dev/null || true
 fi
+
+# Set CC for musl target — ring crate needs this
+export CC_x86_64_unknown_linux_musl=musl-gcc
 
 # ── Install Rust if needed ───────────────────────────────────────────────────
 
