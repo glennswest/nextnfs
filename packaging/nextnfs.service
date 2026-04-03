@@ -1,6 +1,7 @@
 [Unit]
-Description=NextNFS - NFSv4.0 Server
-After=network-online.target
+Description=NextNFS - High-Performance NFSv4 Server
+Documentation=https://github.com/glennswest/nextnfs
+After=network-online.target local-fs.target
 Wants=network-online.target
 
 [Service]
@@ -8,7 +9,30 @@ Type=simple
 ExecStart=/usr/bin/nextnfs serve --config /etc/nextnfs/nextnfs.toml
 Restart=on-failure
 RestartSec=5
+
+# Resource limits
 LimitNOFILE=65536
+LimitNPROC=4096
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+MemoryDenyWriteExecute=yes
+
+# Allow write access to export and state directories
+ReadWritePaths=/export /var/lib/nextnfs
+
+# Run as root (NFS needs port 2049 and uid/gid mapping)
+User=root
+Group=root
 
 [Install]
 WantedBy=multi-user.target

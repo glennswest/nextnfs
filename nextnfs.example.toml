@@ -1,6 +1,11 @@
 [server]
 listen = "0.0.0.0:2049"
 api_listen = "0.0.0.0:8080"
+state_dir = "/var/lib/nextnfs"
+
+# TLS (optional — uncomment to enable RPC-over-TLS)
+# tls_cert = "/etc/nextnfs/tls/cert.pem"
+# tls_key = "/etc/nextnfs/tls/key.pem"
 
 # Legacy single-export (still works)
 [export]
@@ -12,6 +17,10 @@ read_only = false
 # name = "data"
 # path = "/data"
 # read_only = false
+# max_ops_per_sec = 0
+# max_bytes_per_sec = 0
+# clients = ["192.168.1.0/24"]
+# squash = "root_squash"
 #
 # [[exports]]
 # name = "backup"
