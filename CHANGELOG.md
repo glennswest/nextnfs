@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### 2026-04-03
+- **feat:** Hardened systemd service — NoNewPrivileges, ProtectSystem=strict, PrivateTmp, PrivateDevices, MemoryDenyWriteExecute, ProtectKernelTunables/Modules/ControlGroups, ReadWritePaths for /export and /var/lib/nextnfs
+- **feat:** RPM spec update — /var/lib/nextnfs state directory, /export directory, v4.0/v4.1/v4.2 description, changelog
+- **feat:** ci-rpm.sh — automated RPM builder for mkube Fedora runners, musl-gcc CC workaround, end-to-end build + package
+- **feat:** ci-deploy-servers.sh — build + deploy to server2/server3 via SSH with firewalld integration
+- **feat:** Example config — state_dir, TLS, QoS, access control examples
+- **ops:** Deployed v0.12.0 to server2.g10.lo (Fedora 43) and server3.g10.lo (Fedora 43), systemd service running, health checks passing
+
 ## [v0.12.0] — 2026-04-02
 
 ### Added
