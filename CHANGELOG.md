@@ -2,16 +2,22 @@
 
 ## [Unreleased]
 
+## [v0.12.1] — 2026-04-03
+
+### Fixed
+- COMMIT synchronization — commit() now awaits fsync completion via oneshot before returning NFS4OK (#26)
+- CLOSE flushes write cache — dirty data flushed (fsync) before dropping filehandle on close (#26)
+- RENAME path invalidation — filehandle database updated with new path/VfsPath after rename (#22)
+- LINK real filesystem paths — hard_link() uses export_root to construct real paths instead of VFS strings (#24)
+- SYMLINK real filesystem paths — symlink() uses export_root to construct real link path (#23)
+- READLINK real filesystem paths — read_link() uses export_root to resolve symlink target (#23)
+- SETATTR owner/group/mode/time — chown(uid), chown(gid), chmod(mode), utimensat(mtime) via libc syscalls on real paths (#25)
+- ACCESS permission checking — POSIX mode-based permission check against caller uid/gid instead of echoing back client bits; root gets all access (#31)
+
+### Changed
+- FileManagerHandle stores export_root and exposes real_path() helper for op_* code
+
 ### 2026-04-03
-- **fix:** COMMIT synchronization — commit() now awaits fsync completion via oneshot before returning NFS4OK. Fixes #26
-- **fix:** CLOSE flushes write cache — dirty data flushed (fsync) before dropping filehandle on close. Fixes #26
-- **fix:** RENAME path invalidation — filehandle database updated with new path/VfsPath after rename. Fixes #22
-- **fix:** LINK real filesystem paths — hard_link() uses export_root to construct real paths instead of VFS strings. Fixes #24
-- **fix:** SYMLINK real filesystem paths — symlink() uses export_root to construct real link path. Fixes #23
-- **fix:** READLINK real filesystem paths — read_link() uses export_root to resolve symlink target. Fixes #23
-- **fix:** SETATTR owner/group/mode/time — chown(uid), chown(gid), chmod(mode), utimensat(mtime) via libc syscalls on real paths. Fixes #25
-- **fix:** ACCESS permission checking — POSIX mode-based permission check against caller uid/gid instead of echoing back client bits; root gets all access. Fixes #31
-- **refactor:** FileManagerHandle stores export_root and exposes real_path() helper for op_* code
 - **feat:** Hardened systemd service — NoNewPrivileges, ProtectSystem=strict, PrivateTmp, PrivateDevices, MemoryDenyWriteExecute, ProtectKernelTunables/Modules/ControlGroups, ReadWritePaths for /export and /var/lib/nextnfs
 - **feat:** RPM spec update — /var/lib/nextnfs state directory, /export directory, v4.0/v4.1/v4.2 description, changelog
 - **feat:** ci-rpm.sh — automated RPM builder for mkube Fedora runners, musl-gcc CC workaround, end-to-end build + package
