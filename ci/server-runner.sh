@@ -18,7 +18,12 @@ set -euo pipefail
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
-NEXTNFS_SRC="${NEXTNFS_SRC:-/data/nextnfs}"
+# mkube clones to /build; fallback to /data/nextnfs for manual runs
+if [ -d "/build/Cargo.toml" ] 2>/dev/null || [ -f "/build/Cargo.toml" ]; then
+    NEXTNFS_SRC="${NEXTNFS_SRC:-/build}"
+else
+    NEXTNFS_SRC="${NEXTNFS_SRC:-/data/nextnfs}"
+fi
 NEXTNFS_EXPORT="${NEXTNFS_EXPORT:-/data/export}"
 NEXTNFS_LISTEN="${NEXTNFS_LISTEN:-0.0.0.0:2049}"
 NEXTNFS_API="${NEXTNFS_API:-0.0.0.0:8080}"

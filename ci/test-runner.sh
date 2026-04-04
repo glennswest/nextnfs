@@ -24,7 +24,12 @@ set -uo pipefail
 
 NFS_SERVER="${NFS_SERVER:-127.0.0.1}"
 NFS_PORT="${NFS_PORT:-2049}"
-NEXTNFS_SRC="${NEXTNFS_SRC:-/data/nextnfs}"
+# mkube clones to /build; fallback to /data/nextnfs for manual runs
+if [ -f "/build/Cargo.toml" ]; then
+    NEXTNFS_SRC="${NEXTNFS_SRC:-/build}"
+else
+    NEXTNFS_SRC="${NEXTNFS_SRC:-/data/nextnfs}"
+fi
 RESULTS_DIR="${RESULTS_DIR:-/data/results}"
 SKIP_BASELINE="${SKIP_BASELINE:-0}"
 BUILD_MODE="${BUILD_MODE:-release}"
