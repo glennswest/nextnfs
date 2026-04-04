@@ -27,6 +27,7 @@ pub enum FileManagerMessage {
     RemoveFile(RemoveFileRequest),
     TouchFile(TouchFileRequest),
     UpdateFilehandle(Filehandle),
+    RenamePath(RenamePathRequest),
     LockFile(LockFileRequest),
     UnlockFile(UnlockFileRequest),
     TestLock(TestLockRequest),
@@ -83,6 +84,13 @@ pub struct RemoveFileRequest {
 
 pub struct TouchFileRequest {
     pub id: NfsFh4,
+}
+
+pub struct RenamePathRequest {
+    pub old_path: String,
+    pub new_path: String,
+    pub new_vfs_path: VfsPath,
+    pub respond_to: oneshot::Sender<()>,
 }
 
 pub struct WriteCacheHandleRequest {
@@ -248,6 +256,7 @@ pub fn mode_to_acl(mode: u32, owner: &str, group: &str) -> Vec<Nfsace4> {
 #[derive(Debug, Clone)]
 pub struct FileManagerHandle {
     sender: mpsc::Sender<FileManagerMessage>,
+    export_root: PathBuf,
     lease_time: u32,
     hard_link_support: bool,
     symlink_support: bool,
@@ -257,15 +266,30 @@ pub struct FileManagerHandle {
 impl FileManagerHandle {
     pub fn new(root: VfsPath, fsid: Option<u64>, export_root: PathBuf) -> Self {
         let (sender, receiver) = mpsc::channel(256);
-        let fmanager = FileManager::new(receiver, root, fsid, export_root);
+        let fmanager = FileManager::new(receiver, root, fsid, export_root.clone());
         tokio::spawn(run_file_manager(fmanager));
 
         Self {
             sender,
+            export_root,
             lease_time: 90,
             hard_link_support: true,
             symlink_support: true,
             unique_handles: true,
+        }
+    }
+
+    /// Get the export root path for constructing real filesystem paths.
+    pub fn export_root(&self) -> &PathBuf {
+        &self.export_root
+    }
+
+    /// Construct a real filesystem path from a VFS path string.
+    pub fn real_path(&self, vfs_path: &str) -> PathBuf {
+        if vfs_path.is_empty() || vfs_path == "/" {
+            self.export_root.clone()
+        } else {
+            self.export_root.join(vfs_path.trim_start_matches('/'))
         }
     }
 
@@ -562,6 +586,22 @@ impl FileManagerHandle {
             Ok(None) => Err(FileManagerError { nfs_error: NfsStat4::Nfs4errNoent }),
             Err(_) => Err(FileManagerError { nfs_error: NfsStat4::Nfs4errServerfault }),
         }
+    }
+
+    /// Update the filehandle database after a rename/move operation.
+    pub async fn rename_path(&self, old_path: String, new_path: String, new_vfs_path: VfsPath) {
+        let (tx, rx) = oneshot::channel();
+        let req = RenamePathRequest {
+            old_path,
+            new_path,
+            new_vfs_path,
+            respond_to: tx,
+        };
+        if let Err(e) = self.sender.send(FileManagerMessage::RenamePath(req)).await {
+            error!("filemanager actor gone: {}", e);
+            return;
+        }
+        let _ = rx.await;
     }
 
     pub async fn drop_write_cache_handle(&self, filehandle_id: NfsFh4) {
@@ -901,6 +941,7 @@ impl FileManagerHandle {
         attr_vals: &Attrlist4<FileAttrValue>,
     ) -> Attrlist4<FileAttr> {
         let mut attrsset = Attrlist4::<FileAttr>::new(None);
+        let real_path = self.real_path(filehandle.file.as_str());
         for attr in attr_vals.iter() {
             match attr {
                 FileAttrValue::Size(args) => {
@@ -920,6 +961,66 @@ impl FileManagerHandle {
                     match result {
                         Ok(_) => attrsset.push(FileAttr::Size),
                         Err(e) => error!("SETATTR size failed: {}", e),
+                    }
+                }
+                FileAttrValue::Owner(uid_str) => {
+                    if let Ok(uid) = uid_str.parse::<u32>() {
+                        let c_path = std::ffi::CString::new(
+                            real_path.to_string_lossy().as_ref()
+                        ).unwrap_or_default();
+                        let ret = unsafe { libc::chown(c_path.as_ptr(), uid, u32::MAX) };
+                        if ret == 0 {
+                            attrsset.push(FileAttr::Owner);
+                        } else {
+                            error!("SETATTR chown(uid={}) failed: {}", uid, std::io::Error::last_os_error());
+                        }
+                    } else {
+                        debug!("SETATTR Owner: non-numeric uid string {:?}", uid_str);
+                    }
+                }
+                FileAttrValue::OwnerGroup(gid_str) => {
+                    if let Ok(gid) = gid_str.parse::<u32>() {
+                        let c_path = std::ffi::CString::new(
+                            real_path.to_string_lossy().as_ref()
+                        ).unwrap_or_default();
+                        let ret = unsafe { libc::chown(c_path.as_ptr(), u32::MAX, gid) };
+                        if ret == 0 {
+                            attrsset.push(FileAttr::OwnerGroup);
+                        } else {
+                            error!("SETATTR chown(gid={}) failed: {}", gid, std::io::Error::last_os_error());
+                        }
+                    } else {
+                        debug!("SETATTR OwnerGroup: non-numeric gid string {:?}", gid_str);
+                    }
+                }
+                FileAttrValue::Mode(mode) => {
+                    let c_path = std::ffi::CString::new(
+                        real_path.to_string_lossy().as_ref()
+                    ).unwrap_or_default();
+                    let ret = unsafe { libc::chmod(c_path.as_ptr(), *mode as libc::mode_t) };
+                    if ret == 0 {
+                        attrsset.push(FileAttr::Mode);
+                    } else {
+                        error!("SETATTR chmod({:#o}) failed: {}", mode, std::io::Error::last_os_error());
+                    }
+                }
+                FileAttrValue::TimeModifySet => {
+                    // SET_TO_SERVER_TIME4: set mtime to current server time
+                    let c_path = std::ffi::CString::new(
+                        real_path.to_string_lossy().as_ref()
+                    ).unwrap_or_default();
+                    // UTIME_NOW for both atime and mtime
+                    let times = [
+                        libc::timespec { tv_sec: 0, tv_nsec: libc::UTIME_NOW },
+                        libc::timespec { tv_sec: 0, tv_nsec: libc::UTIME_NOW },
+                    ];
+                    let ret = unsafe {
+                        libc::utimensat(libc::AT_FDCWD, c_path.as_ptr(), times.as_ptr(), 0)
+                    };
+                    if ret == 0 {
+                        attrsset.push(FileAttr::TimeModifySet);
+                    } else {
+                        error!("SETATTR utimensat failed: {}", std::io::Error::last_os_error());
                     }
                 }
                 _ => {
@@ -1003,7 +1104,7 @@ impl FileManagerHandle {
 
 pub enum WriteCacheMessage {
     Write(WriteBytesRequest),
-    Commit,
+    Commit(Option<oneshot::Sender<()>>),
 }
 
 pub struct WriteBytesRequest {
@@ -1038,9 +1139,12 @@ impl WriteCacheHandle {
     }
 
     pub async fn commit(&self) {
-        if let Err(e) = self.sender.send(WriteCacheMessage::Commit).await {
+        let (tx, rx) = oneshot::channel();
+        if let Err(e) = self.sender.send(WriteCacheMessage::Commit(Some(tx))).await {
             error!("write cache actor gone: {}", e);
+            return;
         }
+        let _ = rx.await;
     }
 }
 

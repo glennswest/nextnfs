@@ -48,30 +48,21 @@ impl NfsOperation for Link4args {
             }
         };
 
-        // Use std::fs::hard_link for real filesystem hard links
-        let source_real = {
-            let src = saved_fh.file.as_str();
-            if src.is_empty() || src == "/" {
-                // Can't hard-link the root
-                return NfsOpResponse {
-                    request,
-                    result: None,
-                    status: NfsStat4::Nfs4errInval,
-                };
-            }
-            src.to_string()
-        };
+        // Use std::fs::hard_link with real filesystem paths via export_root
+        let source_vfs_path = saved_fh.file.as_str();
+        if source_vfs_path.is_empty() || source_vfs_path == "/" {
+            // Can't hard-link the root
+            return NfsOpResponse {
+                request,
+                result: None,
+                status: NfsStat4::Nfs4errInval,
+            };
+        }
 
-        let target_real = target_path.as_str().to_string();
+        let source_real = request.file_manager().real_path(source_vfs_path);
+        let target_real = request.file_manager().real_path(target_path.as_str());
 
-        // We need the export_root to construct real paths — use file_manager
-        // For now, use VFS operations (which PhysicalFS supports)
-        match std::fs::hard_link(
-            // This won't work directly — we need real paths.
-            // Let's just return NOTSUPP for now if it fails, or try VFS copy
-            &source_real,
-            &target_real,
-        ) {
+        match std::fs::hard_link(&source_real, &target_real) {
             Ok(_) => {
                 let change_before = target_dir.attr_change;
                 let change_after = change_before + 1;

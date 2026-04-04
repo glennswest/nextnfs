@@ -69,7 +69,7 @@ impl WriteCache {
                     }
                 }
             }
-            WriteCacheMessage::Commit => {
+            WriteCacheMessage::Commit(respond_to) => {
                 if self.dirty {
                     if let Some(ref mut file) = self.file {
                         // fsync to ensure durability
@@ -85,6 +85,9 @@ impl WriteCache {
                 self.filemanager
                     .drop_write_cache_handle(self.filehandle.id)
                     .await;
+                if let Some(tx) = respond_to {
+                    let _ = tx.send(());
+                }
             }
         }
     }

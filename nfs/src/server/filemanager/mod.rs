@@ -190,6 +190,10 @@ impl FileManager {
                 let result = self.handle_release_lock_owner(req.client_id, &req.owner);
                 let _ = req.respond_to.send(result);
             }
+            FileManagerMessage::RenamePath(req) => {
+                self.handle_rename_path(&req.old_path, &req.new_path, req.new_vfs_path);
+                let _ = req.respond_to.send(());
+            }
             FileManagerMessage::CloseFile() => {},
             FileManagerMessage::RemoveFile(req) => {
                 let filehandle = self.get_filehandle_by_path(&req.path.as_str().to_string());
@@ -335,6 +339,35 @@ impl FileManager {
             return None;
         }
         Some(self.get_filehandle(&attr_dir))
+    }
+
+    fn handle_rename_path(&mut self, old_path: &str, new_path: &str, new_vfs_path: VfsPath) {
+        // Look up the old filehandle by path and update it to the new location
+        let old_fh = self.get_filehandle_by_path(&old_path.to_string());
+        if let Some(old_fh) = old_fh {
+            self.fhdb.remove_by_id(&old_fh.id);
+            let real_path = self.real_path(&new_vfs_path);
+            let new_fh = if let Some(meta) = RealMeta::from_path(&real_path) {
+                Filehandle::new_real(
+                    new_vfs_path,
+                    old_fh.id,
+                    self.fsid,
+                    self.fsid,
+                    old_fh.version + 1,
+                    &meta,
+                )
+            } else {
+                Filehandle::new(
+                    new_vfs_path,
+                    old_fh.id,
+                    self.fsid,
+                    self.fsid,
+                    old_fh.version + 1,
+                )
+            };
+            debug!("RENAME path update: {} -> {}", old_path, new_path);
+            self.fhdb.insert(new_fh);
+        }
     }
 
     fn touch_filehandle(&mut self, filehandle: Filehandle) {

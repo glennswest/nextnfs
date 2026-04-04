@@ -14,7 +14,7 @@ impl NfsOperation for Close4args {
         );
 
         let current_filehandle = match request.current_filehandle() {
-            Some(fh) => fh,
+            Some(fh) => fh.clone(),
             None => {
                 error!("CLOSE: no current filehandle");
                 return NfsOpResponse {
@@ -24,6 +24,14 @@ impl NfsOperation for Close4args {
                 };
             }
         };
+
+        // Flush write cache before closing to ensure data durability
+        if current_filehandle.write_cache.is_some() {
+            if let Ok(wc) = request.file_manager().get_write_cache_handle(current_filehandle.clone()).await {
+                wc.commit().await;
+            }
+        }
+
         request.drop_filehandle_from_cache(current_filehandle.id);
 
         NfsOpResponse {

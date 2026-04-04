@@ -71,13 +71,14 @@ impl NfsOperation for Create4args {
                     }
                 };
 
-                let link_real = link_path.as_str().to_string();
+                let link_vfs_str = link_path.as_str().to_string();
+                let link_real = request.file_manager().real_path(&link_vfs_str);
                 match std::os::unix::fs::symlink(linkdata, &link_real) {
                     Ok(_) => {
                         request.file_manager().touch_file(filehandle.id).await;
                         let resp = request
                             .file_manager()
-                            .get_filehandle_for_path(link_real)
+                            .get_filehandle_for_path(link_vfs_str)
                             .await;
                         let new_fh = match resp {
                             Ok(fh) => fh,

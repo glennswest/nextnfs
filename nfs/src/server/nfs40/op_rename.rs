@@ -102,6 +102,12 @@ impl NfsOperation for Rename4args {
 
         match result {
             Ok(_) => {
+                // Update filehandle database with new path
+                request
+                    .file_manager()
+                    .rename_path(src_path.clone(), dst_path.clone(), dst_vfs.clone())
+                    .await;
+
                 // Touch both parent directories
                 request
                     .file_manager()
