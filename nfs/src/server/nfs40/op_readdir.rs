@@ -372,6 +372,65 @@ mod tests {
 
     #[tokio::test]
     #[traced_test]
+    async fn test_readdir_shows_dot_files() {
+        let request = create_nfs40_server_with_root_fh(None).await;
+        // Create a hidden dir and a normal dir
+        let create_hidden = Create4args {
+            objtype: Createtype4::Nf4dir,
+            objname: ".hidden".to_string(),
+            createattrs: Fattr4 {
+                attrmask: Attrlist4(vec![]),
+                attr_vals: Attrlist4(vec![]),
+            },
+        };
+        let response = create_hidden.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+
+        let mut request = response.request;
+        let root_fh = request.file_manager().get_root_filehandle().await.unwrap();
+        request.set_filehandle(root_fh);
+
+        let create_normal = Create4args {
+            objtype: Createtype4::Nf4dir,
+            objname: "visible".to_string(),
+            createattrs: Fattr4 {
+                attrmask: Attrlist4(vec![]),
+                attr_vals: Attrlist4(vec![]),
+            },
+        };
+        let response = create_normal.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+
+        let mut request = response.request;
+        let root_fh = request.file_manager().get_root_filehandle().await.unwrap();
+        request.set_filehandle(root_fh);
+
+        let readdir_args = Readdir4args {
+            cookie: 0,
+            cookieverf: [0u8; 8],
+            dircount: 4096,
+            maxcount: 8192,
+            attr_request: Attrlist4(vec![FileAttr::Type]),
+        };
+        let response = readdir_args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        if let Some(NfsResOp4::Opreaddir(ReadDir4res::Resok4(resok))) = response.result {
+            // Collect all names from the linked list
+            let mut names = vec![];
+            let mut entry = resok.reply.entries.as_ref();
+            while let Some(e) = entry {
+                names.push(e.name.clone());
+                entry = e.nextentry.as_deref();
+            }
+            assert!(names.contains(&".hidden".to_string()), "readdir should include dot files, got: {:?}", names);
+            assert!(names.contains(&"visible".to_string()), "readdir should include normal dirs, got: {:?}", names);
+        } else {
+            panic!("Expected Opreaddir Resok4");
+        }
+    }
+
+    #[tokio::test]
+    #[traced_test]
     async fn test_readdir_multiple_attrs() {
         let request = create_nfs40_server_with_root_fh(None).await;
         let create_args = Create4args {

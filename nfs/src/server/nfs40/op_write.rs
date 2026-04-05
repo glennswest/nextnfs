@@ -1,4 +1,5 @@
-use std::io::{Seek, SeekFrom, Write};
+use std::io::Write;
+use std::os::unix::fs::FileExt;
 use std::sync::atomic::Ordering;
 
 use async_trait::async_trait;
@@ -77,21 +78,47 @@ impl NfsOperation for Write4args {
                 .write_bytes(self.offset, self.data.clone())
                 .await;
         } else {
-            // write to file
-            let mut file = match filehandle.file.append_file() {
-                Ok(f) => f,
-                Err(e) => {
-                    error!("WRITE: append_file failed: {:?}", e);
-                    return NfsOpResponse {
-                        request,
-                        result: None,
-                        status: NfsStat4::Nfs4errIo,
-                    };
+            // Synchronous write — use pwrite (write_all_at) for atomic positional
+            // writes when possible, falling back to VFS seek+write for MemoryFS
+            let real_path = request.file_manager().real_path(filehandle.file.as_str());
+            let write_result = if real_path.exists() {
+                // Real filesystem: use pwrite for atomicity
+                match std::fs::OpenOptions::new().write(true).open(&real_path) {
+                    Ok(file) => {
+                        file.write_all_at(&self.data, self.offset)
+                            .and_then(|_| file.sync_all())
+                            .map(|_| self.data.len() as u32)
+                    }
+                    Err(e) => Err(e),
+                }
+            } else {
+                // VFS fallback (MemoryFS in tests): seek + write
+                match filehandle.file.append_file() {
+                    Ok(mut file) => {
+                        use std::io::{Seek, SeekFrom};
+                        let _ = file.seek(SeekFrom::Start(self.offset));
+                        file.write(&self.data)
+                            .and_then(|n| file.flush().map(|_| n as u32))
+                    }
+                    Err(e) => {
+                        error!("WRITE: append_file failed: {:?}", e);
+                        return NfsOpResponse {
+                            request,
+                            result: None,
+                            status: NfsStat4::Nfs4errIo,
+                        };
+                    }
                 }
             };
-            let _ = file.seek(SeekFrom::Start(self.offset));
-            count = match file.write(&self.data) {
-                Ok(n) => n as u32,
+
+            match write_result {
+                Ok(n) => {
+                    count = n;
+                    stable = StableHow4::FileSync4;
+                    if count > 0 {
+                        request.file_manager().touch_file(filehandle.id).await;
+                    }
+                }
                 Err(e) => {
                     error!("WRITE: write failed: {:?}", e);
                     return NfsOpResponse {
@@ -100,14 +127,6 @@ impl NfsOperation for Write4args {
                         status: NfsStat4::Nfs4errIo,
                     };
                 }
-            };
-            stable = StableHow4::FileSync4;
-
-            if count > 0 {
-                if let Err(e) = file.flush() {
-                    error!("WRITE: flush failed: {:?}", e);
-                }
-                request.file_manager().touch_file(filehandle.id).await;
             }
         }
 

@@ -1,6 +1,6 @@
 use std::fs::{File, OpenOptions};
 use std::io::{Seek, SeekFrom, Write};
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{FileExt, OpenOptionsExt};
 
 use tokio::sync::mpsc;
 use tracing::{debug, error};
@@ -50,12 +50,10 @@ impl WriteCache {
     pub async fn handle_message(&mut self, msg: WriteCacheMessage) {
         match msg {
             WriteCacheMessage::Write(req) => {
-                if let Some(ref mut file) = self.file {
-                    if let Err(e) = file.seek(SeekFrom::Start(req.offset)) {
-                        error!("write seek failed: {:?}", e);
-                        return;
-                    }
-                    if let Err(e) = file.write_all(&req.data) {
+                if let Some(ref file) = self.file {
+                    // Use pwrite (write_all_at) for atomic positional writes —
+                    // avoids seek+write race under concurrent writers
+                    if let Err(e) = file.write_all_at(&req.data, req.offset) {
                         error!("write failed: {:?}", e);
                         return;
                     }

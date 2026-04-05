@@ -302,6 +302,62 @@ mod tests {
 
     #[tokio::test]
     #[traced_test]
+    async fn test_create_dot_hidden_dir() {
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let args = Create4args {
+            objtype: Createtype4::Nf4dir,
+            objname: ".hidden".to_string(),
+            createattrs: Fattr4 {
+                attrmask: Attrlist4(vec![]),
+                attr_vals: Attrlist4(vec![]),
+            },
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_create_dir_with_spaces() {
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let args = Create4args {
+            objtype: Createtype4::Nf4dir,
+            objname: "dir with spaces".to_string(),
+            createattrs: Fattr4 {
+                attrmask: Attrlist4(vec![]),
+                attr_vals: Attrlist4(vec![]),
+            },
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_create_dir_with_special_chars() {
+        let names = ["file-with-dashes", "file_with_underscores", "file.with.dots", "UPPERCASE"];
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let mut req = request;
+        for name in &names {
+            let args = Create4args {
+                objtype: Createtype4::Nf4dir,
+                objname: name.to_string(),
+                createattrs: Fattr4 {
+                    attrmask: Attrlist4(vec![]),
+                    attr_vals: Attrlist4(vec![]),
+                },
+            };
+            let response = args.execute(req).await;
+            assert_eq!(response.status, NfsStat4::Nfs4Ok, "failed to create dir: {}", name);
+            // Reset to root for next iteration
+            req = response.request;
+            let root_fh = req.file_manager().get_root_filehandle().await.unwrap();
+            req.set_filehandle(root_fh);
+        }
+    }
+
+    #[tokio::test]
+    #[traced_test]
     async fn test_create_quota_exceeded() {
         let mut request = create_nfs40_server_with_root_fh(None).await;
         // Set hard quota already exceeded

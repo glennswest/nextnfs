@@ -230,6 +230,60 @@ mod tests {
 
     #[tokio::test]
     #[traced_test]
+    async fn test_lookup_dot_hidden_dir() {
+        let request = create_nfs40_server_with_root_fh(None).await;
+        // Create .hidden dir
+        let create_args = Create4args {
+            objtype: Createtype4::Nf4dir,
+            objname: ".hidden".to_string(),
+            createattrs: Fattr4 {
+                attrmask: Attrlist4(vec![]),
+                attr_vals: Attrlist4(vec![]),
+            },
+        };
+        let response = create_args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+
+        // Reset to root and lookup
+        let mut request = response.request;
+        let root_fh = request.file_manager().get_root_filehandle().await.unwrap();
+        request.set_filehandle(root_fh);
+
+        let lookup_args = Lookup4args {
+            objname: ".hidden".to_string(),
+        };
+        let response = lookup_args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_lookup_name_with_spaces() {
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let create_args = Create4args {
+            objtype: Createtype4::Nf4dir,
+            objname: "dir with spaces".to_string(),
+            createattrs: Fattr4 {
+                attrmask: Attrlist4(vec![]),
+                attr_vals: Attrlist4(vec![]),
+            },
+        };
+        let response = create_args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+
+        let mut request = response.request;
+        let root_fh = request.file_manager().get_root_filehandle().await.unwrap();
+        request.set_filehandle(root_fh);
+
+        let lookup_args = Lookup4args {
+            objname: "dir with spaces".to_string(),
+        };
+        let response = lookup_args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+    }
+
+    #[tokio::test]
+    #[traced_test]
     async fn test_lookup_miss_unsets_filehandle() {
         let request = create_nfs40_server_with_root_fh(None).await;
         let lookup_args = Lookup4args {

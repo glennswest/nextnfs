@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Fixed
+- CLOSE stateid leak — op_close now releases open stateid from lockdb, preventing resource exhaustion after ~2000 files (#30)
+- REMOVE lock cleanup — RemoveFile handler cleans up all lockdb entries, write cache, and delegations for the removed filehandle (#28)
+- Concurrent write corruption — write cache and FileSync4 writes use pwrite (write_all_at) for atomic positional I/O instead of seek+write (#29)
+
+### Added
+- Special characters and dot file tests — CREATE/LOOKUP/READDIR/OPEN tests for .hidden, spaces, dashes, underscores, dots (#27)
+- close_file() method on FileManagerHandle for stateid cleanup
+- 13 new unit tests (536 total)
+
 ## [v0.13.0] — 2026-04-05
 
 ### Added

@@ -32,6 +32,9 @@ impl NfsOperation for Close4args {
             }
         }
 
+        // Release the open stateid from lockdb to prevent resource exhaustion
+        request.file_manager().close_file(self.open_stateid.other).await;
+
         request.drop_filehandle_from_cache(current_filehandle.id);
 
         NfsOpResponse {

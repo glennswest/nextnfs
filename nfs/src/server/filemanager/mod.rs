@@ -194,7 +194,11 @@ impl FileManager {
                 self.handle_rename_path(&req.old_path, &req.new_path, req.new_vfs_path);
                 let _ = req.respond_to.send(());
             }
-            FileManagerMessage::CloseFile() => {},
+            FileManagerMessage::CloseFile(req) => {
+                self.lockdb.remove_by_stateid(&req.stateid);
+                debug!("CLOSE: removed open stateid {:?} from lockdb", req.stateid);
+                let _ = req.respond_to.send(());
+            }
             FileManagerMessage::RemoveFile(req) => {
                 let filehandle = self.get_filehandle_by_path(&req.path.as_str().to_string());
                 let mut parent_path = req.path.parent().as_str().to_string();
@@ -205,6 +209,23 @@ impl FileManager {
                         } else {
                             let _ = req.path.remove_file();
                         }
+                        // Clean up all lock state for this filehandle
+                        let stateids: Vec<[u8; 12]> = self
+                            .lockdb
+                            .get_by_filehandle_id(&filehandle.id)
+                            .into_iter()
+                            .map(|l| l.stateid)
+                            .collect();
+                        for stateid in &stateids {
+                            self.lockdb.remove_by_stateid(stateid);
+                        }
+                        if !stateids.is_empty() {
+                            debug!("REMOVE: cleaned up {} lock entries for {:?}", stateids.len(), filehandle.id);
+                        }
+                        // Clean up write cache
+                        self.drop_cache_handle(&filehandle.id);
+                        // Clean up delegation
+                        self.delegations.remove(&filehandle.id);
                         self.fhdb.remove_by_id(&filehandle.id);
                     }
                     None => {
@@ -1185,5 +1206,77 @@ mod tests {
         let mut fm = make_fm();
         // Dropping a cache for a non-cached filehandle should not panic
         fm.drop_cache_handle(&[0xAA; 26]);
+    }
+
+    #[test]
+    fn test_close_file_removes_open_stateid() {
+        let mut fm = make_fm();
+        let root = fm.root_fh();
+        // Simulate OPEN: insert a shared reservation (open lock)
+        let stateid = fm.get_new_lockingstate_id();
+        let lock = locking::LockingState::new_shared_reservation(
+            root.id, stateid, 1, b"owner1".to_vec(), 1, 0,
+        );
+        fm.lockdb.insert(lock);
+        assert!(fm.lockdb.get_by_stateid(&stateid).is_some());
+
+        // Simulate CLOSE: remove the stateid
+        fm.lockdb.remove_by_stateid(&stateid);
+        assert!(fm.lockdb.get_by_stateid(&stateid).is_none());
+    }
+
+    #[test]
+    fn test_remove_file_cleans_up_locks() {
+        let mut fm = make_fm();
+        // Create a file and add an open lock + byte-range lock
+        let newfile = fm.root.join("removeme").unwrap();
+        let fh = fm.create_file(&newfile).unwrap();
+        let stateid1 = fm.get_new_lockingstate_id();
+        let lock1 = locking::LockingState::new_shared_reservation(
+            fh.id, stateid1, 1, b"owner1".to_vec(), 1, 0,
+        );
+        fm.lockdb.insert(lock1);
+        let stateid2 = fm.get_new_lockingstate_id();
+        let lock2 = locking::LockingState::new_byte_range_lock(
+            fh.id, stateid2, 1, b"owner1".to_vec(),
+            NfsLockType4::WriteLt, 0, 100,
+        );
+        fm.lockdb.insert(lock2);
+        assert_eq!(fm.lockdb.get_by_filehandle_id(&fh.id).len(), 2);
+
+        // Simulate RemoveFile cleanup
+        let stateids: Vec<[u8; 12]> = fm.lockdb
+            .get_by_filehandle_id(&fh.id)
+            .into_iter()
+            .map(|l| l.stateid)
+            .collect();
+        for stateid in &stateids {
+            fm.lockdb.remove_by_stateid(stateid);
+        }
+        fm.fhdb.remove_by_id(&fh.id);
+        assert!(fm.lockdb.get_by_filehandle_id(&fh.id).is_empty());
+    }
+
+    #[test]
+    fn test_close_does_not_affect_other_stateids() {
+        let mut fm = make_fm();
+        let root = fm.root_fh();
+
+        let stateid1 = fm.get_new_lockingstate_id();
+        let lock1 = locking::LockingState::new_shared_reservation(
+            root.id, stateid1, 1, b"owner1".to_vec(), 1, 0,
+        );
+        fm.lockdb.insert(lock1);
+
+        let stateid2 = fm.get_new_lockingstate_id();
+        let lock2 = locking::LockingState::new_shared_reservation(
+            root.id, stateid2, 2, b"owner2".to_vec(), 1, 0,
+        );
+        fm.lockdb.insert(lock2);
+
+        // Close only stateid1
+        fm.lockdb.remove_by_stateid(&stateid1);
+        assert!(fm.lockdb.get_by_stateid(&stateid1).is_none());
+        assert!(fm.lockdb.get_by_stateid(&stateid2).is_some());
     }
 }

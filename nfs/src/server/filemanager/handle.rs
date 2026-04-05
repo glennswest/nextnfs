@@ -36,7 +36,7 @@ pub enum FileManagerMessage {
     GrantDelegation(GrantDelegationRequest),
     ReturnDelegation(ReturnDelegationRequest),
     GetDelegation(GetDelegationRequest),
-    CloseFile(),
+    CloseFile(CloseFileRequest),
     GetWriteCacheHandle(WriteCacheHandleRequest),
     DropWriteCacheHandle(DropCacheHandleRequest),
 }
@@ -101,6 +101,11 @@ pub struct WriteCacheHandleRequest {
 
 pub struct DropCacheHandleRequest {
     pub filehandle_id: NfsFh4,
+}
+
+pub struct CloseFileRequest {
+    pub stateid: [u8; 12],
+    pub respond_to: oneshot::Sender<()>,
 }
 
 pub struct OpenNamedAttrDirRequest {
@@ -610,6 +615,19 @@ impl FileManagerHandle {
         )).await {
             error!("filemanager actor gone: {}", e);
         }
+    }
+
+    /// Release the open stateid from lockdb on CLOSE.
+    pub async fn close_file(&self, stateid: [u8; 12]) {
+        let (tx, rx) = oneshot::channel();
+        if let Err(e) = self.sender.send(FileManagerMessage::CloseFile(CloseFileRequest {
+            stateid,
+            respond_to: tx,
+        })).await {
+            error!("filemanager actor gone: {}", e);
+            return;
+        }
+        let _ = rx.await;
     }
 
     pub async fn lock_file(
@@ -1532,5 +1550,33 @@ mod tests {
         assert!(aces[0].access_mask & ACE4_EXECUTE == 0);
         // But should still have base attributes
         assert!(aces[0].access_mask & ACE4_READ_ATTRIBUTES != 0);
+    }
+
+    #[tokio::test]
+    async fn test_close_file_releases_stateid() {
+        let fm = make_fm();
+        // Create a file via OPEN (creates an open lock in lockdb)
+        let root = fm.get_root_filehandle().await.unwrap();
+        let new_fh = fm
+            .create_file(
+                root.file.join("closeable.txt").unwrap(),
+                1,
+                b"owner1".to_vec(),
+                1,
+                0,
+                None,
+            )
+            .await;
+        assert!(new_fh.is_ok());
+        let fh = new_fh.unwrap();
+        assert_eq!(fh.locks.len(), 1);
+        let open_stateid = fh.locks[0].stateid;
+
+        // Close the file — should remove the stateid from lockdb
+        fm.close_file(open_stateid).await;
+
+        // Verify: re-fetch the filehandle and check locks are gone
+        let refreshed = fm.get_filehandle_for_id(fh.id).await.unwrap();
+        assert!(refreshed.locks.is_empty(), "open stateid should be removed after close");
     }
 }

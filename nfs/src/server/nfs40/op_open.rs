@@ -534,6 +534,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_open_create_dot_hidden_file() {
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let args = make_open_args(
+            ".hidden_file",
+            OpenFlag4::How(CreateHow4::UNCHECKED4(Fattr4 {
+                attrmask: Attrlist4(vec![]),
+                attr_vals: Attrlist4(vec![]),
+            })),
+        );
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+    }
+
+    #[tokio::test]
+    async fn test_open_create_file_with_spaces() {
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let args = make_open_args(
+            "file with spaces.txt",
+            OpenFlag4::How(CreateHow4::UNCHECKED4(Fattr4 {
+                attrmask: Attrlist4(vec![]),
+                attr_vals: Attrlist4(vec![]),
+            })),
+        );
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+    }
+
+    #[tokio::test]
+    async fn test_open_read_dot_hidden_file() {
+        let mut request = create_nfs40_server_with_root_fh(None).await;
+        let root_file = request.current_filehandle().unwrap().file.clone();
+        root_file.join(".dotfile").unwrap().create_file().unwrap();
+        let root_fh = request.file_manager().get_root_filehandle().await.unwrap();
+        request.set_filehandle(root_fh);
+
+        let args = make_open_args(".dotfile", OpenFlag4::Open4Nocreate);
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+    }
+
+    #[tokio::test]
     async fn test_open_read_existing_file() {
         let mut request = create_nfs40_server_with_root_fh(None).await;
         // Create file first
