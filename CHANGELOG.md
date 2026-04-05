@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [v0.13.1] — 2026-04-05
+
 ### Fixed
 - CLOSE stateid leak — op_close now releases open stateid from lockdb, preventing resource exhaustion after ~2000 files (#30)
 - REMOVE lock cleanup — RemoveFile handler cleans up all lockdb entries, write cache, and delegations for the removed filehandle (#28)
