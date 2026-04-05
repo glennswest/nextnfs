@@ -69,6 +69,45 @@ echo "  RPM:    $RPM_FILE ($(ls -lh "$RPM_FILE" | awk '{print $5}'))"
 echo "  Binary: $BINARY ($(ls -lh "$BINARY" | awk '{print $5}'))"
 echo ""
 
+# ── Phase 1b: Build tests RPM ───────────────────────────────────────────────
+
+echo "═══════════════════════════════════════════════════════════════"
+echo "  Phase 1b: Build Tests RPM"
+echo "═══════════════════════════════════════════════════════════════"
+echo ""
+
+TESTS_TOPDIR="$SRC/dist/rpmbuild-tests"
+rm -rf "$TESTS_TOPDIR"
+mkdir -p "${TESTS_TOPDIR}"/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
+
+cp tests/helpers.sh          "${TESTS_TOPDIR}/SOURCES/"
+cp tests/nfs4_basic.sh       "${TESTS_TOPDIR}/SOURCES/"
+cp tests/nfs4_edge.sh        "${TESTS_TOPDIR}/SOURCES/"
+cp tests/nfs4_stress.sh      "${TESTS_TOPDIR}/SOURCES/"
+cp tests/nfs41_session.sh    "${TESTS_TOPDIR}/SOURCES/"
+cp tests/nfs_bench_suite.sh  "${TESTS_TOPDIR}/SOURCES/"
+cp tests/nfs_integrity.sh    "${TESTS_TOPDIR}/SOURCES/"
+cp tests/nfs_performance.sh  "${TESTS_TOPDIR}/SOURCES/"
+cp packaging/nextnfs-run-tests "${TESTS_TOPDIR}/SOURCES/"
+cp packaging/nextnfs-tests.spec "${TESTS_TOPDIR}/SPECS/"
+
+rpmbuild \
+    --define "_topdir ${TESTS_TOPDIR}" \
+    --define "_version ${VERSION}" \
+    --target "$(uname -m)" \
+    -bb "${TESTS_TOPDIR}/SPECS/nextnfs-tests.spec"
+
+cp "${TESTS_TOPDIR}/RPMS/$(uname -m)/"*.rpm dist/
+
+TESTS_RPM=$(ls dist/nextnfs-tests-${VERSION}-*.rpm 2>/dev/null | head -1)
+if [ -z "$TESTS_RPM" ]; then
+    echo "FATAL: Tests RPM not found in dist/"
+    exit 1
+fi
+
+echo "  Tests RPM: $TESTS_RPM ($(ls -lh "$TESTS_RPM" | awk '{print $5}'))"
+echo ""
+
 # ── Phase 2: Get release ID ─────────────────────────────────────────────────
 
 echo "═══════════════════════════════════════════════════════════════"
@@ -145,7 +184,9 @@ for a in json.load(sys.stdin):
 }
 
 RPM_NAME=$(basename "$RPM_FILE")
+TESTS_RPM_NAME=$(basename "$TESTS_RPM")
 upload_asset "$RPM_FILE" "$RPM_NAME" "application/x-rpm"
+upload_asset "$TESTS_RPM" "$TESTS_RPM_NAME" "application/x-rpm"
 upload_asset "$BINARY" "nextnfs-${VERSION}-linux-x86_64" "application/octet-stream"
 
 # ── Summary ──────────────────────────────────────────────────────────────────
@@ -158,5 +199,6 @@ echo ""
 echo "  Release: https://github.com/${REPO}/releases/tag/${TAG}"
 echo "  Assets:"
 echo "    - $RPM_NAME"
+echo "    - $TESTS_RPM_NAME"
 echo "    - nextnfs-${VERSION}-linux-x86_64"
 echo ""

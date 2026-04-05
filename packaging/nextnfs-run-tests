@@ -1,0 +1,168 @@
+#!/bin/bash
+# nextnfs-run-tests — Mount NFS and run test suites
+#
+# Usage: nextnfs-run-tests <server> [suite...]
+#
+# Examples:
+#   nextnfs-run-tests server2.g10.lo                     # run all suites
+#   nextnfs-run-tests server2.g10.lo nfs4_basic           # run one suite
+#   nextnfs-run-tests server2.g10.lo nfs4_basic nfs4_edge # run specific suites
+#
+# Requires: nfs-utils, root (for mount)
+
+set -uo pipefail
+
+TESTS_DIR="/usr/share/nextnfs/tests"
+MOUNT_DIR="/mnt/nextnfs-test"
+RESULTS_DIR="/tmp/nextnfs-results"
+
+if [ $# -lt 1 ]; then
+    echo "Usage: nextnfs-run-tests <server> [suite...]"
+    echo ""
+    echo "Suites: nfs4_basic nfs4_edge nfs4_stress nfs41_session"
+    exit 1
+fi
+
+SERVER="$1"
+shift
+
+# Default suites if none specified
+if [ $# -eq 0 ]; then
+    SUITES="nfs4_basic nfs4_edge nfs4_stress"
+else
+    SUITES="$*"
+fi
+
+if [ "$(id -u)" -ne 0 ]; then
+    echo "FATAL: must run as root (need mount privileges)"
+    exit 1
+fi
+
+if [ ! -f "$TESTS_DIR/helpers.sh" ]; then
+    echo "FATAL: test scripts not found at $TESTS_DIR"
+    echo "  Install: rpm -Uvh nextnfs-tests-*.rpm"
+    exit 1
+fi
+
+# ── Colour output ────────────────────────────────────────────────────────────
+
+if [ -t 1 ]; then
+    GREEN='\033[0;32m'; RED='\033[0;31m'; YELLOW='\033[0;33m'
+    CYAN='\033[0;36m'; BOLD='\033[1m'; RESET='\033[0m'
+else
+    GREEN='' RED='' YELLOW='' CYAN='' BOLD='' RESET=''
+fi
+
+TOTAL_PASS=0
+TOTAL_FAIL=0
+TOTAL_SKIP=0
+
+echo "╔══════════════════════════════════════════════════════════════╗"
+echo "║              nextnfs Integration Tests                      ║"
+echo "╚══════════════════════════════════════════════════════════════╝"
+echo ""
+echo "  Server:  $SERVER"
+echo "  Suites:  $SUITES"
+echo "  Date:    $(date)"
+echo "  Kernel:  $(uname -r)"
+echo ""
+
+# ── Mount ────────────────────────────────────────────────────────────────────
+
+mkdir -p "$MOUNT_DIR" "$RESULTS_DIR"
+
+mount_nfs() {
+    umount -f "$MOUNT_DIR" 2>/dev/null || true
+    if ! mount -t nfs4 -o vers=4.0,soft,timeo=50,retrans=3 "${SERVER}:/" "$MOUNT_DIR" 2>&1; then
+        echo -e "  ${RED}FAIL${RESET}: could not mount ${SERVER}:/ on $MOUNT_DIR"
+        return 1
+    fi
+    echo -e "  ${GREEN}OK${RESET}: mounted ${SERVER}:/ on $MOUNT_DIR"
+    return 0
+}
+
+unmount_nfs() {
+    umount -f "$MOUNT_DIR" 2>/dev/null || true
+}
+
+# ── Run suites ───────────────────────────────────────────────────────────────
+
+for suite in $SUITES; do
+    echo ""
+    echo "═══════════════════════════════════════════════════════════════"
+    echo "  Suite: $suite"
+    echo "═══════════════════════════════════════════════════════════════"
+
+    test_script="$TESTS_DIR/${suite}.sh"
+    if [ ! -f "$test_script" ]; then
+        echo -e "  ${YELLOW}SKIP${RESET}: $test_script not found"
+        continue
+    fi
+
+    if ! mount_nfs; then
+        echo -e "  ${RED}FAIL${RESET}: skipping $suite (mount failed)"
+        ((TOTAL_FAIL++))
+        continue
+    fi
+
+    # Clean server export for isolation
+    rm -rf "${MOUNT_DIR:?}"/* 2>/dev/null || true
+
+    # Export env vars for test scripts
+    export NFS_HOST="$SERVER"
+    export NFS_PORT=2049
+    export NFS_MOUNT="$MOUNT_DIR"
+    export NFS_EXPORT="/"
+    export NFS_VERS="4.0"
+    export RESULTS_DIR="$RESULTS_DIR"
+    export SCRIPT_DIR="$TESTS_DIR"
+
+    # Run
+    local_log="$RESULTS_DIR/${suite}.log"
+    bash "$test_script" 2>&1 | tee "$local_log"
+
+    # Parse results
+    pass=$(grep -c '^\s*OK:' "$local_log" 2>/dev/null || echo 0)
+    failed=$(grep -c '^\s*FAIL:' "$local_log" 2>/dev/null || echo 0)
+    skipped=$(grep -c '^\s*SKIP:' "$local_log" 2>/dev/null || echo 0)
+
+    TOTAL_PASS=$((TOTAL_PASS + pass))
+    TOTAL_FAIL=$((TOTAL_FAIL + failed))
+    TOTAL_SKIP=$((TOTAL_SKIP + skipped))
+
+    echo ""
+    echo "  $suite: pass=$pass fail=$failed skip=$skipped"
+
+    unmount_nfs
+done
+
+# ── Summary ──────────────────────────────────────────────────────────────────
+
+echo ""
+echo "╔══════════════════════════════════════════════════════════════╗"
+echo "║                    Test Summary                             ║"
+echo "╚══════════════════════════════════════════════════════════════╝"
+echo ""
+echo "  Server:  $SERVER"
+echo "  Pass:    $TOTAL_PASS"
+echo "  Fail:    $TOTAL_FAIL"
+echo "  Skip:    $TOTAL_SKIP"
+echo "  Results: $RESULTS_DIR/"
+echo ""
+
+if [ "$TOTAL_FAIL" -gt 0 ]; then
+    echo -e "  ${RED}FAIL${RESET}: some tests failed"
+    echo ""
+    for logfile in "$RESULTS_DIR"/nfs4_*.log; do
+        [ -f "$logfile" ] || continue
+        fails=$(grep 'FAIL:' "$logfile" 2>/dev/null || true)
+        if [ -n "$fails" ]; then
+            echo "  $(basename "$logfile"):"
+            echo "$fails" | sed 's/^/    /'
+            echo ""
+        fi
+    done
+    exit 1
+fi
+
+echo -e "  ${GREEN}OK${RESET}: all tests passed"
