@@ -60,7 +60,35 @@ async fn open_for_reading<'a>(
         }
     };
 
+    let filehandle_file = filehandle.file.clone();
     let fh_id = filehandle.id;
+
+    // Create open state lock in lockdb (same pattern as CLAIM_PREVIOUS)
+    let lock = match request
+        .file_manager()
+        .create_open_state(
+            filehandle_file,
+            args.owner.clientid,
+            args.owner.owner.clone(),
+            args.share_access,
+            args.share_deny,
+        )
+        .await
+    {
+        Ok(lock) => lock,
+        Err(e) => {
+            error!("OPEN read: failed to create open state: {:?}", e);
+            return NfsOpResponse {
+                request,
+                result: None,
+                status: e.nfs_error,
+            };
+        }
+    };
+
+    // Attach lock to filehandle so OPEN_CONFIRM can find it
+    let mut filehandle = filehandle;
+    filehandle.locks.push(lock.clone());
     request.set_filehandle(filehandle);
 
     // Attempt to grant a read delegation
@@ -86,8 +114,8 @@ async fn open_for_reading<'a>(
         request,
         result: Some(NfsResOp4::Opopen(Open4res::Resok4(Open4resok {
             stateid: Stateid4 {
-                seqid: 0,
-                other: [0; 12],
+                seqid: lock.seqid,
+                other: lock.stateid,
             },
             cinfo: ChangeInfo4 {
                 atomic: false,
