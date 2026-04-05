@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [v0.13.2] — 2026-04-05
+
+### Fixed
+- OPEN for reading never created lock state — `open_for_reading()` returned hardcoded zero stateid without registering in lockdb, causing OPEN_CONFIRM to fail with NFS4ERR_BAD_STATEID on every read-after-write (#33)
+- Cascading EIO failures on read operations (#34, #35) resolved by #33 fix
+
 ## [v0.13.1] — 2026-04-05
 
 ### Fixed
