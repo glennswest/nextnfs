@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [v0.13.0] — 2026-04-05
+
+### Added
+- ci-build-test.sh — standalone combined build+test CI script for mkube runners
+
+### Fixed
+- CI scripts (server-runner.sh, test-runner.sh) auto-detect /build source directory for mkube runners
+
 ## [v0.12.1] — 2026-04-03
 
 ### Fixed
