@@ -1579,4 +1579,119 @@ mod tests {
         let refreshed = fm.get_filehandle_for_id(fh.id).await.unwrap();
         assert!(refreshed.locks.is_empty(), "open stateid should be removed after close");
     }
+
+    /// Regression test for #35: get_filehandle_for_path must attach existing
+    /// locks from lockdb to the returned filehandle.
+    #[tokio::test]
+    async fn test_get_filehandle_for_path_attaches_locks() {
+        let fm = make_fm();
+        let root = fm.get_root_filehandle().await.unwrap();
+
+        // Create a file via create_file (this adds a lock to lockdb)
+        let fh = fm
+            .create_file(
+                root.file.join("lock_attach_test.txt").unwrap(),
+                1,
+                b"owner1".to_vec(),
+                1,
+                0,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(fh.locks.len(), 1, "create_file should return fh with 1 lock");
+        let open_stateid = fh.locks[0].stateid;
+
+        // Now retrieve the same file via get_filehandle_for_path
+        let fh2 = fm
+            .get_filehandle_for_path("lock_attach_test.txt".to_string())
+            .await
+            .unwrap();
+
+        // The retrieved filehandle MUST have the lock attached
+        assert!(
+            !fh2.locks.is_empty(),
+            "get_filehandle_for_path must attach existing locks (regression #35)"
+        );
+        assert_eq!(
+            fh2.locks[0].stateid, open_stateid,
+            "attached lock stateid must match the one from create_file"
+        );
+    }
+
+    /// Regression test for #35: get_filehandle_for_id must also attach locks.
+    #[tokio::test]
+    async fn test_get_filehandle_for_id_attaches_locks() {
+        let fm = make_fm();
+        let root = fm.get_root_filehandle().await.unwrap();
+
+        let fh = fm
+            .create_file(
+                root.file.join("id_lock_test.txt").unwrap(),
+                1,
+                b"owner1".to_vec(),
+                1,
+                0,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(fh.locks.len(), 1);
+        let fh_id = fh.id;
+
+        // Retrieve by ID
+        let fh2 = fm.get_filehandle_for_id(fh_id).await.unwrap();
+        assert!(
+            !fh2.locks.is_empty(),
+            "get_filehandle_for_id must attach existing locks (regression #35)"
+        );
+    }
+
+    /// Regression test for #34: CLOSE of one file must not break locks on
+    /// a different file for the same client.
+    #[tokio::test]
+    async fn test_close_does_not_break_other_files_locks() {
+        let fm = make_fm();
+        let root = fm.get_root_filehandle().await.unwrap();
+
+        // Create two files
+        let fh1 = fm
+            .create_file(
+                root.file.join("file_a.txt").unwrap(),
+                1,
+                b"owner1".to_vec(),
+                1,
+                0,
+                None,
+            )
+            .await
+            .unwrap();
+        let fh2 = fm
+            .create_file(
+                root.file.join("file_b.txt").unwrap(),
+                1,
+                b"owner1".to_vec(),
+                1,
+                0,
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(fh1.locks.len(), 1);
+        assert_eq!(fh2.locks.len(), 1);
+        let stateid1 = fh1.locks[0].stateid;
+        let stateid2 = fh2.locks[0].stateid;
+
+        // Close file_a
+        fm.close_file(stateid1).await;
+
+        // file_b's lock must still be intact
+        let fh2_refreshed = fm.get_filehandle_for_id(fh2.id).await.unwrap();
+        assert!(
+            !fh2_refreshed.locks.is_empty(),
+            "CLOSE of file_a must not remove file_b's locks (regression #34)"
+        );
+        assert_eq!(fh2_refreshed.locks[0].stateid, stateid2);
+    }
 }

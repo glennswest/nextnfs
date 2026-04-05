@@ -588,4 +588,79 @@ mod tests {
         let response = args.execute(request).await;
         assert_eq!(response.status, NfsStat4::Nfs4Ok);
     }
+
+    /// Regression test for #33: OPEN for reading must create lock state so
+    /// OPEN_CONFIRM succeeds. Without this, the client gets NFS4ERR_BAD_STATEID.
+    #[tokio::test]
+    async fn test_open_read_creates_lock_state_for_confirm() {
+        use nextnfs_proto::nfs4_proto::{OpenConfirm4args, OpenConfirm4res};
+
+        let mut request = create_nfs40_server_with_root_fh(None).await;
+        // Create a file first
+        let root_file = request.current_filehandle().unwrap().file.clone();
+        root_file.join("read_lock_test.txt").unwrap().create_file().unwrap();
+        let root_fh = request.file_manager().get_root_filehandle().await.unwrap();
+        request.set_filehandle(root_fh);
+
+        // OPEN for reading (Open4Nocreate)
+        let open_args = make_open_args("read_lock_test.txt", OpenFlag4::Open4Nocreate);
+        let response = open_args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+
+        // Extract the stateid from OPEN result
+        let open_stateid = match &response.result {
+            Some(NfsResOp4::Opopen(Open4res::Resok4(resok))) => resok.stateid.clone(),
+            other => panic!("Expected Opopen Resok4, got {:?}", other),
+        };
+
+        // The current filehandle should have locks so OPEN_CONFIRM succeeds
+        let request = response.request;
+        let fh = request.current_filehandle().expect("must have current fh after OPEN");
+        assert!(
+            !fh.locks.is_empty(),
+            "OPEN for reading must populate filehandle locks (got empty)"
+        );
+
+        // OPEN_CONFIRM must succeed
+        let confirm_args = OpenConfirm4args {
+            open_stateid,
+            seqid: 1,
+        };
+        let response = confirm_args.execute(request).await;
+        assert_eq!(
+            response.status, NfsStat4::Nfs4Ok,
+            "OPEN_CONFIRM after OPEN-for-reading must succeed, got {:?}",
+            response.status
+        );
+        match &response.result {
+            Some(NfsResOp4::OpopenConfirm(OpenConfirm4res::Resok4(resok))) => {
+                assert_ne!(resok.open_stateid.other, [0; 12], "stateid must not be all-zeros");
+            }
+            other => panic!("Expected OpopenConfirm Resok4, got {:?}", other),
+        }
+    }
+
+    /// Regression test for #33: OPEN read must return a non-zero stateid.
+    #[tokio::test]
+    async fn test_open_read_returns_valid_stateid() {
+        let mut request = create_nfs40_server_with_root_fh(None).await;
+        let root_file = request.current_filehandle().unwrap().file.clone();
+        root_file.join("stateid_test.txt").unwrap().create_file().unwrap();
+        let root_fh = request.file_manager().get_root_filehandle().await.unwrap();
+        request.set_filehandle(root_fh);
+
+        let args = make_open_args("stateid_test.txt", OpenFlag4::Open4Nocreate);
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        match &response.result {
+            Some(NfsResOp4::Opopen(Open4res::Resok4(resok))) => {
+                // A valid OPEN must return a non-zero stateid
+                assert_ne!(
+                    resok.stateid.other, [0; 12],
+                    "OPEN for reading returned all-zero stateid"
+                );
+            }
+            other => panic!("Expected Opopen Resok4, got {:?}", other),
+        }
+    }
 }

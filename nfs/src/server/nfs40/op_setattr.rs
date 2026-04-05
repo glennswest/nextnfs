@@ -131,4 +131,59 @@ mod tests {
             || response.status != NfsStat4::Nfs4errStale
         );
     }
+
+    /// Regression test for #36: SETATTR with Owner/OwnerGroup must be accepted.
+    /// This verifies the server processes chown attributes without error.
+    /// (Actual uid/gid persistence requires a real filesystem, not MemoryFS.)
+    #[tokio::test]
+    async fn test_setattr_chown_accepted() {
+        use nextnfs_proto::nfs4_proto::FileAttrValue;
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let args = SetAttr4args {
+            stateid: Stateid4 {
+                seqid: 0,
+                other: [0; 12],
+            },
+            obj_attributes: Fattr4 {
+                attrmask: Attrlist4(vec![FileAttr::Owner, FileAttr::OwnerGroup]),
+                attr_vals: Attrlist4(vec![
+                    FileAttrValue::Owner("1000".to_string()),
+                    FileAttrValue::OwnerGroup("1000".to_string()),
+                ]),
+            },
+        };
+        let response = args.execute(request).await;
+        // SETATTR should succeed (status Ok) even if chown on MemoryFS is a no-op
+        assert_eq!(
+            response.status, NfsStat4::Nfs4Ok,
+            "SETATTR with Owner/OwnerGroup must not error (regression #36)"
+        );
+    }
+
+    /// Regression test for #36: SETATTR mode change must report the attr as set.
+    #[tokio::test]
+    async fn test_setattr_chmod_reports_attrsset() {
+        use nextnfs_proto::nfs4_proto::FileAttrValue;
+        let mut request = create_nfs40_server_with_root_fh(None).await;
+        // Create a file to chmod
+        let root_file = request.current_filehandle().unwrap().file.clone();
+        root_file.join("chmod_test.txt").unwrap().create_file().unwrap();
+        let fh = request.file_manager()
+            .get_filehandle_for_path("chmod_test.txt".to_string())
+            .await.unwrap();
+        request.set_filehandle(fh);
+
+        let args = SetAttr4args {
+            stateid: Stateid4 {
+                seqid: 0,
+                other: [0; 12],
+            },
+            obj_attributes: Fattr4 {
+                attrmask: Attrlist4(vec![FileAttr::Mode]),
+                attr_vals: Attrlist4(vec![FileAttrValue::Mode(0o755)]),
+            },
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+    }
 }

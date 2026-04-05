@@ -109,4 +109,76 @@ mod tests {
             other => panic!("Expected Opclose, got {:?}", other),
         }
     }
+
+    /// Regression test for #34: CLOSE then re-OPEN+OPEN_CONFIRM must succeed.
+    /// The CLOSE stateid cleanup must not break subsequent opens on new files.
+    #[tokio::test]
+    async fn test_close_then_reopen_confirm_succeeds() {
+        use nextnfs_proto::nfs4_proto::{
+            Attrlist4, CreateHow4, Fattr4, Open4args, Open4res, OpenClaim4,
+            OpenConfirm4args, OpenConfirm4res, OpenFlag4, OpenOwner4,
+        };
+
+        let request = create_nfs40_server_with_root_fh(None).await;
+
+        // OPEN (create) first file
+        let open1 = Open4args {
+            seqid: 1,
+            share_access: 2,
+            share_deny: 0,
+            owner: OpenOwner4 { clientid: 1, owner: b"close_reopen".to_vec() },
+            openhow: OpenFlag4::How(CreateHow4::UNCHECKED4(Fattr4 {
+                attrmask: Attrlist4(vec![]),
+                attr_vals: Attrlist4(vec![]),
+            })),
+            claim: OpenClaim4::ClaimNull("file1.txt".to_string()),
+        };
+        let response = open1.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        let stateid1 = match &response.result {
+            Some(NfsResOp4::Opopen(Open4res::Resok4(r))) => r.stateid.clone(),
+            other => panic!("Expected Opopen, got {:?}", other),
+        };
+
+        // CLOSE file1
+        let close_args = Close4args { seqid: 1, open_stateid: stateid1 };
+        let response = close_args.execute(response.request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+
+        // Reset to root fh for second OPEN
+        let mut request = response.request;
+        let root_fh = request.file_manager().get_root_filehandle().await.unwrap();
+        request.set_filehandle(root_fh);
+
+        // OPEN (create) second file
+        let open2 = Open4args {
+            seqid: 2,
+            share_access: 2,
+            share_deny: 0,
+            owner: OpenOwner4 { clientid: 1, owner: b"close_reopen".to_vec() },
+            openhow: OpenFlag4::How(CreateHow4::UNCHECKED4(Fattr4 {
+                attrmask: Attrlist4(vec![]),
+                attr_vals: Attrlist4(vec![]),
+            })),
+            claim: OpenClaim4::ClaimNull("file2.txt".to_string()),
+        };
+        let response = open2.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        let stateid2 = match &response.result {
+            Some(NfsResOp4::Opopen(Open4res::Resok4(r))) => r.stateid.clone(),
+            other => panic!("Expected Opopen, got {:?}", other),
+        };
+
+        // OPEN_CONFIRM on file2 must succeed despite file1 having been CLOSEd
+        let confirm = OpenConfirm4args { open_stateid: stateid2, seqid: 2 };
+        let response = confirm.execute(response.request).await;
+        assert_eq!(
+            response.status, NfsStat4::Nfs4Ok,
+            "OPEN_CONFIRM after CLOSE+reOPEN must succeed (regression #34)"
+        );
+        match &response.result {
+            Some(NfsResOp4::OpopenConfirm(OpenConfirm4res::Resok4(_))) => {}
+            other => panic!("Expected OpopenConfirm Resok4, got {:?}", other),
+        }
+    }
 }
