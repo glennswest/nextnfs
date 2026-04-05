@@ -13,6 +13,7 @@ exports and runs all suites.
 
 %install
 install -d -m 0755 %{buildroot}/usr/share/nextnfs/tests
+install -d -m 0755 %{buildroot}/usr/bin
 install -m 0755 %{_sourcedir}/helpers.sh          %{buildroot}/usr/share/nextnfs/tests/
 install -m 0755 %{_sourcedir}/nfs4_basic.sh       %{buildroot}/usr/share/nextnfs/tests/
 install -m 0755 %{_sourcedir}/nfs4_edge.sh        %{buildroot}/usr/share/nextnfs/tests/
@@ -35,5 +36,5 @@ install -m 0755 %{_sourcedir}/nextnfs-run-tests   %{buildroot}/usr/bin/nextnfs-r
 /usr/bin/nextnfs-run-tests
 
 %changelog
-* Sat Apr 05 2026 Glenn West <glenn@nextnfs.dev> - 0.13.1-1
+* Sun Apr 05 2026 Glenn West <glenn@nextnfs.dev> - 0.13.1-1
 - Initial test RPM with basic, edge, stress, session, benchmark suites
