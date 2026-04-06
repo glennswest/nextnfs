@@ -1,8 +1,11 @@
 # Changelog
 
-## [Unreleased]
+## [v0.13.7] — 2026-04-06
 
 ### Fixed
+- Concurrent appends lose data — two writers appending to the same file could both read the same file length from GETATTR, then both use pwrite at the same offset, causing one write to overwrite the other. Now detects writes at/past EOF and uses O_APPEND mode so the kernel atomically positions each write at the true end of file
+- Silly-rename CLOSE deletes file too early — when a file is removed while open (server-side silly-rename), CLOSE immediately deleted the renamed file and evicted it from fhdb. The kernel client may still need to READ from the file via an open fd after sending CLOSE. Deferred deletion is now handled by a periodic sweep timer (every 15s) instead of CLOSE
+- GETATTR returns stale mtime/size — `filehandle_attrs()` in the handle returned cached metadata from the Filehandle struct instead of reading current values from the real filesystem. After a WRITE, `stat` would show the old mtime. Now refreshes from disk via `RealMeta::from_path()` before returning attributes
 - XDR UTF-8 string serialization — `serde-xdr` v0.6 only allows ASCII in XDR strings, but NFS4 defines `utf8string` as `typedef opaque utf8string<>` (RFC 7531). Non-ASCII filenames like `filé_ñame_日本語` caused READDIR serialization failure, no response sent, kernel timeout → EIO. Added `utf8_opaque` serde module that serializes via `serialize_bytes()` (identical wire format, no ASCII restriction). Applied to all 22 String fields in proto
 - RENAME path update eviction — `handle_rename_path()` used `get_filehandle_by_path()` which calls `path_exists()` on the old path. Since the rename already completed, the old path no longer exists, causing the fhdb entry to be evicted instead of updated. Client-side silly-rename (RENAME + READ) then got NFS4ERR_STALE. Fixed to use `fhdb.get_by_path()` directly
 - REMOVE silently discards filesystem errors — `remove_dir()` and `remove_file()` results were ignored, fhdb entries cleaned up even on failure. `rmdir` on non-empty directories returned Ok. Now returns NFS4ERR_NOTEMPTY for non-empty dirs, NFS4ERR_IO for other failures, and preserves fhdb on failure
@@ -19,6 +22,7 @@
 ### Added
 - `utf8_opaque` and `utf8_opaque_vec` serde modules for NFS4 utf8string fields
 - 4 new proto tests: non-ASCII roundtrip for Entry4, Readlink4res, Compound4res, and ASCII compatibility
+- Periodic pending_deletes sweep timer (15s) in FileManager actor for deferred silly-rename cleanup
 
 ## [v0.13.6] — 2026-04-06
 
