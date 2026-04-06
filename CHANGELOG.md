@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [v0.13.5] — 2026-04-06
+
+### Fixed
+- Grace period blocks all mutating ops on fresh start — when state recovery file is stale/missing (no clients to reclaim), the server still entered a 90-second grace period, causing EIO for all CREATE/WRITE/REMOVE/RENAME operations. Now skips grace when there's nothing to recover (#43)
+- Grace period denial audit logging — rejected operations during grace were invisible in logs (compound returned early). Now logs the denied operation name and status
+- Unused import warnings in op_destroy_session.rs and op_allocate.rs test modules
+- ci-deploy-test.sh grep patterns for PASS/FAIL counting (same fix as nextnfs-run-tests)
+
 ## [v0.13.4] — 2026-04-06
 
 ### Fixed
