@@ -3,6 +3,8 @@
 ## [Unreleased]
 
 ### Fixed
+- XDR UTF-8 string serialization — `serde-xdr` v0.6 only allows ASCII in XDR strings, but NFS4 defines `utf8string` as `typedef opaque utf8string<>` (RFC 7531). Non-ASCII filenames like `filé_ñame_日本語` caused READDIR serialization failure, no response sent, kernel timeout → EIO. Added `utf8_opaque` serde module that serializes via `serialize_bytes()` (identical wire format, no ASCII restriction). Applied to all 22 String fields in proto
+- RENAME path update eviction — `handle_rename_path()` used `get_filehandle_by_path()` which calls `path_exists()` on the old path. Since the rename already completed, the old path no longer exists, causing the fhdb entry to be evicted instead of updated. Client-side silly-rename (RENAME + READ) then got NFS4ERR_STALE. Fixed to use `fhdb.get_by_path()` directly
 - REMOVE silently discards filesystem errors — `remove_dir()` and `remove_file()` results were ignored, fhdb entries cleaned up even on failure. `rmdir` on non-empty directories returned Ok. Now returns NFS4ERR_NOTEMPTY for non-empty dirs, NFS4ERR_IO for other failures, and preserves fhdb on failure
 - READDIR cookie index skewed by hidden entries — `.nfs4attrs` directory skip used `enumerate()` index for cookies, causing off-by-one on paginated READDIR. Verifier mismatch led to NFS4ERR_NOTSAME (kernel EIO). Now uses separate entry counter
 - READDIR EOF flag miscalculated — `entry.cookie + added_entries >= fnames.len()` was off by the cookie base offset (3), causing premature eof=true on partial results and infinite retry loops on directories with certain entry counts. Now correctly compares last returned cookie against last possible cookie
@@ -12,7 +14,11 @@
 - READDIR now hides `.nfs.*` silly-rename files from directory listings
 - Test helpers: `run_test()` now handles return code 77 as SKIP instead of FAIL
 - access-denied tests restore file permissions before SKIP (prevents mode 000 files from affecting later tests)
-- flock shared test: increased inter-process delay (0.2s → 0.5s), use append mode to avoid O_TRUNC race between concurrent opens
+- flock shared test: use `flock -c` file-path form instead of fd 200 redirection (avoids fd invalidation on NFS)
+
+### Added
+- `utf8_opaque` and `utf8_opaque_vec` serde modules for NFS4 utf8string fields
+- 4 new proto tests: non-ASCII roundtrip for Entry4, Readlink4res, Compound4res, and ASCII compatibility
 
 ## [v0.13.6] — 2026-04-06
 

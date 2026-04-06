@@ -160,6 +160,49 @@ type Pathname4 = Vec<Component4>;
 // type NfsLockid4 = u64;
 // type Verifier4 = u64;
 
+/// Custom serde module for NFS4 utf8string fields.
+/// RFC 7531 defines `typedef opaque utf8string<>` — UTF-8 strings should be
+/// serialized as XDR opaque bytes, not XDR strings. serde_xdr v0.6 rejects
+/// non-ASCII characters in XDR strings, causing serialization failures for
+/// filenames like `filé_ñame_日本語`. This module serializes via
+/// `serialize_bytes()` which uses the identical wire format but skips the
+/// ASCII check.
+pub mod utf8_opaque {
+    use serde::{Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(s: &str, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_bytes(s.as_bytes())
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+        let bytes: Vec<u8> = serde_bytes::deserialize(deserializer)?;
+        String::from_utf8(bytes).map_err(serde::de::Error::custom)
+    }
+}
+
+/// Same as utf8_opaque but for Vec<String> fields (Pathname4, server lists).
+pub mod utf8_opaque_vec {
+    use serde::ser::SerializeSeq;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(v: &[String], serializer: S) -> Result<S::Ok, S::Error> {
+        let mut seq = serializer.serialize_seq(Some(v.len()))?;
+        for s in v {
+            seq.serialize_element(&serde_bytes::Bytes::new(s.as_bytes()))?;
+        }
+        seq.end()
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Vec<String>, D::Error> {
+        let vec: Vec<serde_bytes::ByteBuf> = Vec::deserialize(deserializer)?;
+        vec.into_iter()
+            .map(|b| String::from_utf8(b.into_vec()).map_err(serde::de::Error::custom))
+            .collect()
+    }
+}
+
 /*
  * Timeval
  */
@@ -198,12 +241,15 @@ pub struct Fsid4 {
  */
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct FsLocation4 {
+    #[serde(with = "utf8_opaque_vec")]
     pub server: Vec<Utf8strCis>,
+    #[serde(with = "utf8_opaque_vec")]
     pub rootpath: Pathname4,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct FsLocations4 {
+    #[serde(with = "utf8_opaque_vec")]
     pub fs_root: Pathname4,
     pub locations: Vec<FsLocation4>,
 }
@@ -300,6 +346,7 @@ pub struct Nfsace4 {
     pub acetype: Acetype4,
     pub flag: Aceflag4,
     pub access_mask: Acemask4,
+    #[serde(with = "utf8_opaque")]
     pub who: Utf8strMixed,
 }
 
@@ -425,8 +472,10 @@ pub struct ChangeInfo4 {
 pub struct ClientAddr4 {
     /* see
     pub struct rpcb in RFC 1833 */
+    #[serde(with = "utf8_opaque")]
     pub rnetid: String, /* network id */
-    pub raddr: String,  /* universal address */
+    #[serde(with = "utf8_opaque")]
+    pub raddr: String, /* universal address */
 }
 
 /*
@@ -455,6 +504,7 @@ pub struct Stateid4 {
 pub struct NfsClientId4 {
     #[serde(with = "serde_xdr::opaque_data::fixed_length")]
     pub verifier: [u8; NFS4_VERIFIER_SIZE],
+    #[serde(with = "utf8_opaque")]
     pub id: String,
 }
 
@@ -555,6 +605,7 @@ pub enum Createtype4 {
 pub struct Create4args {
     /* CURRENT_FH: directory for creation */
     pub objtype: Createtype4,
+    #[serde(with = "utf8_opaque")]
     pub objname: Component4,
     pub createattrs: Fattr4,
 }
@@ -749,6 +800,7 @@ pub enum GetFh4res {
 pub struct Link4args {
     /* SAVED_FH: source object */
     /* CURRENT_FH: target directory */
+    #[serde(with = "utf8_opaque")]
     pub newname: Component4,
 }
 
@@ -857,6 +909,7 @@ pub enum Locku4res {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Lookup4args {
     /* CURRENT_FH: directory */
+    #[serde(with = "utf8_opaque")]
     pub objname: Component4,
 }
 
@@ -875,6 +928,7 @@ pub struct LookupP4res {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Readlink4res {
     pub status: NfsStat4,
+    #[serde(with = "utf8_opaque")]
     pub link: String,
 }
 
@@ -977,6 +1031,7 @@ pub enum OpenClaimType4 {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct OpenClaimDelegateCur4 {
     pub delegate_stateid: Stateid4,
+    #[serde(with = "utf8_opaque")]
     pub file: Component4,
 }
 
@@ -1214,6 +1269,7 @@ pub struct Readdir4args {
 pub struct Entry4 {
     // pub len: u32,
     pub cookie: NfsCookie4,
+    #[serde(with = "utf8_opaque")]
     pub name: Component4,
     pub attrs: Fattr4,
     pub nextentry: Option<Box<Entry4>>,
@@ -1240,6 +1296,7 @@ pub enum ReadDir4res {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ReadLink4resok {
+    #[serde(with = "utf8_opaque")]
     link: Linktext4,
 }
 
@@ -1252,6 +1309,7 @@ pub enum ReadLink4res {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Remove4args {
     /* CURRENT_FH: directory */
+    #[serde(with = "utf8_opaque")]
     pub target: Component4,
 }
 
@@ -1264,8 +1322,10 @@ pub struct Remove4res {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Rename4args {
     /* SAVED_FH: source directory */
+    #[serde(with = "utf8_opaque")]
     pub oldname: Component4,
     /* CURRENT_FH: target directory */
+    #[serde(with = "utf8_opaque")]
     pub newname: Component4,
 }
 
@@ -1306,6 +1366,7 @@ pub struct SaveFh4res {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SecInfo4args {
     /* CURRENT_FH: directory */
+    #[serde(with = "utf8_opaque")]
     pub name: Component4,
 }
 
@@ -1484,7 +1545,9 @@ pub struct ServerOwner4 {
 /// Implementation identifier (optional in EXCHANGE_ID).
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct NfsImplId4 {
+    #[serde(with = "utf8_opaque")]
     pub nii_domain: String,
+    #[serde(with = "utf8_opaque")]
     pub nii_name: String,
     pub nii_date: Nfstime4,
 }
@@ -1519,6 +1582,7 @@ pub struct ChannelAttrs4 {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct AuthsysParms4 {
     pub stamp: u32,
+    #[serde(with = "utf8_opaque")]
     pub machinename: String,
     pub uid: u32,
     pub gid: u32,
@@ -2198,6 +2262,7 @@ pub enum NfsResOp4 {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Compound4args {
+    #[serde(with = "utf8_opaque")]
     pub tag: String,
     pub minor_version: u32,
     pub argarray: Vec<NfsArgOp>,
@@ -2206,6 +2271,7 @@ pub struct Compound4args {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Compound4res {
     pub status: NfsStat4,
+    #[serde(with = "utf8_opaque")]
     pub tag: String,
     #[serde(serialize_with = "write_argarray")]
     pub resarray: Vec<NfsResOp4>,
@@ -2280,6 +2346,7 @@ pub enum NfsCbResOp4 {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CbCompound4args {
+    #[serde(with = "utf8_opaque")]
     tag: Utf8strCs,
     minorversion: u32,
     callback_ident: u32,
@@ -2289,6 +2356,7 @@ pub struct CbCompound4args {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CbCompound4res {
     status: NfsStat4,
+    #[serde(with = "utf8_opaque")]
     tag: Utf8strCs,
     resarray: Vec<NfsCbResOp4>,
 }
@@ -2607,6 +2675,65 @@ mod tests {
         assert_eq!(decoded.callback.cb_location.rnetid, "tcp");
         assert_eq!(decoded.callback.cb_location.raddr, "0.0.0.0.0.0");
         assert_eq!(decoded.callback_ident, 0);
+    }
+
+    #[test]
+    fn test_utf8_opaque_non_ascii_roundtrip() {
+        // Entry4.name with non-ASCII UTF-8 filename — the exact case that triggered
+        // serde_xdr StringIsNotAscii in READDIR responses (GitHub issue #33)
+        let entry = Entry4 {
+            cookie: 3,
+            name: "filé_ñame_日本語".to_string(),
+            attrs: Fattr4 {
+                attrmask: Attrlist4(vec![]),
+                attr_vals: Attrlist4(vec![]),
+            },
+            nextentry: None,
+        };
+        let bytes = to_bytes(&entry).unwrap();
+        let decoded: Entry4 = from_bytes(&bytes).unwrap();
+        assert_eq!(decoded.name, "filé_ñame_日本語");
+        assert_eq!(decoded.cookie, 3);
+    }
+
+    #[test]
+    fn test_utf8_opaque_ascii_roundtrip() {
+        // Ensure ASCII strings still round-trip correctly through utf8_opaque
+        let entry = Entry4 {
+            cookie: 5,
+            name: "normal_file.txt".to_string(),
+            attrs: Fattr4 {
+                attrmask: Attrlist4(vec![]),
+                attr_vals: Attrlist4(vec![]),
+            },
+            nextentry: None,
+        };
+        let bytes = to_bytes(&entry).unwrap();
+        let decoded: Entry4 = from_bytes(&bytes).unwrap();
+        assert_eq!(decoded.name, "normal_file.txt");
+    }
+
+    #[test]
+    fn test_utf8_opaque_readlink_non_ascii() {
+        let res = Readlink4res {
+            status: NfsStat4::Nfs4Ok,
+            link: "/données/café".to_string(),
+        };
+        let bytes = to_bytes(&res).unwrap();
+        let decoded: Readlink4res = from_bytes(&bytes).unwrap();
+        assert_eq!(decoded.link, "/données/café");
+    }
+
+    #[test]
+    fn test_utf8_opaque_compound_tag() {
+        let res = Compound4res {
+            status: NfsStat4::Nfs4Ok,
+            tag: "nfs4_tag_ü".to_string(),
+            resarray: vec![],
+        };
+        let bytes = to_bytes(&res).unwrap();
+        let decoded: Compound4res = from_bytes(&bytes).unwrap();
+        assert_eq!(decoded.tag, "nfs4_tag_ü");
     }
 
 }

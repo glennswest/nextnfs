@@ -263,18 +263,16 @@ test_flock_exclusive() {
 test_flock_shared() {
     local file="$WORK/flock_shared"
     echo "shared data" > "$file"
+    sync
 
-    # Two shared locks should both succeed
-    # Use >> (append) to avoid O_TRUNC race between two concurrent opens
-    (
-        flock -s -n 200 || exit 1
-        sleep 1
-    ) 200>>"$file" &
+    # Two shared locks should both succeed.
+    # Use flock's file-path form (-c) to avoid fd redirection issues on NFS.
+    flock -s "$file" -c "sleep 1" &
     local pid1=$!
     sleep 0.5
 
     local rc=0
-    (flock -s -n 200 || exit 1) 200>>"$file" 2>/dev/null || rc=$?
+    flock -s -n "$file" -c "true" || rc=$?
     wait "$pid1" 2>/dev/null
     assert_eq "$rc" "0" "shared locks coexist"
 }

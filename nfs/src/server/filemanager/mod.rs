@@ -432,8 +432,10 @@ impl FileManager {
     }
 
     fn handle_rename_path(&mut self, old_path: &str, new_path: &str, new_vfs_path: VfsPath) {
-        // Look up the old filehandle by path and update it to the new location
-        let old_fh = self.get_filehandle_by_path(&old_path.to_string());
+        // Look up directly in fhdb — don't use get_filehandle_by_path() because
+        // the rename has already completed, so the old path no longer exists on disk
+        // and path_exists() would evict the entry instead of returning it.
+        let old_fh = self.fhdb.get_by_path(&old_path.to_string()).cloned();
         if let Some(old_fh) = old_fh {
             self.fhdb.remove_by_id(&old_fh.id);
             let real_path = self.real_path(&new_vfs_path);
