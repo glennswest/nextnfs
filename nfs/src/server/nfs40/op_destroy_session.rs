@@ -60,7 +60,7 @@ mod tests {
     };
     use nextnfs_proto::nfs4_proto::{
         CallbackSecParms4, ChannelAttrs4, ClientOwner4, CreateSession4args, CreateSession4res,
-        DestroySession4args, DestroySession4res, ExchangeId4args, ExchangeId4res,
+        DestroySession4args, ExchangeId4args, ExchangeId4res,
         StateProtect4a, NFS4_VERIFIER_SIZE,
     };
     use tracing_test::traced_test;

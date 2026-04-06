@@ -232,9 +232,9 @@ for target in $TARGETS; do
         run_test_suite "$target" "$suite" "$RESULTS_SERVER" 2>&1 | tee "$RESULTS_SERVER/${suite}.log"
 
         # Parse results from the log
-        pass=$(grep -c '^\s*OK:' "$RESULTS_SERVER/${suite}.log" 2>/dev/null || echo 0)
-        failed=$(grep -c '^\s*FAIL:' "$RESULTS_SERVER/${suite}.log" 2>/dev/null || echo 0)
-        skipped=$(grep -c '^\s*SKIP:' "$RESULTS_SERVER/${suite}.log" 2>/dev/null || echo 0)
+        pass=$(grep -cE 'PASS \(' "$RESULTS_SERVER/${suite}.log" 2>/dev/null || true)
+        failed=$(grep -cE 'FAIL \(' "$RESULTS_SERVER/${suite}.log" 2>/dev/null || true)
+        skipped=$(grep -cE 'SKIP$|SKIP \(' "$RESULTS_SERVER/${suite}.log" 2>/dev/null || true)
 
         TOTAL_TEST_PASS=$((TOTAL_TEST_PASS + pass))
         TOTAL_TEST_FAIL=$((TOTAL_TEST_FAIL + failed))

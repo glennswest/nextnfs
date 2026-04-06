@@ -119,7 +119,7 @@ mod tests {
         },
         test_utils::{create_nfs40_server, create_nfs40_server_with_root_fh},
     };
-    use nextnfs_proto::nfs4_proto::{Allocate4args, Allocate4res};
+    use nextnfs_proto::nfs4_proto::Allocate4args;
     use tracing_test::traced_test;
 
     #[tokio::test]
