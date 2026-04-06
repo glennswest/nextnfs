@@ -108,7 +108,7 @@ impl FileManager {
                             return;
                         }
                     };
-                    if path.exists().unwrap_or(false) {
+                    if self.path_exists(&path) {
                         let fh_wo_locks = self.get_filehandle(&path);
                         let fh = self.attach_locks(fh_wo_locks);
                         let _ = req.respond_to.send(Some(fh));
@@ -288,6 +288,17 @@ impl FileManager {
         } else {
             self.export_root.join(rel.trim_start_matches('/'))
         }
+    }
+
+    /// Check if a path exists without following symlinks.
+    /// VfsPath::exists() uses stat() which follows symlinks, so symlinks whose
+    /// targets don't exist on the server (e.g. client-side absolute paths)
+    /// appear non-existent. Fall back to lstat() on the real path.
+    fn path_exists(&self, path: &VfsPath) -> bool {
+        if path.exists().unwrap_or(false) {
+            return true;
+        }
+        std::fs::symlink_metadata(self.real_path(path)).is_ok()
     }
 
     fn grant_delegation(
@@ -487,7 +498,7 @@ impl FileManager {
     fn get_filehandle_by_id(&mut self, id: &NfsFh4) -> Option<Filehandle> {
         let fh = self.fhdb.get_by_id(id);
         if let Some(fh) = fh {
-            if fh.file.exists().unwrap_or(false) {
+            if self.path_exists(&fh.file) {
                 return Some(fh.clone());
             } else {
                 self.fhdb.remove_by_id(id);

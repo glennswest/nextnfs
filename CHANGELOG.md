@@ -5,6 +5,7 @@
 ### Fixed
 - Stale filehandle from inode reuse — `get_filehandle()` now verifies path consistency when an inode-based ID matches an existing fhdb entry, evicting stale entries from deleted files whose inodes were reused (#37, #38)
 - CLOSE didn't refresh fhdb after write cache flush — GETATTR after CLOSE returned stale file size/mtime because the fhdb entry wasn't updated after commit (#40)
+- Symlink operations hang — VfsPath::exists() follows symlinks via stat(), so symlinks with client-side targets appeared non-existent on the server. Added `path_exists()` helper using lstat() fallback (#41)
 
 ## [v0.13.2] — 2026-04-05
 
