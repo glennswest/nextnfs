@@ -953,6 +953,66 @@ impl FileManagerHandle {
         Some((answer_attrs, attrs))
     }
 
+    /// Resolve an NFSv4 owner string to a numeric uid.
+    /// Handles: "1000", "user", "user@domain", "1000@domain"
+    fn resolve_nfs4_uid(owner: &str) -> Option<u32> {
+        if let Ok(uid) = owner.parse::<u32>() {
+            return Some(uid);
+        }
+        let name = owner.split('@').next().unwrap_or(owner);
+        if let Ok(uid) = name.parse::<u32>() {
+            return Some(uid);
+        }
+        // NSS lookup via getpwnam_r
+        let c_name = std::ffi::CString::new(name).ok()?;
+        let mut pwd: libc::passwd = unsafe { std::mem::zeroed() };
+        let mut buf = vec![0u8; 4096];
+        let mut result: *mut libc::passwd = std::ptr::null_mut();
+        let ret = unsafe {
+            libc::getpwnam_r(
+                c_name.as_ptr(),
+                &mut pwd,
+                buf.as_mut_ptr() as *mut libc::c_char,
+                buf.len(),
+                &mut result,
+            )
+        };
+        if ret == 0 && !result.is_null() {
+            return Some(pwd.pw_uid);
+        }
+        None
+    }
+
+    /// Resolve an NFSv4 owner_group string to a numeric gid.
+    /// Handles: "1000", "group", "group@domain", "1000@domain"
+    fn resolve_nfs4_gid(group: &str) -> Option<u32> {
+        if let Ok(gid) = group.parse::<u32>() {
+            return Some(gid);
+        }
+        let name = group.split('@').next().unwrap_or(group);
+        if let Ok(gid) = name.parse::<u32>() {
+            return Some(gid);
+        }
+        // NSS lookup via getgrnam_r
+        let c_name = std::ffi::CString::new(name).ok()?;
+        let mut grp: libc::group = unsafe { std::mem::zeroed() };
+        let mut buf = vec![0u8; 4096];
+        let mut result: *mut libc::group = std::ptr::null_mut();
+        let ret = unsafe {
+            libc::getgrnam_r(
+                c_name.as_ptr(),
+                &mut grp,
+                buf.as_mut_ptr() as *mut libc::c_char,
+                buf.len(),
+                &mut result,
+            )
+        };
+        if ret == 0 && !result.is_null() {
+            return Some(grp.gr_gid);
+        }
+        None
+    }
+
     pub fn set_attr(
         &self,
         filehandle: &Filehandle,
@@ -982,7 +1042,7 @@ impl FileManagerHandle {
                     }
                 }
                 FileAttrValue::Owner(uid_str) => {
-                    if let Ok(uid) = uid_str.parse::<u32>() {
+                    if let Some(uid) = Self::resolve_nfs4_uid(uid_str) {
                         let c_path = std::ffi::CString::new(
                             real_path.to_string_lossy().as_ref()
                         ).unwrap_or_default();
@@ -993,11 +1053,11 @@ impl FileManagerHandle {
                             error!("SETATTR chown(uid={}) failed: {}", uid, std::io::Error::last_os_error());
                         }
                     } else {
-                        debug!("SETATTR Owner: non-numeric uid string {:?}", uid_str);
+                        error!("SETATTR Owner: cannot resolve {:?} to uid", uid_str);
                     }
                 }
                 FileAttrValue::OwnerGroup(gid_str) => {
-                    if let Ok(gid) = gid_str.parse::<u32>() {
+                    if let Some(gid) = Self::resolve_nfs4_gid(gid_str) {
                         let c_path = std::ffi::CString::new(
                             real_path.to_string_lossy().as_ref()
                         ).unwrap_or_default();
@@ -1008,7 +1068,7 @@ impl FileManagerHandle {
                             error!("SETATTR chown(gid={}) failed: {}", gid, std::io::Error::last_os_error());
                         }
                     } else {
-                        debug!("SETATTR OwnerGroup: non-numeric gid string {:?}", gid_str);
+                        error!("SETATTR OwnerGroup: cannot resolve {:?} to gid", gid_str);
                     }
                 }
                 FileAttrValue::Mode(mode) => {
