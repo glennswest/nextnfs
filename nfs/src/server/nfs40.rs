@@ -444,6 +444,12 @@ impl NfsProtoImpl for NFS40Server {
                             _ => false,
                         };
                         if deny {
+                            let denied_op = op_name(&arg);
+                            info!(
+                                op = denied_op,
+                                status = "Nfs4errGrace",
+                                "nfs_audit: operation denied during grace period"
+                            );
                             return (
                                 request,
                                 ReplyBody::MsgAccepted(AcceptedReply {

@@ -93,8 +93,9 @@ impl NFSServer {
                     // No grace period needed — state was recovered
                 }
                 Err(e) => {
-                    info!(reason = %e, "no state recovery — entering grace period");
-                    nfs40.in_grace.store(true, std::sync::atomic::Ordering::Relaxed);
+                    info!(reason = %e, "no state to recover — skipping grace period");
+                    // No grace period: there are no clients to reclaim state,
+                    // so blocking mutating ops would only cause unnecessary EIO.
                 }
             }
         }
