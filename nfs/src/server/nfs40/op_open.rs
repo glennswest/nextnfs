@@ -4,8 +4,7 @@ use tracing::{debug, error};
 use crate::server::{
     filemanager::Filehandle,
     nfs40::{
-        ChangeInfo4, Open4res, Open4resok, OpenDelegation4, OpenReadDelegation4,
-        OPEN4_RESULT_CONFIRM,
+        ChangeInfo4, Open4res, Open4resok, OpenDelegation4, OPEN4_RESULT_CONFIRM,
     },
     operation::NfsOperation,
     request::NfsRequest,
@@ -13,8 +12,8 @@ use crate::server::{
 };
 
 use nextnfs_proto::nfs4_proto::{
-    Attrlist4, CreateHow4, FileAttr, Nfsace4, NfsResOp4, NfsStat4, Open4args, OpenClaim4,
-    OpenFlag4, Stateid4, ACE4_ACCESS_ALLOWED_ACE_TYPE,
+    Attrlist4, CreateHow4, FileAttr, NfsResOp4, NfsStat4, Open4args, OpenClaim4, OpenFlag4,
+    Stateid4,
 };
 
 async fn open_for_reading<'a>(
@@ -61,7 +60,6 @@ async fn open_for_reading<'a>(
     };
 
     let filehandle_file = filehandle.file.clone();
-    let fh_id = filehandle.id;
 
     // Create open state lock in lockdb (same pattern as CLAIM_PREVIOUS)
     let lock = match request
@@ -96,24 +94,13 @@ async fn open_for_reading<'a>(
     request.cache_filehandle(filehandle.clone());
     request.set_filehandle(filehandle);
 
-    // Attempt to grant a read delegation
-    let delegation = match request
-        .file_manager()
-        .grant_delegation(fh_id, args.owner.clientid, false)
-        .await
-    {
-        Some(stateid) => OpenDelegation4::Read(OpenReadDelegation4 {
-            stateid,
-            recall: false,
-            permissions: Nfsace4 {
-                acetype: ACE4_ACCESS_ALLOWED_ACE_TYPE,
-                flag: 0,
-                access_mask: 0x00000001, // ACE4_READ_DATA
-                who: "EVERYONE@".to_string(),
-            },
-        }),
-        None => OpenDelegation4::None,
-    };
+    // Don't grant read delegations — the Linux NFS client returns the
+    // delegation during unlink(), which triggers a premature CLOSE of the
+    // NFS open state. This breaks silly-rename (delete-while-open) because
+    // the fd becomes stale before the application can read from it.
+    // Most NFS servers (including Linux knfsd) don't grant read delegations
+    // by default either.
+    let delegation = OpenDelegation4::None;
 
     NfsOpResponse {
         request,
