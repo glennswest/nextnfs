@@ -15,8 +15,6 @@
 - Test helpers: `run_test()` now handles return code 77 as SKIP instead of FAIL
 - access-denied tests restore file permissions before SKIP (prevents mode 000 files from affecting later tests)
 - flock shared test: use `flock -c` file-path form instead of fd 200 redirection (avoids fd invalidation on NFS)
-- silly-rename test: rewrote to use separate processes for reader and deleter — Linux NFS kernel client closes open state during unlink when open+unlink are in the same process
-- concurrent writes test: serialize appends with `flock` — NFS `O_APPEND` is not atomic across processes, causing intermittent line loss
 
 ### Added
 - `utf8_opaque` and `utf8_opaque_vec` serde modules for NFS4 utf8string fields

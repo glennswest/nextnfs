@@ -141,49 +141,23 @@ test_inode_survives_remount() {
 }
 
 test_delete_open_file() {
-    # NFS silly-rename: delete a file while another process holds it open.
-    # The reader MUST be a separate process — the Linux NFS kernel client
-    # closes the NFS open state during unlink when open+unlink happen in
-    # the same process, which makes the fd stale.
-    local file="$WORK/open_delete"
-    echo "open file content" > "$file"
-    sync
+    # NFS silly-rename: delete a file while it's held open
+    echo "open file content" > "$WORK/open_delete"
 
-    # Background: reader holds file open and waits for a signal to read
-    local signal_file="$WORK/.read_now"
-    rm -f "$signal_file"
-
-    sh -c '
-        exec 3< "'"$file"'"
-        # Signal that we have the file open
-        touch "'"$WORK"'/.fd_open"
-        # Wait for the delete to happen
-        while [ ! -f "'"$signal_file"'" ]; do sleep 0.1; done
-        cat <&3
+    # Open file with a background reader, delete it, verify the fd still works
+    (
+        exec 3< "$WORK/open_delete"
+        rm -f "$WORK/open_delete"
+        # The fd should still be readable (NFS silly-rename)
+        local content
+        content=$(cat <&3)
         exec 3<&-
-    ' > "$WORK/.read_output" 2>&1 &
-    local reader=$!
-
-    # Wait for reader to open the file
-    local waited=0
-    while [ ! -f "$WORK/.fd_open" ] && [ "$waited" -lt 30 ]; do
-        sleep 0.1
-        waited=$((waited + 1))
-    done
-    rm -f "$WORK/.fd_open"
-
-    # Delete the file — triggers silly-rename since reader has it open
-    rm -f "$file"
-
-    # Tell the reader to read from its still-open fd
-    touch "$signal_file"
-    wait "$reader" 2>/dev/null
-
-    local content
-    content=$(cat "$WORK/.read_output")
-    rm -f "$signal_file" "$WORK/.read_output"
-
-    assert_eq "$content" "open file content" "read from deleted file via open fd"
+        if [ "$content" = "open file content" ]; then
+            exit 0
+        else
+            exit 1
+        fi
+    )
 }
 
 test_rename_preserves_content() {
@@ -197,20 +171,17 @@ test_rename_preserves_content() {
 # ── Concurrent Access ────────────────────────────────────────────────────────
 
 test_concurrent_writes_same_file() {
-    # Two processes writing to same file with flock serialization.
-    # NFS O_APPEND is not atomic across processes, so without locking
-    # some writes can overlap and lines get lost.
+    # Two processes writing to same file
     local file="$WORK/concurrent_write"
-    > "$file"
     (
         for i in $(seq 1 100); do
-            flock "$file" -c "echo 'writer1 $i' >> '$file'"
+            echo "writer1 $i" >> "$file"
         done
     ) &
     local pid1=$!
     (
         for i in $(seq 1 100); do
-            flock "$file" -c "echo 'writer2 $i' >> '$file'"
+            echo "writer2 $i" >> "$file"
         done
     ) &
     local pid2=$!
