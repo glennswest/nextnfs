@@ -502,19 +502,34 @@ impl FileManager {
 
     pub fn get_filehandle(&mut self, file: &VfsPath) -> Filehandle {
         let id = self.get_filehandle_id(file);
-        match self.get_filehandle_by_id(&id) {
-            Some(fh) => fh.clone(),
-            None => {
-                let real_path = self.real_path(file);
-                let fh = if let Some(meta) = RealMeta::from_path(&real_path) {
-                    Filehandle::new_real(file.clone(), id, self.fsid, self.fsid, 0, &meta)
-                } else {
-                    Filehandle::new(file.clone(), id, self.fsid, self.fsid, 0)
-                };
-                self.fhdb.insert(fh.clone());
-                fh
-            }
+        let mut expected_path = file.as_str().to_string();
+        if expected_path.is_empty() {
+            expected_path = "/".to_string();
         }
+
+        if let Some(fh) = self.get_filehandle_by_id(&id) {
+            // Verify the stored path matches the requested path.
+            // Inode reuse after deletion can cause a new file to get the same
+            // inode-based ID as a previously deleted file. If paths differ,
+            // the old entry is stale and must be evicted.
+            if fh.path == expected_path {
+                return fh.clone();
+            }
+            debug!(
+                "inode reuse detected: id has path {:?} but expected {:?}, evicting stale entry",
+                fh.path, expected_path
+            );
+            self.fhdb.remove_by_id(&id);
+        }
+
+        let real_path = self.real_path(file);
+        let fh = if let Some(meta) = RealMeta::from_path(&real_path) {
+            Filehandle::new_real(file.clone(), id, self.fsid, self.fsid, 0, &meta)
+        } else {
+            Filehandle::new(file.clone(), id, self.fsid, self.fsid, 0)
+        };
+        self.fhdb.insert(fh.clone());
+        fh
     }
 
     pub fn root_fh(&mut self) -> Filehandle {

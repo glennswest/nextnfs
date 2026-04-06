@@ -30,6 +30,11 @@ impl NfsOperation for Close4args {
             if let Ok(wc) = request.file_manager().get_write_cache_handle(current_filehandle.clone()).await {
                 wc.commit().await;
             }
+            // Refresh fhdb entry from disk so GETATTR sees updated size/mtime
+            request
+                .file_manager()
+                .touch_file(current_filehandle.id)
+                .await;
         }
 
         // Release the open stateid from lockdb to prevent resource exhaustion

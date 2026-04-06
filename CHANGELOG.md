@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+- Stale filehandle from inode reuse — `get_filehandle()` now verifies path consistency when an inode-based ID matches an existing fhdb entry, evicting stale entries from deleted files whose inodes were reused (#37, #38)
+- CLOSE didn't refresh fhdb after write cache flush — GETATTR after CLOSE returned stale file size/mtime because the fhdb entry wasn't updated after commit (#40)
+
 ## [v0.13.2] — 2026-04-05
 
 ### Fixed
