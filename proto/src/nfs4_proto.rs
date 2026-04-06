@@ -2410,6 +2410,30 @@ mod tests {
     }
 
     #[test]
+    fn test_createtype4_symlink_roundtrip() {
+        let ct = Createtype4::Nf4lnk("/mnt/nextnfs-test/basic_tests/sym_target".to_string());
+        let bytes = to_bytes(&ct).unwrap();
+        let decoded: Createtype4 = from_bytes(&bytes).unwrap();
+        assert_eq!(decoded, ct);
+    }
+
+    #[test]
+    fn test_create4args_symlink_roundtrip() {
+        let args = Create4args {
+            objtype: Createtype4::Nf4lnk("/mnt/nextnfs-test/sym_target".to_string()),
+            objname: "sym_link".to_string(),
+            createattrs: Fattr4 {
+                attrmask: Attrlist4(vec![]),
+                attr_vals: Attrlist4(vec![]),
+            },
+        };
+        let bytes = to_bytes(&args).unwrap();
+        let decoded: Create4args = from_bytes(&bytes).unwrap();
+        assert_eq!(decoded.objtype, args.objtype);
+        assert_eq!(decoded.objname, "sym_link");
+    }
+
+    #[test]
     fn test_nfs_client_id4_roundtrip() {
         let ncid = NfsClientId4 {
             verifier: [0xAA; 8],
@@ -2513,6 +2537,48 @@ mod tests {
                 assert_eq!(scid.callback_ident, 0);
             }
             other => panic!("Expected Opsetclientid, got {:?}", other),
+        }
+    }
+
+    /// Verify CREATE NF4LNK compound round-trip through serde_xdr.
+    #[test]
+    fn test_compound_create_symlink_roundtrip() {
+        let compound = Compound4args {
+            tag: "symtest".to_string(),
+            minor_version: 0,
+            argarray: vec![
+                NfsArgOp::Opputfh(PutFh4args {
+                    object: [0u8; 26],
+                }),
+                NfsArgOp::Opcreate(Create4args {
+                    objtype: Createtype4::Nf4lnk(
+                        "/mnt/nextnfs-test/basic_tests/sym_target".to_string(),
+                    ),
+                    objname: "sym_link".to_string(),
+                    createattrs: Fattr4 {
+                        attrmask: Attrlist4(vec![]),
+                        attr_vals: Attrlist4(vec![]),
+                    },
+                }),
+                NfsArgOp::Opgetfh(()),
+            ],
+        };
+        let bytes = to_bytes(&compound).unwrap();
+        let decoded: Compound4args = from_bytes(&bytes).unwrap();
+        assert_eq!(decoded.tag, "symtest");
+        assert_eq!(decoded.minor_version, 0);
+        assert_eq!(decoded.argarray.len(), 3);
+        match &decoded.argarray[1] {
+            NfsArgOp::Opcreate(args) => {
+                assert_eq!(
+                    args.objtype,
+                    Createtype4::Nf4lnk(
+                        "/mnt/nextnfs-test/basic_tests/sym_target".to_string()
+                    )
+                );
+                assert_eq!(args.objname, "sym_link");
+            }
+            other => panic!("Expected Opcreate, got {:?}", other),
         }
     }
 

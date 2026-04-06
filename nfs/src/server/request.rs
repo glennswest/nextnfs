@@ -252,10 +252,16 @@ impl<'a> NfsRequest<'a> {
                             > self.cache_ttl
                         {
                             self.drop_filehandle_from_cache(filehandle.id);
-                            None
-                        } else {
-                            Some(filehandle.clone())
+                            return None;
                         }
+                        // Validate the cached path still exists on disk.
+                        // Inode reuse after deletion can cause a new file to
+                        // get the same fh ID as a deleted file's stale cache entry.
+                        if !filehandle.file.exists().unwrap_or(false) {
+                            self.drop_filehandle_from_cache(filehandle.id);
+                            return None;
+                        }
+                        Some(filehandle.clone())
                     }
                     None => None,
                 }

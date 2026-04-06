@@ -402,8 +402,10 @@ impl NfsProtoImpl for NFS40Server {
                 request.set_auth_cred(msg.cred.clone());
 
                 let mut resarray = Vec::with_capacity(args.argarray.len());
-                for arg in args.argarray {
+                let op_count = args.argarray.len();
+                for (op_idx, arg) in args.argarray.into_iter().enumerate() {
                     let operation = op_name(&arg);
+                    debug!(op = operation, idx = op_idx, total = op_count, "compound: dispatching op");
 
                     // QoS rate limit check — if rate exceeded, return NFS4ERR_DELAY
                     let rate_limited = if let Some(rl) = request.rate_limiter() {

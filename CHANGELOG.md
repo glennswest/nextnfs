@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Fixed
+- Stale PUTFH cache causes RENAME across directories to target wrong path — inode reuse after file deletion caused per-connection cache to return filehandles with outdated paths. Added path existence validation in cache lookup (#44)
+- Symlink test uses absolute client-side paths as link targets — changed to relative paths which are correct for NFS (server doesn't have client mount paths)
+
+### Added
+- XDR roundtrip tests for Createtype4::Nf4lnk and CREATE symlink compound
+- Pre-dispatch debug logging in compound loop for operation-level tracing
+
 ## [v0.13.5] — 2026-04-06
 
 ### Fixed

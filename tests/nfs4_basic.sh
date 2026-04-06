@@ -184,7 +184,8 @@ test_stat_type() {
 
 test_symlink_create_read() {
     echo "symlink target data" > "$WORK/sym_target"
-    ln -s "$WORK/sym_target" "$WORK/sym_link"
+    # Use relative path — absolute client paths don't exist on NFS server
+    ln -s sym_target "$WORK/sym_link"
     assert_is_symlink "$WORK/sym_link" "is symlink"
     local content
     content=$(cat "$WORK/sym_link")
@@ -193,10 +194,11 @@ test_symlink_create_read() {
 
 test_symlink_readlink() {
     echo "x" > "$WORK/rl_target"
-    ln -s "$WORK/rl_target" "$WORK/rl_link"
+    # Use relative path — absolute client paths don't exist on NFS server
+    ln -s rl_target "$WORK/rl_link"
     local target
     target=$(readlink "$WORK/rl_link")
-    assert_eq "$target" "$WORK/rl_target" "readlink"
+    assert_eq "$target" "rl_target" "readlink"
 }
 
 test_hardlink_create() {

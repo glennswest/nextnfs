@@ -54,6 +54,7 @@ impl NfsOperation for Create4args {
         let (cinfo, attrset) = match self.objtype {
             Createtype4::Nf4lnk(ref linkdata) => {
                 // Symlink creation: linkdata is the target path
+                debug!("CREATE NF4LNK: name={:?} target={:?}", self.objname, linkdata);
                 let current_dir = if filehandle.file.is_file().unwrap_or(false) {
                     &filehandle.file.parent()
                 } else {
