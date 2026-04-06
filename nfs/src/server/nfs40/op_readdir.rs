@@ -75,14 +75,15 @@ impl NfsOperation for Readdir4args {
         let maxcount: usize = self.maxcount as usize;
         let mut maxcount_actual: usize = 128;
         let mut dircount_actual = 0;
-        for (i, entry) in dir.enumerate() {
+        let mut entry_idx: usize = 0;
+        for entry in dir {
             let name = entry.filename();
-            // Hide the named-attribute store from directory listings
-            if name == ".nfs4attrs" {
+            // Hide the named-attribute store and silly-rename files from listings
+            if name == ".nfs4attrs" || name.starts_with(".nfs.") {
                 continue;
             }
             fnames.push(name.clone());
-            if (i + 2) >= self.cookie as usize {
+            if (entry_idx + 2) >= self.cookie as usize {
                 dircount_actual = dircount_actual + 8 + name.len() + 5;
                 maxcount_actual += 200;
                 if dircount == 0 || (dircount > dircount_actual && maxcount > maxcount_actual) {
@@ -100,11 +101,12 @@ impl NfsOperation for Readdir4args {
                             };
                         }
                         Ok(filehandle) => {
-                            filehandles.push((i + 3, filehandle));
+                            filehandles.push((entry_idx + 3, filehandle));
                         }
                     }
                 }
             }
+            entry_idx += 1;
         }
 
         let seed: String = fnames

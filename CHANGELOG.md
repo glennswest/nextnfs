@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Fixed
+- REMOVE silently discards filesystem errors — `remove_dir()` and `remove_file()` results were ignored, fhdb entries cleaned up even on failure. `rmdir` on non-empty directories returned Ok. Now returns NFS4ERR_NOTEMPTY for non-empty dirs, NFS4ERR_IO for other failures, and preserves fhdb on failure
+- READDIR cookie index skewed by hidden entries — `.nfs4attrs` directory skip used `enumerate()` index for cookies, causing off-by-one on paginated READDIR. Verifier mismatch led to NFS4ERR_NOTSAME (kernel EIO). Now uses separate entry counter
+- `get_filehandle_by_path()` returned stale entries without existence validation — unlike `get_filehandle_by_id()` which checks `path_exists()`, path-based lookups blindly returned cached entries. Added existence check and eviction of stale entries, fixing massive stale file handle errors at scale
+- Silly-rename support for delete-while-open — REMOVE on a file with active open locks now renames to `.nfs.<inode>` instead of deleting. CLOSE completes the deferred deletion when last lock is released. Fixes `cat` via open fd after `rm`
+- READDIR now hides `.nfs.*` silly-rename files from directory listings
+- Test helpers: `run_test()` now handles return code 77 as SKIP instead of FAIL
+- access-denied tests restore file permissions before SKIP (prevents mode 000 files from affecting later tests)
+
 ## [v0.13.6] — 2026-04-06
 
 ### Fixed

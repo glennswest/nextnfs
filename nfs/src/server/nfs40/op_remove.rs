@@ -69,17 +69,18 @@ impl NfsOperation for Remove4args {
                     },
                     Err(e) => {
                         error!("REMOVE failed: {:?}", e);
+                        let nfs_err = e.nfs_error;
                         NfsOpResponse {
                             request,
                             result: Some(NfsResOp4::Opremove(Remove4res {
-                                status: NfsStat4::Nfs4errIo,
+                                status: nfs_err.clone(),
                                 cinfo: ChangeInfo4 {
                                     atomic: false,
                                     before: 0,
                                     after: 0,
                                 },
                             })),
-                            status: NfsStat4::Nfs4errIo,
+                            status: nfs_err,
                         }
                     }
                 }

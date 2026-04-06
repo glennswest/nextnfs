@@ -79,7 +79,7 @@ pub struct CreateOpenStateRequest {
 
 pub struct RemoveFileRequest {
     pub path: VfsPath,
-    pub respond_to: oneshot::Sender<()>,
+    pub respond_to: oneshot::Sender<Result<(), NfsStat4>>,
 }
 
 pub struct TouchFileRequest {
@@ -475,7 +475,8 @@ impl FileManagerHandle {
             return Err(FileManagerError { nfs_error: NfsStat4::Nfs4errServerfault });
         }
         match rx.await {
-            Ok(_) => Ok(()),
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(nfs_error)) => Err(FileManagerError { nfs_error }),
             Err(_) => Err(FileManagerError {
                 nfs_error: NfsStat4::Nfs4errServerfault,
             }),
@@ -1550,11 +1551,10 @@ mod tests {
     async fn test_remove_nonexistent_file() {
         let fm = make_fm();
         let vfs_root = VfsPath::new(MemoryFS::new());
-        // Removing a nonexistent file shouldn't panic
+        // Removing a nonexistent file returns an error (correct behavior)
         let path = vfs_root.join("no_such_file").unwrap();
         let result = fm.remove_file(path).await;
-        // The actor handles this gracefully (just calls remove_file on VFS)
-        assert!(result.is_ok());
+        assert!(result.is_err());
     }
 
     #[tokio::test]

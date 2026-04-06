@@ -24,8 +24,8 @@ teardown() {
 test_access_denied_read() {
     touch "$WORK/noperm"
     chmod 000 "$WORK/noperm"
-    # Reading should fail (if not root)
     if [ "$(id -u)" -eq 0 ]; then
+        chmod 644 "$WORK/noperm"
         echo "SKIP: root bypasses permissions"
         return 77
     fi
@@ -41,6 +41,7 @@ test_access_denied_write() {
     touch "$WORK/noperm_w"
     chmod 444 "$WORK/noperm_w"
     if [ "$(id -u)" -eq 0 ]; then
+        chmod 644 "$WORK/noperm_w"
         echo "SKIP: root bypasses permissions"
         return 77
     fi

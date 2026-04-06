@@ -247,6 +247,8 @@ run_test() {
     output=$("$func" 2>&1) || rc=$?
     if [ $rc -eq 0 ]; then
         test_pass "$name"
+    elif [ $rc -eq 77 ]; then
+        test_skip "$name" "$output"
     else
         test_fail "$name" "$output"
     fi

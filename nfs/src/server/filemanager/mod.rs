@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use nextnfs_proto::nfs4_proto::{
@@ -48,6 +48,8 @@ pub struct FileManager {
     pub cachedb: HashMap<NfsFh4, WriteCacheHandle>,
     /// Delegation state: filehandle ID → delegation info.
     pub delegations: HashMap<NfsFh4, DelegationState>,
+    /// Files renamed for silly-delete (still open when removed).
+    pub pending_deletes: HashSet<NfsFh4>,
 }
 
 impl FileManager {
@@ -75,6 +77,7 @@ impl FileManager {
             lockdb: LockingStateDb::default(),
             cachedb: HashMap::new(),
             delegations: HashMap::new(),
+            pending_deletes: HashSet::new(),
         };
         fmanager.root_fh();
         fmanager
@@ -195,20 +198,80 @@ impl FileManager {
                 let _ = req.respond_to.send(());
             }
             FileManagerMessage::CloseFile(req) => {
+                // Look up the lock to find the filehandle ID before removing
+                let fh_id = self.lockdb.get_by_stateid(&req.stateid).map(|l| l.filehandle_id);
                 self.lockdb.remove_by_stateid(&req.stateid);
                 debug!("CLOSE: removed open stateid {:?} from lockdb", req.stateid);
+
+                // Complete deferred silly-rename deletion if last lock released
+                if let Some(fh_id) = fh_id {
+                    if self.pending_deletes.contains(&fh_id)
+                        && self.lockdb.get_by_filehandle_id(&fh_id).is_empty()
+                    {
+                        self.pending_deletes.remove(&fh_id);
+                        if let Some(fh) = self.fhdb.get_by_id(&fh_id).cloned() {
+                            debug!("CLOSE: completing deferred delete of {:?}", fh.path);
+                            let _ = fh.file.remove_file();
+                            self.drop_cache_handle(&fh_id);
+                            self.delegations.remove(&fh_id);
+                            self.fhdb.remove_by_id(&fh_id);
+                        }
+                    }
+                }
+
                 let _ = req.respond_to.send(());
             }
             FileManagerMessage::RemoveFile(req) => {
                 let filehandle = self.get_filehandle_by_path(&req.path.as_str().to_string());
                 let mut parent_path = req.path.parent().as_str().to_string();
-                match filehandle {
-                    Some(filehandle) => {
-                        if req.path.is_dir().unwrap_or(false) {
-                            let _ = req.path.remove_dir();
+                let is_dir = req.path.is_dir().unwrap_or(false);
+
+                // Silly-rename: if a regular file has active open locks, rename
+                // it to a hidden name instead of deleting. The kernel client can
+                // continue reading via the open filehandle.
+                let has_open_locks = filehandle.as_ref().is_some_and(|fh| {
+                    !self.lockdb.get_by_filehandle_id(&fh.id).is_empty()
+                });
+
+                let remove_result = if !is_dir && has_open_locks {
+                    let fh = filehandle.as_ref().unwrap();
+                    let silly_name = format!(".nfs.{:016x}", fh.attr_fileid);
+                    let parent = req.path.parent();
+                    match parent.join(&silly_name) {
+                        Ok(silly_path) => match req.path.move_file(&silly_path) {
+                            Ok(()) => {
+                                debug!("REMOVE: silly-rename {} -> {}", req.path.as_str(), silly_name);
+                                self.pending_deletes.insert(fh.id);
+                                // Update fhdb to point to the new path
+                                self.fhdb.remove_by_id(&fh.id);
+                                let real_path = self.real_path(&silly_path);
+                                let new_fh = if let Some(meta) = RealMeta::from_path(&real_path) {
+                                    Filehandle::new_real(silly_path, fh.id, self.fsid, self.fsid, fh.version + 1, &meta)
+                                } else {
+                                    Filehandle::new(silly_path, fh.id, self.fsid, self.fsid, fh.version + 1)
+                                };
+                                self.fhdb.insert(new_fh);
+                                Ok(())
+                            }
+                            Err(_) => req.path.remove_file().map_err(|_| NfsStat4::Nfs4errIo),
+                        },
+                        Err(_) => req.path.remove_file().map_err(|_| NfsStat4::Nfs4errIo),
+                    }
+                } else if is_dir {
+                    req.path.remove_dir().map_err(|e| {
+                        let msg = format!("{:?}", e);
+                        if msg.contains("not empty") || msg.contains("NotEmpty") || msg.contains("Directory not empty") {
+                            NfsStat4::Nfs4errNotempty
                         } else {
-                            let _ = req.path.remove_file();
+                            NfsStat4::Nfs4errIo
                         }
+                    })
+                } else {
+                    req.path.remove_file().map_err(|_| NfsStat4::Nfs4errIo)
+                };
+
+                if remove_result.is_ok() && !has_open_locks {
+                    if let Some(filehandle) = filehandle {
                         // Clean up all lock state for this filehandle
                         let stateids: Vec<[u8; 12]> = self
                             .lockdb
@@ -228,23 +291,18 @@ impl FileManager {
                         self.delegations.remove(&filehandle.id);
                         self.fhdb.remove_by_id(&filehandle.id);
                     }
-                    None => {
-                        if req.path.is_dir().unwrap_or(false) {
-                            let _ = req.path.remove_dir();
-                        } else {
-                            let _ = req.path.remove_file();
-                        }
+                }
+
+                if remove_result.is_ok() {
+                    if parent_path.is_empty() {
+                        parent_path = "/".to_string();
+                    }
+                    if let Some(parent_filehandle) = self.get_filehandle_by_path(&parent_path) {
+                        self.touch_filehandle(parent_filehandle);
                     }
                 }
 
-                if parent_path.is_empty() {
-                    parent_path = "/".to_string();
-                }
-
-                if let Some(parent_filehandle) = self.get_filehandle_by_path(&parent_path) {
-                    self.touch_filehandle(parent_filehandle);
-                }
-                let _ = req.respond_to.send(());
+                let _ = req.respond_to.send(remove_result);
             }
             FileManagerMessage::TouchFile(req) => {
                 let filehandle = self.get_filehandle_by_id(&req.id);
@@ -507,8 +565,15 @@ impl FileManager {
         None
     }
 
-    pub fn get_filehandle_by_path(&self, path: &String) -> Option<Filehandle> {
-        self.fhdb.get_by_path(path).cloned()
+    pub fn get_filehandle_by_path(&mut self, path: &String) -> Option<Filehandle> {
+        if let Some(fh) = self.fhdb.get_by_path(path).cloned() {
+            if self.path_exists(&fh.file) {
+                return Some(fh);
+            }
+            debug!("get_filehandle_by_path: evicting stale entry for path {:?}", path);
+            self.fhdb.remove_by_id(&fh.id);
+        }
+        None
     }
 
     pub fn get_filehandle(&mut self, file: &VfsPath) -> Filehandle {
@@ -1024,14 +1089,14 @@ mod tests {
 
     #[test]
     fn test_get_filehandle_by_path_nonexistent() {
-        let fm = make_fm();
+        let mut fm = make_fm();
         let result = fm.get_filehandle_by_path(&"nonexistent".to_string());
         assert!(result.is_none());
     }
 
     #[test]
     fn test_get_filehandle_by_path_root() {
-        let fm = make_fm();
+        let mut fm = make_fm();
         let result = fm.get_filehandle_by_path(&"/".to_string());
         assert!(result.is_some());
     }
