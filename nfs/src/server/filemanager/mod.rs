@@ -198,26 +198,15 @@ impl FileManager {
                 let _ = req.respond_to.send(());
             }
             FileManagerMessage::CloseFile(req) => {
-                // Look up the lock to find the filehandle ID before removing
-                let fh_id = self.lockdb.get_by_stateid(&req.stateid).map(|l| l.filehandle_id);
                 self.lockdb.remove_by_stateid(&req.stateid);
                 debug!("CLOSE: removed open stateid {:?} from lockdb", req.stateid);
 
-                // Complete deferred silly-rename deletion if last lock released
-                if let Some(fh_id) = fh_id {
-                    if self.pending_deletes.contains(&fh_id)
-                        && self.lockdb.get_by_filehandle_id(&fh_id).is_empty()
-                    {
-                        self.pending_deletes.remove(&fh_id);
-                        if let Some(fh) = self.fhdb.get_by_id(&fh_id).cloned() {
-                            debug!("CLOSE: completing deferred delete of {:?}", fh.path);
-                            let _ = fh.file.remove_file();
-                            self.drop_cache_handle(&fh_id);
-                            self.delegations.remove(&fh_id);
-                            self.fhdb.remove_by_id(&fh_id);
-                        }
-                    }
-                }
+                // Don't immediately delete pending_deletes entries on CLOSE.
+                // The kernel client may still need to READ from the file via
+                // an open fd even after sending CLOSE (e.g., same-process
+                // silly-rename where the kernel closes the NFS open state
+                // but the application still has a local fd). Deferred deletion
+                // is handled by the periodic sweep_pending_deletes timer.
 
                 let _ = req.respond_to.send(());
             }
@@ -650,6 +639,28 @@ impl FileManager {
         }
     }
 
+    /// Sweep pending_deletes entries that have no remaining open locks.
+    /// Called periodically by the actor timer (every 15s).
+    fn sweep_pending_deletes(&mut self) {
+        let to_delete: Vec<NfsFh4> = self
+            .pending_deletes
+            .iter()
+            .filter(|fh_id| self.lockdb.get_by_filehandle_id(fh_id).is_empty())
+            .cloned()
+            .collect();
+
+        for fh_id in to_delete {
+            self.pending_deletes.remove(&fh_id);
+            if let Some(fh) = self.fhdb.get_by_id(&fh_id).cloned() {
+                debug!("sweep: completing deferred delete of {:?}", fh.path);
+                let _ = fh.file.remove_file();
+                self.drop_cache_handle(&fh_id);
+                self.delegations.remove(&fh_id);
+                self.fhdb.remove_by_id(&fh_id);
+            }
+        }
+    }
+
     pub fn filehandle_attrs(
         &mut self,
         attr_request: &Vec<FileAttr>,
@@ -1018,8 +1029,19 @@ impl FileManager {
 }
 
 pub async fn run_file_manager(mut actor: FileManager) {
-    while let Some(msg) = actor.receiver.recv().await {
-        actor.handle_message(msg);
+    let mut sweep_interval = tokio::time::interval(std::time::Duration::from_secs(15));
+    loop {
+        tokio::select! {
+            msg = actor.receiver.recv() => {
+                match msg {
+                    Some(msg) => actor.handle_message(msg),
+                    None => break,
+                }
+            }
+            _ = sweep_interval.tick() => {
+                actor.sweep_pending_deletes();
+            }
+        }
     }
 }
 

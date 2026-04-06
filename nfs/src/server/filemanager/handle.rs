@@ -14,7 +14,7 @@ use nextnfs_proto::nfs4_proto::{
 
 use super::{
     caching::run_file_write_cache, caching::WriteCache, filehandle::Filehandle,
-    locking::LockingState, run_file_manager, FileManager,
+    filehandle::RealMeta, locking::LockingState, run_file_manager, FileManager,
 };
 use crate::server::filemanager::NfsFh4;
 
@@ -731,6 +731,22 @@ impl FileManagerHandle {
         filehandle: &Filehandle,
         quota_info: Option<&QuotaInfo>,
     ) -> Option<(Attrlist4<FileAttr>, Attrlist4<FileAttrValue>)> {
+        // Refresh from real filesystem to pick up current size/mtime/etc.
+        let real_path = self.real_path(filehandle.file.as_str());
+        let fh = if let Some(meta) = RealMeta::from_path(&real_path) {
+            Filehandle::new_real(
+                filehandle.file.clone(),
+                filehandle.id,
+                filehandle.attr_fsid.major,
+                filehandle.attr_fsid.minor,
+                filehandle.version,
+                &meta,
+            )
+        } else {
+            filehandle.clone()
+        };
+        let filehandle = &fh;
+
         let mut answer_attrs = Attrlist4::<FileAttr>::new(None);
         let mut attrs = Attrlist4::<FileAttrValue>::new(None);
 

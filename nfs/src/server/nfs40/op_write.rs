@@ -78,18 +78,34 @@ impl NfsOperation for Write4args {
                 .write_bytes(self.offset, self.data.clone())
                 .await;
         } else {
-            // Synchronous write — use pwrite (write_all_at) for atomic positional
-            // writes when possible, falling back to VFS seek+write for MemoryFS
+            // Synchronous write — use pwrite (write_all_at) for positional writes,
+            // or O_APPEND for writes at/past EOF to handle concurrent appenders
+            // atomically (the kernel positions the write at the true end of file).
             let real_path = request.file_manager().real_path(filehandle.file.as_str());
             let write_result = if real_path.exists() {
-                // Real filesystem: use pwrite for atomicity
-                match std::fs::OpenOptions::new().write(true).open(&real_path) {
-                    Ok(file) => {
-                        file.write_all_at(&self.data, self.offset)
-                            .and_then(|_| file.sync_all())
-                            .map(|_| self.data.len() as u32)
+                let file_len = std::fs::metadata(&real_path).map(|m| m.len()).unwrap_or(0);
+                if self.offset >= file_len {
+                    // Append: use O_APPEND so the kernel atomically positions
+                    // the write at the true end of file, preventing concurrent
+                    // appenders from overwriting each other.
+                    match std::fs::OpenOptions::new().append(true).open(&real_path) {
+                        Ok(mut file) => {
+                            file.write_all(&self.data)
+                                .and_then(|_| file.sync_all())
+                                .map(|_| self.data.len() as u32)
+                        }
+                        Err(e) => Err(e),
                     }
-                    Err(e) => Err(e),
+                } else {
+                    // Mid-file positional write: use pwrite for atomicity
+                    match std::fs::OpenOptions::new().write(true).open(&real_path) {
+                        Ok(file) => {
+                            file.write_all_at(&self.data, self.offset)
+                                .and_then(|_| file.sync_all())
+                                .map(|_| self.data.len() as u32)
+                        }
+                        Err(e) => Err(e),
+                    }
                 }
             } else {
                 // VFS fallback (MemoryFS in tests): seek + write
