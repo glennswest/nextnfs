@@ -121,10 +121,13 @@ for suite in $SUITES; do
     local_log="$RESULTS_DIR/${suite}.log"
     bash "$test_script" 2>&1 | tee "$local_log"
 
-    # Parse results
-    pass=$(grep -c '^\s*OK:' "$local_log" 2>/dev/null || echo 0)
-    failed=$(grep -c '^\s*FAIL:' "$local_log" 2>/dev/null || echo 0)
-    skipped=$(grep -c '^\s*SKIP:' "$local_log" 2>/dev/null || echo 0)
+    # Parse results — count PASS/FAIL/SKIP lines from test output
+    # Pattern matches "PASS (NNms)" and "FAIL (NNms)" to avoid counting
+    # mount "OK:" lines or "ASSERT FAILED:" lines.
+    # "|| true" prevents grep exit-code 1 (no match) from adding extra output.
+    pass=$(grep -cE 'PASS \(' "$local_log" 2>/dev/null || true)
+    failed=$(grep -cE 'FAIL \(' "$local_log" 2>/dev/null || true)
+    skipped=$(grep -cE 'SKIP$|SKIP \(' "$local_log" 2>/dev/null || true)
 
     TOTAL_PASS=$((TOTAL_PASS + pass))
     TOTAL_FAIL=$((TOTAL_FAIL + failed))

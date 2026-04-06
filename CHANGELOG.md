@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+- OPEN_CONFIRM fails with NFS4ERR_BAD_STATEID due to stale filehandle cache — PUTFH returned cached filehandle without locks after stat-after-CLOSE or inode reuse. OPEN now caches filehandle with locks so OPEN_CONFIRM in the next compound gets fresh data (#42)
+- Test runner result parsing — nextnfs-run-tests grep patterns didn't match test output format (PASS/FAIL not OK:/FAIL:) and `grep -c || echo 0` produced "0\n0" causing arithmetic error
+
 ## [v0.13.3] — 2026-04-05
 
 ### Fixed

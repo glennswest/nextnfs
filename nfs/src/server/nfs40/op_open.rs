@@ -89,6 +89,11 @@ async fn open_for_reading<'a>(
     // Attach lock to filehandle so OPEN_CONFIRM can find it
     let mut filehandle = filehandle;
     filehandle.locks.push(lock.clone());
+    // Cache the filehandle WITH locks so PUTFH in the OPEN_CONFIRM compound
+    // gets fresh data. Without this, a stale cache entry (from a previous
+    // stat after CLOSE, or inode reuse) could return the fh without locks,
+    // causing OPEN_CONFIRM to fail with NFS4ERR_BAD_STATEID.
+    request.cache_filehandle(filehandle.clone());
     request.set_filehandle(filehandle);
 
     // Attempt to grant a read delegation
@@ -231,6 +236,9 @@ async fn open_for_writing<'a>(
         }
     };
 
+    // Cache the filehandle WITH locks so PUTFH in the OPEN_CONFIRM compound
+    // gets fresh data (prevents stale cache from stat-after-CLOSE or inode reuse).
+    request.cache_filehandle(filehandle.clone());
     request.set_filehandle(filehandle.clone());
     // we expect this filehandle to have one lock (for the shared reservation)
     let lock = &filehandle.locks[0];
