@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [v0.13.6] — 2026-04-06
+
 ### Fixed
 - Stale PUTFH cache causes RENAME across directories to target wrong path — inode reuse after file deletion caused per-connection cache to return filehandles with outdated paths. Added path existence validation in cache lookup (#44)
 - Symlink test uses absolute client-side paths as link targets — changed to relative paths which are correct for NFS (server doesn't have client mount paths)
