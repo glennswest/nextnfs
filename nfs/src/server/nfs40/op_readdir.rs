@@ -179,7 +179,12 @@ impl NfsOperation for Readdir4args {
             tnextentry = Some(entry);
         }
         let eof = match tnextentry {
-            Some(ref entry) => (entry.cookie + added_entries) >= fnames.len() as u64,
+            Some(ref entry) => {
+                // Cookies start at 3 (0=., 1=.., 2=first real entry offset).
+                // Last possible cookie = fnames.len() + 2.
+                // Last returned cookie = entry.cookie + added_entries - 1.
+                (entry.cookie + added_entries - 1) >= (fnames.len() as u64 + 2)
+            }
             None => true,
         };
 

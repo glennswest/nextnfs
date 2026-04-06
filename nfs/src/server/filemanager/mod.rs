@@ -556,7 +556,9 @@ impl FileManager {
     fn get_filehandle_by_id(&mut self, id: &NfsFh4) -> Option<Filehandle> {
         let fh = self.fhdb.get_by_id(id);
         if let Some(fh) = fh {
-            if self.path_exists(&fh.file) {
+            // Silly-renamed files may have stale VfsPaths — trust the fhdb
+            // entry while the file is pending deletion (still held open).
+            if self.pending_deletes.contains(id) || self.path_exists(&fh.file) {
                 return Some(fh.clone());
             } else {
                 self.fhdb.remove_by_id(id);

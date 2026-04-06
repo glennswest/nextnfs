@@ -265,15 +265,16 @@ test_flock_shared() {
     echo "shared data" > "$file"
 
     # Two shared locks should both succeed
+    # Use >> (append) to avoid O_TRUNC race between two concurrent opens
     (
         flock -s -n 200 || exit 1
         sleep 1
-    ) 200>"$file" &
+    ) 200>>"$file" &
     local pid1=$!
-    sleep 0.2
+    sleep 0.5
 
     local rc=0
-    (flock -s -n 200 || exit 1) 200>"$file" 2>/dev/null || rc=$?
+    (flock -s -n 200 || exit 1) 200>>"$file" 2>/dev/null || rc=$?
     wait "$pid1" 2>/dev/null
     assert_eq "$rc" "0" "shared locks coexist"
 }
