@@ -1,5 +1,11 @@
 # Changelog
 
+## [v0.13.8] — 2026-04-07
+
+### Fixed
+- Client-side silly-rename ESTALE — when the Linux kernel NFS client does its own silly-rename (RENAME to .nfs* instead of REMOVE), `handle_rename_path()` could fail to find the old fhdb entry by path. Added inode-based fallback: if path lookup fails, constructs NfsFh4 from the new path's dev:ino metadata to find the entry. This ensures the fhdb is always updated with the new VfsPath after rename
+- Filehandle eviction during client-side silly-rename — `get_filehandle_by_id()` evicted fhdb entries when `path_exists()` failed, even if the file had active open locks. After kernel silly-rename, the old VfsPath is stale but the file is still open and readable. Now preserves entries that have active locks in the lockdb, preventing NFS4ERR_STALE on PUTFH after rename
+
 ## [v0.13.7] — 2026-04-06
 
 ### Fixed

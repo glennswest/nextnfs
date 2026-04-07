@@ -424,7 +424,25 @@ impl FileManager {
         // Look up directly in fhdb — don't use get_filehandle_by_path() because
         // the rename has already completed, so the old path no longer exists on disk
         // and path_exists() would evict the entry instead of returning it.
-        let old_fh = self.fhdb.get_by_path(&old_path.to_string()).cloned();
+        let mut old_fh = self.fhdb.get_by_path(&old_path.to_string()).cloned();
+
+        // Fallback: if path-based lookup fails (e.g. path format mismatch),
+        // find the entry by NfsFh4 ID (inode-based). The rename has already
+        // completed, so the new path's inode matches the old fhdb entry's ID.
+        if old_fh.is_none() {
+            let real_path = self.real_path(&new_vfs_path);
+            if let Some(meta) = RealMeta::from_path(&real_path) {
+                let mut id = [0u8; 26];
+                id[0] = 0x01; // inode-based persistent handle
+                id[2..10].copy_from_slice(&meta.dev.to_be_bytes());
+                id[10..18].copy_from_slice(&meta.ino.to_be_bytes());
+                old_fh = self.fhdb.get_by_id(&id).cloned();
+                if old_fh.is_some() {
+                    debug!("RENAME: path lookup failed for {:?}, found entry by inode dev={} ino={}", old_path, meta.dev, meta.ino);
+                }
+            }
+        }
+
         if let Some(old_fh) = old_fh {
             self.fhdb.remove_by_id(&old_fh.id);
             let real_path = self.real_path(&new_vfs_path);
@@ -547,9 +565,16 @@ impl FileManager {
     fn get_filehandle_by_id(&mut self, id: &NfsFh4) -> Option<Filehandle> {
         let fh = self.fhdb.get_by_id(id);
         if let Some(fh) = fh {
-            // Silly-renamed files may have stale VfsPaths — trust the fhdb
-            // entry while the file is pending deletion (still held open).
-            if self.pending_deletes.contains(id) || self.path_exists(&fh.file) {
+            // Keep the entry if:
+            // - It's a pending silly-rename delete (server-side), OR
+            // - The path still exists on disk, OR
+            // - The file has active open locks (client-side silly-rename:
+            //   the kernel renamed the file to .nfs*, so the old VfsPath is
+            //   stale, but the file is still open and readable via the handle)
+            if self.pending_deletes.contains(id)
+                || self.path_exists(&fh.file)
+                || !self.lockdb.get_by_filehandle_id(id).is_empty()
+            {
                 return Some(fh.clone());
             } else {
                 self.fhdb.remove_by_id(id);
