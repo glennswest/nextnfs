@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### 2026-04-27
+- **docs:** StormFS enhancement document — distributed POSIX filesystem backend backed by StormBlock, optional via `--features stormfs`. Covers metadata engine (Raft-replicated inode table + directory B-tree), data engine (4 MB chunk COW via GEM refcounts), COW snapshot-based container lifecycle, multi-node topology, OCI registry integration, and 6-phase implementation plan
+
 ## [v0.13.8] — 2026-04-07
 
 ### Fixed
