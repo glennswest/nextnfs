@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::os::unix::fs::MetadataExt;
 use std::path::PathBuf;
 
 use nextnfs_proto::nfs4_proto::{
@@ -348,6 +349,25 @@ impl FileManager {
         std::fs::symlink_metadata(self.real_path(path)).is_ok()
     }
 
+    /// For an inode-based filehandle whose stored path is stale, try to locate
+    /// the file by scanning the parent directory for a matching inode. This
+    /// handles client-side silly-renames where the kernel renamed the file to
+    /// `.nfsXXXX` within the same directory.
+    fn find_by_inode_in_parent(&self, fh: &Filehandle, target_ino: u64) -> Option<VfsPath> {
+        let parent_vfs = fh.file.parent();
+        let parent_real = self.real_path(&parent_vfs);
+        let entries = std::fs::read_dir(&parent_real).ok()?;
+        for entry in entries.flatten() {
+            if let Ok(meta) = std::fs::symlink_metadata(entry.path()) {
+                if meta.ino() == target_ino {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    return parent_vfs.join(&name).ok();
+                }
+            }
+        }
+        None
+    }
+
     fn grant_delegation(
         &mut self,
         filehandle_id: NfsFh4,
@@ -576,9 +596,47 @@ impl FileManager {
                 || !self.lockdb.get_by_filehandle_id(id).is_empty()
             {
                 return Some(fh.clone());
-            } else {
-                self.fhdb.remove_by_id(id);
             }
+
+            // Path is stale. For inode-based handles, try to locate the file
+            // at a new path by scanning the parent directory for a matching
+            // inode. This recovers from client-side silly-renames and any
+            // other rename that handle_rename_path missed.
+            if id[0] == 0x01 {
+                let target_ino = u64::from_be_bytes(id[10..18].try_into().unwrap());
+                let fh_clone = fh.clone();
+                if let Some(new_vfs_path) = self.find_by_inode_in_parent(&fh_clone, target_ino) {
+                    debug!(
+                        "get_filehandle_by_id: recovered stale handle via inode scan: {} -> {}",
+                        fh_clone.path,
+                        new_vfs_path.as_str()
+                    );
+                    self.fhdb.remove_by_id(id);
+                    let real_path = self.real_path(&new_vfs_path);
+                    let new_fh = if let Some(meta) = RealMeta::from_path(&real_path) {
+                        Filehandle::new_real(
+                            new_vfs_path,
+                            *id,
+                            self.fsid,
+                            self.fsid,
+                            fh_clone.version + 1,
+                            &meta,
+                        )
+                    } else {
+                        Filehandle::new(
+                            new_vfs_path,
+                            *id,
+                            self.fsid,
+                            self.fsid,
+                            fh_clone.version + 1,
+                        )
+                    };
+                    self.fhdb.insert(new_fh.clone());
+                    return Some(new_fh);
+                }
+            }
+
+            self.fhdb.remove_by_id(id);
         }
         None
     }
@@ -586,6 +644,13 @@ impl FileManager {
     pub fn get_filehandle_by_path(&mut self, path: &String) -> Option<Filehandle> {
         if let Some(fh) = self.fhdb.get_by_path(path).cloned() {
             if self.path_exists(&fh.file) {
+                return Some(fh);
+            }
+            // Path is stale but keep the entry if it's still logically valid:
+            // pending server-side silly-rename or active open locks.
+            if self.pending_deletes.contains(&fh.id)
+                || !self.lockdb.get_by_filehandle_id(&fh.id).is_empty()
+            {
                 return Some(fh);
             }
             debug!("get_filehandle_by_path: evicting stale entry for path {:?}", path);
