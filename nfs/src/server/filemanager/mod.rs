@@ -20,7 +20,7 @@ use filehandle::FilehandleDb;
 use handle::{FileManagerMessage, WriteCacheHandle};
 use locking::{LockType, LockingState, LockingStateDb};
 use tokio::sync::mpsc;
-use tracing::{debug, error};
+use tracing::{debug, error, info, warn};
 use vfs::VfsPath;
 
 /// Delegation held on a file by a client.
@@ -464,18 +464,30 @@ impl FileManager {
         }
 
         if let Some(old_fh) = old_fh {
+            let old_fileid = old_fh.attr_fileid;
             self.fhdb.remove_by_id(&old_fh.id);
             let real_path = self.real_path(&new_vfs_path);
             let new_fh = if let Some(meta) = RealMeta::from_path(&real_path) {
-                Filehandle::new_real(
+                let fh = Filehandle::new_real(
                     new_vfs_path,
                     old_fh.id,
                     self.fsid,
                     self.fsid,
                     old_fh.version + 1,
                     &meta,
-                )
+                );
+                if fh.attr_fileid != old_fileid {
+                    warn!(
+                        "RENAME: fileid changed! old_fileid={} new_fileid={} old_path={:?} new_path={:?}",
+                        old_fileid, fh.attr_fileid, old_path, new_path
+                    );
+                }
+                fh
             } else {
+                warn!(
+                    "RENAME: RealMeta::from_path FAILED for {:?}, using hash-based fileid (was {})",
+                    real_path, old_fileid
+                );
                 Filehandle::new(
                     new_vfs_path,
                     old_fh.id,
@@ -484,23 +496,43 @@ impl FileManager {
                     old_fh.version + 1,
                 )
             };
-            debug!("RENAME path update: {} -> {}", old_path, new_path);
+            info!(
+                "RENAME path update: {} -> {} (fileid {} -> {})",
+                old_path, new_path, old_fileid, new_fh.attr_fileid
+            );
             self.fhdb.insert(new_fh);
+        } else {
+            warn!(
+                "RENAME: no fhdb entry found for old_path={:?} or by inode",
+                old_path
+            );
         }
     }
 
     fn touch_filehandle(&mut self, filehandle: Filehandle) {
         let real_path = self.real_path(&filehandle.file);
+        let old_fileid = filehandle.attr_fileid;
         let fh = if let Some(meta) = RealMeta::from_path(&real_path) {
-            Filehandle::new_real(
+            let fh = Filehandle::new_real(
                 filehandle.file.clone(),
                 filehandle.id,
                 self.fsid,
                 self.fsid,
                 filehandle.version,
                 &meta,
-            )
+            );
+            if fh.attr_fileid != old_fileid {
+                warn!(
+                    "FILEID CHANGED in touch_filehandle: path={:?} old_fileid={} new_fileid={}",
+                    filehandle.file.as_str(), old_fileid, fh.attr_fileid
+                );
+            }
+            fh
         } else {
+            warn!(
+                "touch_filehandle: RealMeta failed for {:?}, using hash-based fileid (was {})",
+                real_path, old_fileid
+            );
             Filehandle::new(
                 filehandle.file.clone(),
                 filehandle.id,
@@ -763,6 +795,7 @@ impl FileManager {
         let fh = match fh {
             Some(old_fh) => {
                 let real_path = self.real_path(&old_fh.file);
+                let old_fileid = old_fh.attr_fileid;
                 if let Some(meta) = RealMeta::from_path(&real_path) {
                     let refreshed = Filehandle::new_real(
                         old_fh.file.clone(),
@@ -772,10 +805,20 @@ impl FileManager {
                         old_fh.version,
                         &meta,
                     );
+                    if refreshed.attr_fileid != old_fileid {
+                        warn!(
+                            "FILEID CHANGED in actor filehandle_attrs: path={:?} old_fileid={} new_fileid={} real_path={:?}",
+                            old_fh.file.as_str(), old_fileid, refreshed.attr_fileid, real_path
+                        );
+                    }
                     self.fhdb.remove_by_id(&old_fh.id);
                     self.fhdb.insert(refreshed.clone());
                     refreshed
                 } else {
+                    warn!(
+                        "RealMeta::from_path FAILED in actor filehandle_attrs: path={:?} real_path={:?} cached_fileid={}",
+                        old_fh.file.as_str(), real_path, old_fileid
+                    );
                     old_fh
                 }
             }

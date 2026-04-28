@@ -1,5 +1,5 @@
 use tokio::sync::{mpsc, oneshot};
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 use vfs::VfsPath;
 
 use std::path::PathBuf;
@@ -733,16 +733,28 @@ impl FileManagerHandle {
     ) -> Option<(Attrlist4<FileAttr>, Attrlist4<FileAttrValue>)> {
         // Refresh from real filesystem to pick up current size/mtime/etc.
         let real_path = self.real_path(filehandle.file.as_str());
+        let input_fileid = filehandle.attr_fileid;
         let fh = if let Some(meta) = RealMeta::from_path(&real_path) {
-            Filehandle::new_real(
+            let refreshed = Filehandle::new_real(
                 filehandle.file.clone(),
                 filehandle.id,
                 filehandle.attr_fsid.major,
                 filehandle.attr_fsid.minor,
                 filehandle.version,
                 &meta,
-            )
+            );
+            if refreshed.attr_fileid != input_fileid {
+                warn!(
+                    "FILEID CHANGED in handle filehandle_attrs: path={:?} input_fileid={} refreshed_fileid={} real_path={:?}",
+                    filehandle.file.as_str(), input_fileid, refreshed.attr_fileid, real_path
+                );
+            }
+            refreshed
         } else {
+            warn!(
+                "RealMeta::from_path FAILED in handle filehandle_attrs: path={:?} real_path={:?} using cached fileid={}",
+                filehandle.file.as_str(), real_path, input_fileid
+            );
             filehandle.clone()
         };
         let filehandle = &fh;
