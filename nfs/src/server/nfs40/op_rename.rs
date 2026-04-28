@@ -82,7 +82,12 @@ impl NfsOperation for Rename4args {
             };
         }
 
-        // Perform the rename via VFS
+        // Perform the rename via direct filesystem call (preserves inodes).
+        //
+        // We bypass VfsPath::move_file() because the vfs crate's AltrootFS
+        // doesn't implement FileSystem::move_file(), causing it to fall through
+        // to a copy-and-delete path that creates a NEW inode. The Linux kernel
+        // then detects "fileid changed" and reports ESTALE.
         let dst_vfs = match current_fh.file.join(&self.newname) {
             Ok(p) => p,
             Err(_) => {
@@ -94,10 +99,17 @@ impl NfsOperation for Rename4args {
             }
         };
         let is_dir = src_vfs.is_dir().unwrap_or(false);
-        let result = if is_dir {
-            src_vfs.move_dir(&dst_vfs)
+        let real_src = request.file_manager().real_path(&src_path);
+        let real_dst = request.file_manager().real_path(&dst_path);
+        let result = if std::fs::rename(&real_src, &real_dst).is_ok() {
+            Ok(())
         } else {
-            src_vfs.move_file(&dst_vfs)
+            // Fall back to VFS move for non-physical filesystems (e.g., MemoryFS in tests)
+            if is_dir {
+                src_vfs.move_dir(&dst_vfs)
+            } else {
+                src_vfs.move_file(&dst_vfs)
+            }
         };
 
         match result {

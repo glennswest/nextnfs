@@ -5,6 +5,7 @@
 ## [v0.13.9] — 2026-04-27
 
 ### Fixed
+- RENAME changes inode (fileid) — the vfs crate's `AltrootFS` doesn't implement `move_file()`/`move_dir()`, causing `VfsPath::move_file()` to fall through to a copy-and-delete path that creates a new file with a new inode. The Linux kernel then detects "fileid changed" and reports ESTALE. Fixed by using `std::fs::rename()` directly on real filesystem paths, which is an atomic syscall that preserves the inode. Falls back to VFS move for non-physical filesystems (MemoryFS in tests)
 - ESTALE on stale filehandle — `get_filehandle_by_id()` now recovers inode-based handles whose stored path is stale by scanning the parent directory for a file with the matching inode. Handles client-side silly-renames and any rename that `handle_rename_path()` missed
 - `get_filehandle_by_path()` no longer evicts fhdb entries with active open locks or pending server-side silly-renames, preventing spurious NFS4ERR_STALE
 
