@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### 2026-04-28
+- **feat:** new `nextnfs-stress` Rust binary (workspace member `stress/`) — POSIX-path stress harness aimed at NFS mounts. Default 1000 files across nine phases: create, readdir, stat, read+verify, rename rotation, post-rename stat, unlink-while-open (silly-rename trigger), parallel workers (create+delete), and bulk delete. Reports per-phase ops/s, byte counts, and errno breakdowns; exits non-zero on any failure
+- **chore:** GETATTR Fileid debug trace to help diagnose ESTALE/fileid mismatches
+- **docs:** replicated overlay registry enhancement design
+
 ## [v0.13.9] — 2026-04-27
 
 ### Fixed

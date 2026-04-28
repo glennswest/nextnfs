@@ -1,0 +1,21 @@
+[package]
+name = "nextnfs-stress"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Filesystem stress harness for NFS exports (POSIX path target)"
+
+[[bin]]
+name = "nextnfs-stress"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+colored = "2"
+rand = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "sync", "time", "io-util"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

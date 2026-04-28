@@ -1185,6 +1185,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "nextnfs-stress"
+version = "0.13.9"
+dependencies = [
+ "anyhow",
+ "clap",
+ "colored",
+ "rand 0.8.5",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "nextnfstest"
 version = "0.13.9"
 dependencies = [
