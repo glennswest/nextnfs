@@ -101,10 +101,14 @@ impl NfsOperation for Rename4args {
         let is_dir = src_vfs.is_dir().unwrap_or(false);
         let real_src = request.file_manager().real_path(&src_path);
         let real_dst = request.file_manager().real_path(&dst_path);
-        let result = if std::fs::rename(&real_src, &real_dst).is_ok() {
-            Ok(())
+        let result = if real_src.exists() {
+            // Physical filesystem — use std::fs::rename() directly to preserve inodes.
+            std::fs::rename(&real_src, &real_dst).map_err(|e| {
+                error!("std::fs::rename({:?} -> {:?}) failed: {}", real_src, real_dst, e);
+                vfs::VfsError::from(vfs::error::VfsErrorKind::IoError(e))
+            })
         } else {
-            // Fall back to VFS move for non-physical filesystems (e.g., MemoryFS in tests)
+            // Non-physical filesystem (e.g., MemoryFS in tests) — use VFS.
             if is_dir {
                 src_vfs.move_dir(&dst_vfs)
             } else {
