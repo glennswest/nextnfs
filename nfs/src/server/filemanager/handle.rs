@@ -822,6 +822,10 @@ impl FileManagerHandle {
                     answer_attrs.push(FileAttr::RdattrError);
                 }
                 FileAttr::Fileid => {
+                    debug!(
+                        "GETATTR Fileid: path={:?} fileid={} id[0]={:#04x}",
+                        filehandle.path, filehandle.attr_fileid, filehandle.id[0]
+                    );
                     attrs.push(FileAttrValue::Fileid(filehandle.attr_fileid));
                     answer_attrs.push(FileAttr::Fileid);
                 }
