@@ -2,10 +2,14 @@
 
 ## [Unreleased]
 
-### 2026-04-27
-- **fix:** ESTALE on stale filehandle — `get_filehandle_by_id()` now recovers inode-based handles whose stored path is stale by scanning the parent directory for a file with the matching inode. Handles client-side silly-renames and any rename that `handle_rename_path()` missed
-- **fix:** `get_filehandle_by_path()` no longer evicts fhdb entries with active open locks or pending server-side silly-renames, preventing spurious NFS4ERR_STALE
-- **docs:** StormFS enhancement document — distributed POSIX filesystem backend backed by StormBlock, optional via `--features stormfs`. Covers metadata engine (Raft-replicated inode table + directory B-tree), data engine (4 MB chunk COW via GEM refcounts), COW snapshot-based container lifecycle, multi-node topology, OCI registry integration, and 6-phase implementation plan
+## [v0.13.9] — 2026-04-27
+
+### Fixed
+- ESTALE on stale filehandle — `get_filehandle_by_id()` now recovers inode-based handles whose stored path is stale by scanning the parent directory for a file with the matching inode. Handles client-side silly-renames and any rename that `handle_rename_path()` missed
+- `get_filehandle_by_path()` no longer evicts fhdb entries with active open locks or pending server-side silly-renames, preventing spurious NFS4ERR_STALE
+
+### Documentation
+- StormFS enhancement document — distributed POSIX filesystem backend backed by StormBlock
 
 ## [v0.13.8] — 2026-04-07
 
