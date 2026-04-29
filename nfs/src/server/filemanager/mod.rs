@@ -240,7 +240,7 @@ impl FileManager {
                                 } else {
                                     Filehandle::new(silly_path, fh.id, self.fsid, self.fsid, fh.version + 1)
                                 };
-                                self.fhdb.insert(new_fh);
+                                self.fhdb_replace(new_fh);
                                 Ok(())
                             }
                             Err(_) => req.path.remove_file().map_err(|_| NfsStat4::Nfs4errIo),
@@ -500,11 +500,37 @@ impl FileManager {
                 "RENAME path update: {} -> {} (fileid {} -> {})",
                 old_path, new_path, old_fileid, new_fh.attr_fileid
             );
-            self.fhdb.insert(new_fh);
+            self.fhdb_replace(new_fh);
         } else {
             warn!(
                 "RENAME: no fhdb entry found for old_path={:?} or by inode",
                 old_path
+            );
+        }
+    }
+
+    /// Insert into fhdb, evicting any pre-existing entries that would
+    /// collide on the `id` or `path` unique indexes. `multi_index_map::insert`
+    /// panics on uniqueness violation, which would crash the FileManager
+    /// actor and turn every subsequent NFS op into NFS4ERR_SERVERFAULT.
+    fn fhdb_replace(&mut self, fh: Filehandle) {
+        if self.fhdb.get_by_id(&fh.id).is_some() {
+            self.fhdb.remove_by_id(&fh.id);
+        }
+        if self.fhdb.get_by_path(&fh.path).is_some() {
+            let stale = self.fhdb.remove_by_path(&fh.path);
+            if let Some(stale) = stale {
+                warn!(
+                    "fhdb_replace: evicted stale entry path={:?} (stale_id_differs={})",
+                    fh.path,
+                    stale.id != fh.id
+                );
+            }
+        }
+        if let Err(e) = self.fhdb.try_insert(fh) {
+            error!(
+                "fhdb_replace: try_insert still failed after eviction: {:?}",
+                e
             );
         }
     }
@@ -543,13 +569,13 @@ impl FileManager {
         };
         self.fhdb.remove_by_id(&filehandle.id);
         debug!("Touching filehandle: {:?}", fh);
-        self.fhdb.insert(fh);
+        self.fhdb_replace(fh);
     }
 
     fn update_filehandle(&mut self, filehandle: Filehandle) {
         debug!("Updating filehandle: {:?}", &filehandle);
         self.fhdb.remove_by_id(&filehandle.id);
-        self.fhdb.insert(filehandle);
+        self.fhdb_replace(filehandle);
     }
 
     fn create_file(&mut self, request_file: &VfsPath) -> Option<Filehandle> {
@@ -663,7 +689,7 @@ impl FileManager {
                             fh_clone.version + 1,
                         )
                     };
-                    self.fhdb.insert(new_fh.clone());
+                    self.fhdb_replace(new_fh.clone());
                     return Some(new_fh);
                 }
             }
@@ -719,7 +745,7 @@ impl FileManager {
         } else {
             Filehandle::new(file.clone(), id, self.fsid, self.fsid, 0)
         };
-        self.fhdb.insert(fh.clone());
+        self.fhdb_replace(fh.clone());
         fh
     }
 
@@ -812,7 +838,7 @@ impl FileManager {
                         );
                     }
                     self.fhdb.remove_by_id(&old_fh.id);
-                    self.fhdb.insert(refreshed.clone());
+                    self.fhdb_replace(refreshed.clone());
                     refreshed
                 } else {
                     warn!(
