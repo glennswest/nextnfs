@@ -77,22 +77,26 @@ fi
 
 # ── Build static musl binary ────────────────────────────────────────────────
 
-echo "==> Building static musl binary (release)..."
-cargo build --release --target x86_64-unknown-linux-musl 2>&1
+echo "==> Building static musl binaries (release)..."
+cargo build --release --target x86_64-unknown-linux-musl -p nextnfs -p nextnfs-stress 2>&1
 
 BINARY="target/x86_64-unknown-linux-musl/release/nextnfs"
-if [ ! -f "$BINARY" ]; then
-    echo "FATAL: Binary not found at $BINARY"
-    exit 1
-fi
+STRESS_BINARY="target/x86_64-unknown-linux-musl/release/nextnfs-stress"
+for b in "$BINARY" "$STRESS_BINARY"; do
+    if [ ! -f "$b" ]; then
+        echo "FATAL: Binary not found at $b"
+        exit 1
+    fi
+done
 
 # Strip if strip is available
 if command -v strip >/dev/null 2>&1; then
-    strip "$BINARY" 2>/dev/null || true
+    strip "$BINARY" "$STRESS_BINARY" 2>/dev/null || true
 fi
 
-echo "  Binary: $(ls -lh "$BINARY" | awk '{print $5}')"
-echo "  Type:   $(file "$BINARY")"
+echo "  nextnfs:        $(ls -lh "$BINARY"        | awk '{print $5}')"
+echo "  nextnfs-stress: $(ls -lh "$STRESS_BINARY" | awk '{print $5}')"
+echo "  Type:           $(file "$BINARY")"
 
 # ── Build RPM ────────────────────────────────────────────────────────────────
 
@@ -102,6 +106,7 @@ rm -rf "$TOPDIR"
 mkdir -p "${TOPDIR}"/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
 
 cp "$BINARY"                       "${TOPDIR}/SOURCES/nextnfs"
+cp "$STRESS_BINARY"                "${TOPDIR}/SOURCES/nextnfs-stress"
 cp nextnfs.example.toml            "${TOPDIR}/SOURCES/nextnfs.toml"
 cp packaging/nextnfs.service       "${TOPDIR}/SOURCES/nextnfs.service"
 cp packaging/nextnfs.spec          "${TOPDIR}/SPECS/nextnfs.spec"

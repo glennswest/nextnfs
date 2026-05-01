@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### 2026-05-01
+- **build:** RPM now ships `nextnfs-stress` at `/usr/bin/nextnfs-stress` (Source3 in spec). `ci-rpm.sh` builds both crates and stages the stress binary. Removes the manual scp-to-/usr/local/bin step that previously caused an old binary to keep running because systemd ExecStart points at `/usr/bin/nextnfs`
+- **build:** new `ci/ci-stress.sh` — end-to-end pipeline for mkube runners: build RPM → `rpm -Uvh --force` on each target → restart service → run nextnfs-stress against the live mount → collect per-server logs and journals. Configurable via `TARGETS`, `COUNT`, `PARALLEL`, `SIZE` env vars
+
 ### 2026-04-28
 - **fix:** FileManager actor crash on duplicate fhdb keys — `multi_index_map::insert()` panics on a `hashed_unique` collision, which killed the FileManager tokio task and turned every subsequent NFS op into NFS4ERR_SERVERFAULT (cascading EIO/EREMOTEIO on the client). Found via 1000-file stress: under concurrent unlink-while-open the server panicked at `filehandle.rs:15` (the `MultiIndexMap` derive). Replaced all seven `fhdb.insert` callsites with a self-healing `fhdb_replace` helper that evicts existing entries by id and path before calling the non-panicking `try_insert`. After the fix, 8/9 stress phases pass on a real NFS mount with no actor restarts
 - **feat:** new `nextnfs-stress` Rust binary (workspace member `stress/`) — POSIX-path stress harness aimed at NFS mounts. Default 1000 files across nine phases: create, readdir, stat, read+verify, rename rotation, post-rename stat, unlink-while-open (silly-rename trigger), parallel workers (create+delete), and bulk delete. Reports per-phase ops/s, byte counts, and errno breakdowns; exits non-zero on any failure

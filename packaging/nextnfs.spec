@@ -8,6 +8,7 @@ URL:            https://github.com/glennswest/nextnfs
 Source0:        nextnfs
 Source1:        nextnfs.toml
 Source2:        nextnfs.service
+Source3:        nextnfs-stress
 
 %description
 NextNFS is a high-performance standalone NFSv4 server (v4.0/v4.1/v4.2)
@@ -19,6 +20,7 @@ Static musl binary — no shared library dependencies.
 install -D -m 0755 %{SOURCE0} %{buildroot}/usr/bin/nextnfs
 install -D -m 0644 %{SOURCE1} %{buildroot}/etc/nextnfs/nextnfs.toml
 install -D -m 0644 %{SOURCE2} %{buildroot}/usr/lib/systemd/system/nextnfs.service
+install -D -m 0755 %{SOURCE3} %{buildroot}/usr/bin/nextnfs-stress
 install -d -m 0755 %{buildroot}/var/lib/nextnfs
 install -d -m 0755 %{buildroot}/export
 
@@ -37,6 +39,7 @@ systemctl daemon-reload
 
 %files
 /usr/bin/nextnfs
+/usr/bin/nextnfs-stress
 %config(noreplace) /etc/nextnfs/nextnfs.toml
 /usr/lib/systemd/system/nextnfs.service
 %dir /var/lib/nextnfs
