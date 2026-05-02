@@ -116,7 +116,14 @@ impl Filehandle {
             id,
             path,
             attr_type,
-            attr_change: real_meta.mtime as u64,
+            // Sub-second resolution change attribute. mtime in seconds alone
+            // collides under bursts of concurrent ops within the same wall-
+            // clock second, leaving the kernel NFS client's readdir cache
+            // stale (rmdir then returns ENOTEMPTY locally without consulting
+            // the server). Pack secs * 1e9 + nsec for nanosecond resolution.
+            attr_change: (real_meta.mtime as u64)
+                .wrapping_mul(1_000_000_000)
+                .wrapping_add(real_meta.mtime_nsec as u64),
             attr_size: real_meta.size,
             attr_fileid: real_meta.ino,
             attr_fsid: Fsid4 { major, minor },
