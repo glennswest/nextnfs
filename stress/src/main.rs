@@ -347,10 +347,15 @@ async fn phase_parallel_workers(
             for i in 0..per_worker {
                 let path = dir.join(format!("p_{i:06}"));
                 let buf = payload(w * 1_000 + i, size);
-                let mut f = fs::File::create(&path).await?;
-                f.write_all(&buf).await?;
+                // tokio::fs::write opens, writes, and CLOSES synchronously
+                // before returning — using File::create + drop leaves close
+                // fire-and-forget on the blocking pool, racing with the
+                // remove_file below and leaving the kernel NFS client with
+                // open-file silly-rename remnants in the workdir.
+                let bytes_written = buf.len() as u64;
+                fs::write(&path, &buf).await?;
                 local_ops += 1;
-                local_bytes += buf.len() as u64;
+                local_bytes += bytes_written;
             }
             for i in 0..per_worker {
                 let path = dir.join(format!("p_{i:06}"));
