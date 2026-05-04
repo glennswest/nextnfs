@@ -77,9 +77,18 @@ pub struct CreateOpenStateRequest {
     pub respond_to: oneshot::Sender<Option<LockingState>>,
 }
 
+/// Atomic change-info returned by directory-modifying ops so the client
+/// can update its cached readdir/dentry state without a follow-up GETATTR.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DirChangeInfo {
+    pub before: u64,
+    pub after: u64,
+    pub atomic: bool,
+}
+
 pub struct RemoveFileRequest {
     pub path: VfsPath,
-    pub respond_to: oneshot::Sender<Result<(), NfsStat4>>,
+    pub respond_to: oneshot::Sender<Result<DirChangeInfo, NfsStat4>>,
 }
 
 pub struct TouchFileRequest {
@@ -465,7 +474,7 @@ impl FileManagerHandle {
         }
     }
 
-    pub async fn remove_file(&self, path: VfsPath) -> Result<(), FileManagerError> {
+    pub async fn remove_file(&self, path: VfsPath) -> Result<DirChangeInfo, FileManagerError> {
         let (tx, rx) = oneshot::channel();
         if let Err(e) = self.sender.send(FileManagerMessage::RemoveFile(RemoveFileRequest {
             path,
@@ -475,7 +484,7 @@ impl FileManagerHandle {
             return Err(FileManagerError { nfs_error: NfsStat4::Nfs4errServerfault });
         }
         match rx.await {
-            Ok(Ok(())) => Ok(()),
+            Ok(Ok(cinfo)) => Ok(cinfo),
             Ok(Err(nfs_error)) => Err(FileManagerError { nfs_error }),
             Err(_) => Err(FileManagerError {
                 nfs_error: NfsStat4::Nfs4errServerfault,

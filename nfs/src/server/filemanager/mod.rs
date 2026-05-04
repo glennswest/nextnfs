@@ -17,7 +17,7 @@ mod handle;
 mod locking;
 
 use filehandle::FilehandleDb;
-use handle::{FileManagerMessage, WriteCacheHandle};
+use handle::{DirChangeInfo, FileManagerMessage, WriteCacheHandle};
 use locking::{LockType, LockingState, LockingStateDb};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
@@ -215,6 +215,12 @@ impl FileManager {
                 let filehandle = self.get_filehandle_by_path(&req.path.as_str().to_string());
                 let mut parent_path = req.path.parent().as_str().to_string();
                 let is_dir = req.path.is_dir().unwrap_or(false);
+                // Capture parent dir change attr before the modification so we
+                // can return atomic ChangeInfo4 to the client. Without real
+                // before/after values the kernel falls back on cached attrs
+                // and may return ENOTEMPTY for an already-empty directory.
+                let parent_for_cinfo = req.path.parent();
+                let before_change = self.dir_change_attr(&parent_for_cinfo);
 
                 // Silly-rename: if a regular file has active open locks, rename
                 // it to a hidden name instead of deleting. The kernel client can
@@ -292,7 +298,13 @@ impl FileManager {
                     }
                 }
 
-                let _ = req.respond_to.send(remove_result);
+                let after_change = self.dir_change_attr(&parent_for_cinfo);
+                let cinfo = DirChangeInfo {
+                    before: before_change,
+                    after: after_change,
+                    atomic: true,
+                };
+                let _ = req.respond_to.send(remove_result.map(|_| cinfo));
             }
             FileManagerMessage::TouchFile(req) => {
                 let filehandle = self.get_filehandle_by_id(&req.id);
@@ -335,6 +347,19 @@ impl FileManager {
             self.export_root.clone()
         } else {
             self.export_root.join(rel.trim_start_matches('/'))
+        }
+    }
+
+    /// Read the directory's current change attribute from disk (mtime in
+    /// nanoseconds). Used to populate ChangeInfo4 before/after on operations
+    /// that modify the directory.
+    fn dir_change_attr(&self, dir: &VfsPath) -> u64 {
+        let real_path = self.real_path(dir);
+        match RealMeta::from_path(&real_path) {
+            Some(m) => (m.mtime as u64)
+                .wrapping_mul(1_000_000_000)
+                .wrapping_add(m.mtime_nsec as u64),
+            None => 0,
         }
     }
 

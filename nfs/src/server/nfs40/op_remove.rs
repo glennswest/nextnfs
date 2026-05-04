@@ -55,14 +55,14 @@ impl NfsOperation for Remove4args {
                 };
                 let res = request.file_manager().remove_file(path).await;
                 match res {
-                    Ok(_) => NfsOpResponse {
+                    Ok(cinfo) => NfsOpResponse {
                         request,
                         result: Some(NfsResOp4::Opremove(Remove4res {
                             status: NfsStat4::Nfs4Ok,
                             cinfo: ChangeInfo4 {
-                                atomic: false,
-                                before: 0,
-                                after: 0,
+                                atomic: cinfo.atomic,
+                                before: cinfo.before,
+                                after: cinfo.after,
                             },
                         })),
                         status: NfsStat4::Nfs4Ok,
