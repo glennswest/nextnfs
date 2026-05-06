@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### 2026-05-06
+- **chore:** Migrated stormfs design docs (stormfs.md, overlay-vfs.md, dm-verity-layers.md, kubernetes-integration.md) to glennswest/stormfs
+- **chore:** Migrated registry design docs (overlay-registry.md, replicated-overlay-registry.md) to glennswest/nextregistry
+- **chore:** Transferred 46 open enhancement issues (StormFS phases 1-6) from nextnfs to glennswest/stormfs. nextnfs scope is now NFS-server-proper plus Fedora/RHEL packaging
+
 ### 2026-05-04
 - **fix:** NFSv4 `change` attribute was second-resolution (`mtime as u64`), so bursts of concurrent ops within the same wall-clock second left the parent dir's change attr unchanged. Linux NFS clients then trusted their cached readdir state and rmdir'd against stale dentries, returning ENOTEMPTY locally without consulting the server. Pack `mtime_sec * 1e9 + mtime_nsec` for nanosecond resolution
 - **fix(stress):** `phase_parallel_workers` used `tokio::fs::File::create + write_all`; `tokio::fs::File::drop` is fire-and-forget on the blocking pool, so close raced with the unlink that immediately followed. Switched to `tokio::fs::write()` which delegates to synchronous `std::fs::write` inside `spawn_blocking`, guaranteeing full close before returning. Cross-host stress at parallel=64 went from 57/64 worker failures to 0/5 iterations failing
