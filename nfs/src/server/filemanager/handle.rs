@@ -307,6 +307,21 @@ impl FileManagerHandle {
         }
     }
 
+    /// Read the directory's current change attribute (mtime in nanoseconds)
+    /// directly from the underlying filesystem. Used by op_open/op_create to
+    /// populate ChangeInfo4 before/after for directory-modifying operations
+    /// that execute outside the FileManager actor (so cinfo.atomic = false).
+    pub fn dir_change_attr(&self, vfs_path: &str) -> u64 {
+        let real_path = self.real_path(vfs_path);
+        super::filehandle::RealMeta::from_path(&real_path)
+            .map(|m| {
+                (m.mtime as u64)
+                    .wrapping_mul(1_000_000_000)
+                    .wrapping_add(m.mtime_nsec as u64)
+            })
+            .unwrap_or(0)
+    }
+
     async fn send_filehandle_request(
         &self,
         path: Option<String>,

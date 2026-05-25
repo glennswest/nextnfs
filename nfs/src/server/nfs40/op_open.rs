@@ -164,6 +164,12 @@ async fn open_for_writing<'a>(
         }
     };
 
+    // Capture parent dir change attr before the create so we can return real
+    // ChangeInfo4 before/after — kernel clients need this to keep their
+    // dentry/readdir caches in sync with directory mutations.
+    let parent_vfs_str = filehandle.path.clone();
+    let before_change = request.file_manager().dir_change_attr(&parent_vfs_str);
+
     let filehandle = match how {
         CreateHow4::UNCHECKED4(_fattr) => {
             match request
@@ -230,6 +236,8 @@ async fn open_for_writing<'a>(
     // we expect this filehandle to have one lock (for the shared reservation)
     let lock = &filehandle.locks[0];
 
+    let after_change = request.file_manager().dir_change_attr(&parent_vfs_str);
+
     NfsOpResponse {
         request,
         result: Some(NfsResOp4::Opopen(Open4res::Resok4(Open4resok {
@@ -239,8 +247,8 @@ async fn open_for_writing<'a>(
             },
             cinfo: ChangeInfo4 {
                 atomic: false,
-                before: 0,
-                after: 0,
+                before: before_change,
+                after: after_change,
             },
             // OPEN4_RESULT_CONFIRM indicates that the client MUST execute an
             // OPEN_CONFIRM operation before using the open file.

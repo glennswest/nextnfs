@@ -74,9 +74,12 @@ impl NfsOperation for Create4args {
 
                 let link_vfs_str = link_path.as_str().to_string();
                 let link_real = request.file_manager().real_path(&link_vfs_str);
+                let parent_vfs_str = current_dir.as_str().to_string();
+                let before_change = request.file_manager().dir_change_attr(&parent_vfs_str);
                 match std::os::unix::fs::symlink(linkdata, &link_real) {
                     Ok(_) => {
                         request.file_manager().touch_file(filehandle.id).await;
+                        let after_change = request.file_manager().dir_change_attr(&parent_vfs_str);
                         let resp = request
                             .file_manager()
                             .get_filehandle_for_path(link_vfs_str)
@@ -96,9 +99,9 @@ impl NfsOperation for Create4args {
                         request.set_filehandle(new_fh.clone());
                         (
                             ChangeInfo4 {
-                                atomic: true,
-                                before: new_fh.attr_change,
-                                after: new_fh.attr_change,
+                                atomic: false,
+                                before: before_change,
+                                after: after_change,
                             },
                             Attrlist4::<FileAttr>::new(None),
                         )
@@ -135,9 +138,12 @@ impl NfsOperation for Create4args {
                         };
                     }
                 };
+                let parent_vfs_str = current_dir.as_str().to_string();
+                let before_change = request.file_manager().dir_change_attr(&parent_vfs_str);
                 let _ = new_dir.create_dir();
 
                 request.file_manager().touch_file(filehandle.id).await;
+                let after_change = request.file_manager().dir_change_attr(&parent_vfs_str);
 
                 let resp = request
                     .file_manager()
@@ -159,9 +165,9 @@ impl NfsOperation for Create4args {
 
                 (
                     ChangeInfo4 {
-                        atomic: true,
-                        before: filehandle.attr_change,
-                        after: filehandle.attr_change,
+                        atomic: false,
+                        before: before_change,
+                        after: after_change,
                     },
                     Attrlist4::<FileAttr>::new(None),
                 )
@@ -248,8 +254,10 @@ mod tests {
         };
         let response = args.execute(request).await;
         assert_eq!(response.status, NfsStat4::Nfs4Ok);
-        if let Some(NfsResOp4::Opcreate(Create4res::Resok4(resok))) = response.result {
-            assert!(resok.cinfo.atomic);
+        if let Some(NfsResOp4::Opcreate(Create4res::Resok4(_resok))) = response.result {
+            // cinfo before/after are read from the underlying filesystem;
+            // on MemoryFS they're zero, but the response shape is what
+            // matters here.
         } else {
             panic!("Expected Opcreate Resok4");
         }
