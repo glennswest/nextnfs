@@ -362,7 +362,27 @@ async fn phase_parallel_workers(
                 fs::remove_file(&path).await?;
                 local_ops += 1;
             }
-            fs::remove_dir(&dir).await?;
+            if let Err(e) = fs::remove_dir(&dir).await {
+                // Diagnostic: at the moment rmdir failed, what does the
+                // kernel think is in the directory? Snapshot the readdir
+                // result so we can tell whether dcache lag or genuine
+                // server-side leftover (e.g., .nfs.* silly-rename) is to
+                // blame.
+                let mut listing = Vec::new();
+                if let Ok(mut rd) = fs::read_dir(&dir).await {
+                    while let Ok(Some(entry)) = rd.next_entry().await {
+                        listing.push(entry.file_name().to_string_lossy().into_owned());
+                    }
+                }
+                tracing::warn!(
+                    "rmdir({}) failed: {} — readdir snapshot ({}): {:?}",
+                    dir.display(),
+                    e,
+                    listing.len(),
+                    listing
+                );
+                return Err(e);
+            }
             Ok::<(u64, u64), std::io::Error>((local_ops, local_bytes))
         });
         handles.push(h);
