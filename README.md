@@ -1,78 +1,70 @@
 # nextnfs
 
-High-performance standalone NFSv4.0 server over a real filesystem. Runs as a static musl binary in a scratch/stormd container. Supports multiple exports, REST API management, and a built-in web UI.
+High-performance, standalone **NFSv4.0 server over a real filesystem**, written in Rust. Runs as a static musl binary in a scratch/[stormd](https://github.com/glennswest/stormd) container, or as an RPM/DEB service on Fedora/RHEL/Debian. Multiple exports, a REST API + web UI for management, and NFSv4 protocol correctness verified against real Linux clients.
+
+Current version: **0.13.9**.
 
 ## Features
 
-- **NFSv4.0** — full compound operations, OPEN/CLOSE/OPEN_DOWNGRADE, READ/WRITE/COMMIT, READDIR, READLINK, CREATE, REMOVE, RENAME, VERIFY/NVERIFY, SECINFO
-- **Multi-export** — serve multiple filesystem paths as separate NFS exports
-- **Pseudo-filesystem root** — NFSv4 namespace with exports as top-level directories
-- **REST API** — manage exports, view stats, health checks (axum on port 8080)
-- **Web UI** — Dracula-themed dashboard, integrates into stormd as an iframe tab
+- **NFSv4.0** — full compound operations: OPEN/CLOSE/OPEN_DOWNGRADE, READ/WRITE/COMMIT, READDIR, READLINK, CREATE, REMOVE, RENAME, LINK, VERIFY/NVERIFY, SECINFO
 - **Byte-range locking** — LOCK, LOCKT, LOCKU, RELEASE_LOCKOWNER with conflict detection
-- **Real filesystem metadata** — stat()-based attrs (mode, uid, gid, nlink, atime/mtime/ctime)
-- **Persistent file handles** — inode-based (dev:ino), survives server restarts
-- **Hard links and symlinks** — LINK and READLINK operations
-- **Direct I/O writes** — no in-memory buffering, fsync on COMMIT
-- **TCP tuning** — 4 MB socket buffers, TCP_NODELAY, keepalive
+- **Multi-export** — serve multiple filesystem paths as separate exports under an NFSv4 pseudo-filesystem root; single-export mode is fully backwards-compatible
+- **Real-filesystem semantics** — `stat()`-based attributes (mode/uid/gid/nlink/atime/mtime/ctime), inode-based persistent file handles (`dev:ino`, survive restart), hard links and symlinks, direct-I/O writes with `fsync` on COMMIT
+- **REST API + Web UI** — manage exports, view per-export stats, health checks (axum on :8080); Dracula-themed dashboard that integrates into stormd as an iframe tab
+- **Operationally lean** — ~5 MB stripped static binary (x86_64-musl), TCP tuning (4 MB socket buffers, `TCP_NODELAY`, keepalive), scratch container
 
-## Quick Start
+## NFSv4 correctness
+
+nextnfs is tested against the real Linux kernel NFS client, and much of its maturity is in the protocol edge cases that only surface there:
+
+- **Nanosecond `change` attribute** — packs `mtime_sec·1e9 + mtime_nsec` so bursts of concurrent ops within one wall-clock second invalidate the client's readdir cache correctly (a second-resolution `change` let clients `rmdir` against stale dentries and return `ENOTEMPTY` locally)
+- **Inode-preserving RENAME** — uses `std::fs::rename()` (atomic, preserves inode) instead of a copy-and-delete fallback that changed the fileid and triggered `ESTALE`
+- **Silly-rename handling** — recovers filehandles for both client-side (`.nfs*`) and server-side silly-renames via inode-based fallback; defers deletion of open-but-removed files to a periodic sweep so an open fd can still READ after CLOSE
+- **Crash-resistant filehandle DB** — a self-healing `fhdb_replace` helper replaced panicking `MultiIndexMap` inserts that could kill the `FileManager` actor and cascade every subsequent op into `NFS4ERR_SERVERFAULT`
+- **UTF-8 filenames** — a custom `utf8_opaque` XDR serializer removes the ASCII-only restriction so names like `filé_ñame_日本語` serialize instead of timing out the client
+- **Correct sparse/append writes** — `O_APPEND` only at exact EOF; `pwrite` for writes past EOF (preserving holes); atomic concurrent appends
+
+## Testing
+
+Two companion workspace crates:
+
+- **`nextnfstest`** — comprehensive NFS protocol test suite (v3, v4.0, v4.1, v4.2), wire-level, with an HTML report and web view
+- **`nextnfs-stress`** — POSIX-path stress harness aimed at a live NFS mount: 1000 files across nine phases (create, readdir, stat, read+verify, rename rotation, post-rename stat, unlink-while-open silly-rename trigger, parallel workers, bulk delete), reporting per-phase ops/s and errno breakdowns
+
+464 tests pass. `ci/ci-stress.sh` drives an end-to-end mkube pipeline: build RPM → `rpm -Uvh` on each target → restart service → run `nextnfs-stress` against the live mount → collect per-server logs and journals.
+
+## Quick start
 
 ### Container (recommended)
 
 ```bash
-# Run on Fedora CoreOS (x86_64)
 podman run -d \
   -v /export:/export:z \
   -p 2049:2049 -p 8080:8080 -p 9080:9080 -p 2222:22 \
   registry.gt.lo:5000/nextnfs:latest
-
-# Mount from a client
 mount -t nfs4 server:/ /mnt
 ```
-
-Container includes [stormd](https://github.com/glennswest/stormd) for process supervision, auto-restart, logging, SSH, and web dashboard. The NextNFS web UI appears as an integrated tab.
 
 | Port | Service |
 |------|---------|
 | 2049 | NFS |
-| 8080 | NextNFS REST API + Web UI |
-| 9080 | stormd web dashboard + REST API |
-| 22   | SSH shell (password: `nextnfs`) |
+| 8080 | nextnfs REST API + Web UI |
+| 9080 | stormd dashboard + REST API |
+| 22   | SSH shell |
 
-### RPM (Fedora/RHEL)
+### RPM / DEB
 
 ```bash
-sudo rpm -i nextnfs-0.11.0-1.x86_64.rpm
-# Installs to /usr/bin/nextnfs, config at /etc/nextnfs/nextnfs.toml
-# Enables and starts nextnfs.service automatically
-
-sudo systemctl status nextnfs
+sudo rpm -i nextnfs-0.13.9-1.x86_64.rpm     # Fedora/RHEL
+sudo dpkg -i nextnfs_0.13.9_amd64.deb        # Debian/Ubuntu
+# installs /usr/bin/nextnfs (+ /usr/bin/nextnfs-stress), config /etc/nextnfs/nextnfs.toml,
+# enables and starts nextnfs.service
 ```
 
-### DEB (Debian/Ubuntu)
+### Binary / config
 
 ```bash
-sudo dpkg -i nextnfs_0.11.0_amd64.deb
-# Installs to /usr/bin/nextnfs, config at /etc/nextnfs/nextnfs.toml
-# Enables and starts nextnfs.service automatically
-
-sudo systemctl status nextnfs
-```
-
-### Binary
-
-```bash
-# Single export (backwards-compatible)
 nextnfs --export /path/to/share --listen 0.0.0.0:2049
-
-# Or explicitly use the serve subcommand
-nextnfs serve --export /path/to/share --api-listen 0.0.0.0:8080
-```
-
-### With config file
-
-```bash
 nextnfs --config nextnfs.toml
 ```
 
@@ -81,12 +73,6 @@ nextnfs --config nextnfs.toml
 listen = "0.0.0.0:2049"
 api_listen = "0.0.0.0:8080"
 
-# Single export (legacy, still works)
-[export]
-path = "/export"
-read_only = false
-
-# Multi-export
 [[exports]]
 name = "data"
 path = "/data"
@@ -102,88 +88,46 @@ read_only = true
 
 ```
 nextnfs [serve] [--export PATH] [--listen ADDR] [--api-listen ADDR] [--config FILE]
-nextnfs export list [--api URL]
-nextnfs export add --name NAME --path PATH [--read-only] [--api URL]
-nextnfs export remove --name NAME [--api URL]
-nextnfs stats [--api URL]
-nextnfs health [--api URL]
+nextnfs export list | add --name N --path P [--read-only] | remove --name N
+nextnfs stats | health   [--api URL]     # default http://127.0.0.1:8080
 ```
-
-Default API URL for CLI subcommands is `http://127.0.0.1:8080`.
 
 ## REST API
 
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/health` | Health check |
-| GET | `/api/v1/exports` | List all exports with stats |
-| POST | `/api/v1/exports` | Add export `{"name":"x","path":"/x","read_only":false}` |
+| GET | `/api/v1/exports` | List exports with stats |
+| POST | `/api/v1/exports` | Add `{"name","path","read_only"}` |
 | DELETE | `/api/v1/exports/{name}` | Remove export |
-| GET | `/api/v1/stats` | Server-wide stats |
-| GET | `/api/v1/stats/{name}` | Per-export stats |
-| GET | `/` | Web UI dashboard |
-| GET | `/ui/exports` | Export management page |
-| GET | `/ui/stats` | Statistics page |
-
-```bash
-# List exports
-curl -s http://localhost:8080/api/v1/exports | python3 -m json.tool
-
-# Add an export
-curl -s -X POST http://localhost:8080/api/v1/exports \
-  -H 'Content-Type: application/json' \
-  -d '{"name":"share","path":"/data/share","read_only":false}'
-
-# Remove an export
-curl -s -X DELETE http://localhost:8080/api/v1/exports/share
-
-# Server stats
-curl -s http://localhost:8080/api/v1/stats | python3 -m json.tool
-```
-
-## Build
-
-Requires Rust 1.75+ and [musl-cross](https://github.com/nickhutchinson/homebrew-musl-cross) for cross-compilation.
-
-```bash
-# Debug build (macOS, for development)
-make build
-
-# Static x86_64 binary (for Fedora CoreOS)
-make build-x86
-
-# Static aarch64 binary (for MikroTik Rose)
-make build-arm64
-
-# Build and tag x86_64 container
-make container-x86
-
-# Build and tag aarch64 container
-make container-arm64
-
-# Push to registry
-make push
-
-# Build RPM (Fedora/RHEL)
-make rpm-x86       # x86_64
-make rpm-arm64     # aarch64
-
-# Build DEB (Debian/Ubuntu)
-make deb-x86       # amd64
-make deb-arm64     # arm64
-```
+| GET | `/api/v1/stats` · `/api/v1/stats/{name}` | Server / per-export stats |
+| GET | `/` · `/ui/exports` · `/ui/stats` | Web UI |
 
 ## Architecture
 
-Three-crate Rust workspace:
+Five-crate Rust workspace:
 
-- **nextnfs-proto** — XDR codec, NFS4/RPC protocol types
-- **nextnfs-server** — NFSv4.0 server library (ExportManager, FileManager actors, compound operations, locking)
-- **nextnfs** — CLI binary with clap subcommands, REST API (axum), Web UI
+- **`nextnfs-proto`** (`proto/`) — XDR codec, RPC and NFSv4 protocol types
+- **`nextnfs-server`** (`nfs/`) — the NFSv4.0 server library: `ExportManager` and `FileManager` actors, compound operation handling, locking, pseudo-fs root
+- **`nextnfs`** (`.`) — CLI binary (clap subcommands), REST API (axum), Web UI
+- **`nextnfstest`** (`nfstest/`) — NFS v3/v4.0/4.1/4.2 protocol test suite
+- **`nextnfs-stress`** (`stress/`) — live-mount POSIX stress harness
 
-The ExportManager actor manages multiple exports, each with its own FileManagerHandle. The NFSv4 pseudo-filesystem root presents exports as top-level directories. Single-export mode is fully backwards-compatible — PUTROOTFH goes directly to the export root.
+`ExportManager` owns multiple exports, each with its own `FileManagerHandle`; the NFSv4 pseudo-fs root presents exports as top-level directories. Single-export mode routes `PUTROOTFH` straight to the export root.
 
-Binary size: ~5 MB stripped (x86_64-musl) with REST API.
+> The overlay + dm-verity layering primitives that once lived here were **extracted into the standalone [`rspacefs`](https://github.com/glennswest/rspacefs) project** — layered-rootfs primitives shouldn't carry an NFS server in their data path. nextnfs does **not** depend on rspacefs; the two are independent. nextnfs's scope is now NFS-server-proper plus Fedora/RHEL/Debian packaging.
+
+## Build
+
+```bash
+make build            # debug (dev)
+make build-x86        # static x86_64-musl (Fedora CoreOS)
+make build-arm64      # static aarch64 (MikroTik Rose)
+make container-x86 | container-arm64 | push
+make rpm-x86 | rpm-arm64 | deb-x86 | deb-arm64
+```
+
+Requires Rust 1.75+.
 
 ## License
 
