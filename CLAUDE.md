@@ -34,6 +34,10 @@ RPM with `packaging/nextnfs-run-tests`), `packaging/` (RPM/DEB/systemd),
 - **RPM / DEB** (`make rpm-x86|deb-x86`, `packaging/build-*.sh`): `/usr/bin/nextnfs`,
   `/usr/bin/nextnfs-stress`, `/etc/nextnfs/nextnfs.toml` (from
   `nextnfs.example.toml`), `nextnfs.service` running `serve --config /etc/nextnfs/nextnfs.toml`.
+  RPM `%post` enables the service but does not start it; DEB `postinst`
+  enables and starts it. The DEB lacks `nextnfs-stress` and does not create
+  `/export` / `/var/lib/nextnfs` (#96). `make rpm-*` is broken (#95) —
+  `ci-rpm.sh` is the working RPM path.
 - **Container** (`build.sh`, `make container-*`): `stormdbase` image, stormd as
   PID 1, which runs `nextnfs serve --export /export` (CLI flags — the copied
   `/etc/nextnfs/nextnfs.toml` is **not** read in the container).
@@ -44,8 +48,8 @@ RPM with `packaging/nextnfs-run-tests`), `packaging/` (RPM/DEB/systemd),
 
 Config keys that parse but do not do what their names say:
 `max_bytes_per_sec` (not enforced), `squash`/`anon_uid`/`anon_gid` (only
-rewrites GETATTR owner display), `rdma_device`/`rdma_port` (logged only). See
-`gh issue list`.
+rewrites GETATTR owner display), `rdma_device`/`rdma_port` (logged only). Packaging: #95 (`make rpm-*`),
+#96 (DEB dirs). See `gh issue list`.
 
 ## Work plan
 
@@ -56,6 +60,9 @@ rewrites GETATTR owner display), `rdma_device`/`rdma_port` (logged only). See
       and mkube references marked retired, example config annotated.
 - [x] 2026-09-27 — #93 `read_only` enforced in the COMPOUND dispatcher
       (NFS4ERR_ROFS via `NfsResOp4::OpError`; ACCESS drops write bits).
+- [x] 2026-09-27 — third pass: packaging checked against the docs; README
+      RPM-vs-DEB table, RPM `%description` / DEB control no longer claim
+      v4.2/pNFS/RDMA/quota/OverlayFS; issues #95, #96 filed.
 - [ ] #93 verify: `sc-build 'cargo test --workspace'` for 3f2ef53 was queued
       (not yet run) at the 2026-09-27 session restart — rerun it. Note plain
       `sc-build` (`cargo test`) only tests the root crate, so the lib tests

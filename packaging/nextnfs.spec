@@ -11,10 +11,12 @@ Source2:        nextnfs.service
 Source3:        nextnfs-stress
 
 %description
-NextNFS is a high-performance standalone NFSv4 server (v4.0/v4.1/v4.2)
-with support for pNFS, delegations, RPCSEC_GSS, RPC-over-TLS, RDMA framing,
-per-export QoS rate limiting, quota enforcement, and OverlayFS backends.
-Static musl binary — no shared library dependencies.
+NextNFS is a standalone NFSv4.0/4.1 server over a real filesystem, in Rust.
+Multiple exports under a pseudo-root, per-export client allow-lists and
+operation rate limits, read-only exports, byte-range locking, RPC-over-TLS
+(RFC 9289), client-state snapshots for restart without a grace period, and a
+REST API + web UI. NFSv4.2 COMPOUNDs are rejected; pNFS layouts are refused
+(LAYOUTUNAVAILABLE). Static musl binary — no shared library dependencies.
 
 %install
 install -D -m 0755 %{SOURCE0} %{buildroot}/usr/bin/nextnfs

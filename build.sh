@@ -32,4 +32,4 @@ esac
 echo ""
 echo "Built: ${IMAGE}:${VERSION}"
 echo "Push:  podman push --tls-verify=false ${IMAGE}:${VERSION}"
-echo "Run:   podman run -d -v /export:/export:z -p 2049:2049 -p 9080:9080 -p 2222:22 ${IMAGE}:${VERSION}"
+echo "Run:   podman run -d -v /export:/export:z -p 2049:2049 -p 8080:8080 -p 9080:9080 -p 2222:22 ${IMAGE}:${VERSION}"

@@ -65,9 +65,14 @@ In the container, stormd (`stormd.toml`) starts `nextnfs serve --export /export 
 ```bash
 sudo rpm -i nextnfs-0.13.9-1.x86_64.rpm     # Fedora/RHEL
 sudo dpkg -i nextnfs_0.13.9_amd64.deb        # Debian/Ubuntu
-# installs /usr/bin/nextnfs (+ /usr/bin/nextnfs-stress), config /etc/nextnfs/nextnfs.toml,
-# enables and starts nextnfs.service
 ```
+
+| | RPM | DEB |
+|---|---|---|
+| `/usr/bin/nextnfs`, `/etc/nextnfs/nextnfs.toml`, `nextnfs.service` | yes | yes |
+| `/usr/bin/nextnfs-stress` | yes | no |
+| creates `/export`, `/var/lib/nextnfs` | yes | **no** — create them before starting ([#96](https://github.com/glennswest/nextnfs/issues/96)) |
+| after install | service **enabled**, not started (`systemctl start nextnfs`) | service enabled and started |
 
 `nextnfs.service` runs `nextnfs serve --config /etc/nextnfs/nextnfs.toml` as root with systemd hardening; only `/export` and `/var/lib/nextnfs` are writable (`ReadWritePaths`), so exports elsewhere need a drop-in that adds their paths. The shipped config is `nextnfs.example.toml` (single export `/export`, `state_dir = /var/lib/nextnfs`), marked `%config(noreplace)`.
 
@@ -174,6 +179,8 @@ make build-arm64      # static aarch64 (MikroTik Rose)
 make container-x86 | container-arm64 | push
 make rpm-x86 | rpm-arm64 | deb-x86 | deb-arm64
 ```
+
+`make rpm-*` currently fails because `packaging/build-rpm.sh` does not stage `nextnfs-stress` ([#95](https://github.com/glennswest/nextnfs/issues/95)); `ci-rpm.sh` (x86_64: workspace tests, clippy, musl build of both binaries, rpmbuild) is the working RPM path. `make build-*` builds only the `nextnfs` binary.
 
 Development builds and tests in the stormcentral environment go through `sc-build` (`cargo build && cargo test` on the build box, after `git push`).
 
