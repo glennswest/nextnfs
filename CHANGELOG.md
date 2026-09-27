@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### 2026-09-27
+- **docs:** Refreshed README from the code: NFSv4.1 sessions (v4.2 rejected), full configuration reference with defaults (`[server]`, `[[exports]]`, legacy `[export]`, CLI precedence), per-export `clients`/`max_ops_per_sec`, RPC-over-TLS, `state_dir` snapshots (30 s, no grace period), REST API response shapes and `/api/v1/qos/{name}`, container vs RPM/DEB shipping (container runs CLI flags, ignores the baked TOML), `tests/*.sh` / `nextnfs-tests` RPM. Unimplemented keys flagged with issues: `read_only` (#93), `max_bytes_per_sec` (#90), `squash`/`anon_*` (#91), `rdma_*` (#92)
+- **docs:** `doc/deploynextnfsusingcloudid.md` — image build via `build.sh`/`make container-*` (bare `podman build .` compiled nothing and used the aarch64 Containerfile); mkube steps marked retired; ports 8080/9080 noted
+- **docs:** `nextnfs.example.toml` comments mark the unenforced keys; project `CLAUDE.md` added
+
 ### 2026-05-19
 - **chore:** Extracted overlay + verity into standalone [rspacefs](https://github.com/glennswest/rspacefs) project. `nfs/src/server/overlay.rs` (1031 LOC) and `nfs/src/server/verity.rs` (1389 LOC) removed; `pub mod overlay;` and `pub mod verity;` dropped from `server/mod.rs`. ExportManager loses the `AddOverlayExport` message variant, `AddOverlayExportRequest` struct, `add_overlay_export` actor handler, `ExportManagerHandle::add_overlay_export`, and 9 related `#[tokio::test]` cases. Motivation: layered-rootfs primitives shouldn't carry an NFS server in their data path. rspacefs reimplements the same userspace OverlayFS + dm-verity directly on `vfs::FileSystem`, with no protocol or async, for high-IOPS callers like container runtimes and image builders. nextnfs does **not** depend on rspacefs; the two projects are fully independent. Extraction spec retained at `enhancements/extract-rspacefs.md`. All 464 nextnfs tests still pass.
 

@@ -43,7 +43,7 @@ RPM with `packaging/nextnfs-run-tests`), `packaging/` (RPM/DEB/systemd),
 ## Known gaps (tracked as issues)
 
 Config keys that parse but do not do what their names say:
-`max_bytes_per_sec` (not enforced), `squash`/`anon_uid`/`anon_gid` (only
+`read_only` (not enforced — #93, data-safety), `max_bytes_per_sec` (not enforced), `squash`/`anon_uid`/`anon_gid` (only
 rewrites GETATTR owner display), `rdma_device`/`rdma_port` (logged only). See
 `gh issue list`.
 
@@ -51,3 +51,7 @@ rewrites GETATTR owner display), `rdma_device`/`rdma_port` (logged only). See
 
 - [x] 2026-09-27 — docs refresh from code (README config/API reference, deploy
       guide build commands, this file); issues filed for the gaps above.
+- [x] 2026-09-27 — second pass: README `read_only` row corrected (#93),
+      `doc/` deploy guide build step fixed (build.sh, not bare `podman build`)
+      and mkube references marked retired, example config annotated.
+- [ ] #93 `read_only` enforcement (P1 data-safety), then #90/#91/#92.

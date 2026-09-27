@@ -1,30 +1,34 @@
 # Deploying NextNFS Using CloudID
 
+> **Status (2026-09-27):** this guide was written for the mkube-managed lab, and mkube was retired on 2026-08-27. The CloudID/Ignition flow and container settings below are still what the `nextnfs.ign.json` template does; the mkube-specific steps (BareMetalHost CRD, `mk annotate`) no longer apply — reboot the host by whatever manages it now.
+
 This guide covers deploying NextNFS on bare metal hosts running Fedora CoreOS (FCOS) using CloudID's template system. CloudID serves an Ignition config at boot time that partitions the disk, sets up the filesystem, and runs the NextNFS container automatically.
 
 ## Prerequisites
 
-- A bare metal host managed by mkube (BareMetalHost CRD)
+- A bare metal host that PXE boots Fedora CoreOS (previously managed by mkube's BareMetalHost CRD — mkube is retired)
 - CloudID running and reachable at `192.168.200.20:8090`
 - The host's network has DNS resolution for `registry.gt.lo` (see Known Issues below)
 - The NextNFS container image pushed to the registry
 
 ## Step 1: Build and Push the Container Image
 
-Build the NextNFS container and push it to the local registry:
+The image is built from a locally compiled static musl binary — `podman build .` on its own does not compile anything, and the default `Containerfile` is the **aarch64** variant. Use `build.sh` (or `make container-x86|container-arm64`):
 
 ```bash
 cd /path/to/nextnfs
 
-# Build for ARM64 (if your hosts are ARM64)
-podman build --platform linux/arm64 -t registry.gt.lo:5000/nextnfs:latest .
+# x86_64 (Fedora CoreOS) — cargo build --target x86_64-unknown-linux-musl, then Containerfile.x86_64
+./build.sh x86
 
-# Or build for x86_64
-podman build -t registry.gt.lo:5000/nextnfs:latest .
+# or ARM64 — cargo build --target aarch64-unknown-linux-musl, then Containerfile
+./build.sh arm64
 
-# Push to registry
+# Push (build.sh tags both :<version> and :latest)
 podman push --tls-verify=false registry.gt.lo:5000/nextnfs:latest
 ```
+
+The image is `stormdbase` with stormd as PID 1; stormd starts `nextnfs serve --export /export --listen 0.0.0.0:2049 --api-listen 0.0.0.0:8080`. The `/etc/nextnfs/nextnfs.toml` copied into the image is not read unless the process args in `stormd.toml` are changed to `serve --config /etc/nextnfs/nextnfs.toml`.
 
 ## Step 2: Upload the Template to CloudID
 
@@ -72,11 +76,7 @@ curl -s http://169.254.169.254/config/template
 
 ## Step 4: Boot the Host
 
-PXE boot or reboot the host. If using mkube:
-
-```bash
-mk annotate bmh/server1 bmh.mkube.io/reboot="$(date -u +%Y-%m-%dT%H:%M:%SZ)" --overwrite
-```
+PXE boot or reboot the host. (Under the retired mkube this was `mk annotate bmh/server1 bmh.mkube.io/reboot=...`; use whatever now manages the host.)
 
 On boot, the following happens automatically:
 
@@ -114,8 +114,8 @@ ss -tlnp | grep 2049
 From another host, test the NFS mount:
 
 ```bash
-# Mount the NFS export
-mount -t nfs4 <nfs-host-ip>:/ /mnt
+# Mount the NFS export (single export, so / is the export itself)
+mount -t nfs4 -o vers=4.1 <nfs-host-ip>:/ /mnt
 
 # Verify
 ls /mnt
@@ -148,7 +148,7 @@ The disk is partitioned with `wipeTable: false` and formatted with `wipeFilesyst
 ### Container Configuration
 
 The NextNFS container runs with:
-- `--network host` -- NFS on port 2049 directly on the host network
+- `--network host` -- NFS on port 2049, the nextnfs REST API/web UI on 8080 and stormd on 9080, directly on the host network (the API has no authentication)
 - `-v /var/data/nfs:/export:z` -- exports the data directory
 - `--pull=always` -- pulls the latest image on every restart
 - Automatic restart on failure (5 second delay)
