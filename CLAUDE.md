@@ -63,10 +63,7 @@ rewrites GETATTR owner display), `rdma_device`/`rdma_port` (logged only). Packag
 - [x] 2026-09-27 — third pass: packaging checked against the docs; README
       RPM-vs-DEB table, RPM `%description` / DEB control no longer claim
       v4.2/pNFS/RDMA/quota/OverlayFS; issues #95, #96 filed.
-- [ ] #93 verify: `sc-build 'cargo test --workspace'` for 3f2ef53 was queued
-      (not yet run) at the 2026-09-27 session restart — rerun it. Note plain
-      `sc-build` (`cargo test`) only tests the root crate, so the lib tests
-      never ran there; the first workspace run failed to compile on a private
-      const (fixed in 3f2ef53, build-failure issue #94 — close once green).
-      Then close #93 and consider a patch release.
+- [x] 2026-09-27 — #93 verified: `sc-build 'cargo test --workspace'` on
+      38ebd4c green (544 tests); #93 and #94 closed. Use the `--workspace`
+      form — plain `sc-build` runs no library tests. Patch release pending.
 - [ ] #90/#91/#92.
