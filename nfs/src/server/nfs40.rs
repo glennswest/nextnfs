@@ -737,7 +737,7 @@ mod tests {
         NfsArgOp::Opwrite(Write4args {
             stateid: Stateid4 {
                 seqid: 0,
-                other: [0; NFS4_OTHER_SIZE],
+                other: [0; 12],
             },
             offset: 0,
             stable: StableHow4::FileSync4,
