@@ -56,4 +56,10 @@ rewrites GETATTR owner display), `rdma_device`/`rdma_port` (logged only). See
       and mkube references marked retired, example config annotated.
 - [x] 2026-09-27 — #93 `read_only` enforced in the COMPOUND dispatcher
       (NFS4ERR_ROFS via `NfsResOp4::OpError`; ACCESS drops write bits).
+- [ ] #93 verify: `sc-build 'cargo test --workspace'` for 3f2ef53 was queued
+      (not yet run) at the 2026-09-27 session restart — rerun it. Note plain
+      `sc-build` (`cargo test`) only tests the root crate, so the lib tests
+      never ran there; the first workspace run failed to compile on a private
+      const (fixed in 3f2ef53, build-failure issue #94 — close once green).
+      Then close #93 and consider a patch release.
 - [ ] #90/#91/#92.
