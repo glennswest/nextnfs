@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### 2026-09-27
+- **docs:** README access control now says where the `clients` allow-list is checked (PUTFH, single-export PUTROOTFH) and that LOOKUP from the pseudo-root into an export is not checked (#97); web UI described as it is (dark theme, shown in stormd via `[process.ui]` proxy, not Dracula/iframe)
 - **docs:** README test count corrected to 544 (`cargo test --workspace`); plain `cargo test` runs none of the library tests
 - **docs:** Packaging described as it is: README table of what the RPM vs DEB installs (DEB has no `nextnfs-stress`, does not create `/export`/`/var/lib/nextnfs`; RPM enables but does not start the service), `make rpm-*` noted broken with `ci-rpm.sh` as the working path. RPM `%description` no longer claims v4.2, pNFS, RPCSEC_GSS, RDMA, quota enforcement or OverlayFS; DEB description says v4.0/4.1. `build.sh` run hint publishes 8080. Issues filed: #95 (`build-rpm.sh` misses `nextnfs-stress`), #96 (DEB service fails without `/export`/`/var/lib/nextnfs`)
 - **fix:** `read_only` exports are now enforced (#93). The COMPOUND dispatcher refuses WRITE, COMMIT, CREATE, REMOVE, RENAME, LINK, SETATTR, ALLOCATE, COPY, and OPEN that creates or requests write access with `NFS4ERR_ROFS` on a read-only export, and ACCESS no longer grants MODIFY/EXTEND/DELETE there. Previously the flag was stored and reported but every write went through

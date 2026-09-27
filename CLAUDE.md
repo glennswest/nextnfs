@@ -48,7 +48,8 @@ RPM with `packaging/nextnfs-run-tests`), `packaging/` (RPM/DEB/systemd),
 
 Config keys that parse but do not do what their names say:
 `max_bytes_per_sec` (not enforced), `squash`/`anon_uid`/`anon_gid` (only
-rewrites GETATTR owner display), `rdma_device`/`rdma_port` (logged only). Packaging: #95 (`make rpm-*`),
+rewrites GETATTR owner display), `rdma_device`/`rdma_port` (logged only),
+`clients` (not checked on pseudo-root LOOKUP into an export, #97). Packaging: #95 (`make rpm-*`),
 #96 (DEB dirs). See `gh issue list`.
 
 ## Work plan
@@ -66,4 +67,8 @@ rewrites GETATTR owner display), `rdma_device`/`rdma_port` (logged only). Packag
 - [x] 2026-09-27 — #93 verified: `sc-build 'cargo test --workspace'` on
       38ebd4c green (544 tests); #93 and #94 closed. Use the `--workspace`
       form — plain `sc-build` runs no library tests. Patch release pending.
-- [ ] #90/#91/#92.
+- [x] 2026-09-27 — fourth pass (no code change since the third): verified
+      TLS, rate limit, web UI and test-RPM claims; `clients` allow-list gap in
+      multi-export mode filed as #97 and documented.
+- [ ] #97 (access-control gap — highest priority of the open items),
+      #95/#96 (packaging), #90/#91/#92.

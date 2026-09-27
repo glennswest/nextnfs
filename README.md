@@ -11,10 +11,10 @@ Current version: **0.13.9**.
 - **Byte-range locking** — LOCK, LOCKT, LOCKU, RELEASE_LOCKOWNER with conflict detection
 - **Multi-export** — serve multiple filesystem paths as separate exports under an NFSv4 pseudo-filesystem root; single-export mode is fully backwards-compatible
 - **Real-filesystem semantics** — `stat()`-based attributes (mode/uid/gid/nlink/atime/mtime/ctime), inode-based persistent file handles (`dev:ino`, survive restart), hard links and symlinks; every WRITE is a `pwrite`/`O_APPEND` write followed by `fsync` before the reply
-- **Per-export access control** — `clients` allow-list of IPs/CIDRs (others get `NFS4ERR_ACCESS` at PUTROOTFH/PUTFH); `max_ops_per_sec` rate limit (excess COMPOUNDs get `NFS4ERR_DELAY`)
+- **Per-export access control** — `clients` allow-list of IPs/CIDRs (others get `NFS4ERR_ACCESS` at PUTFH, and at PUTROOTFH in single-export mode; with several exports, LOOKUP from the pseudo-root into an export is **not** checked yet — [#97](https://github.com/glennswest/nextnfs/issues/97)); `max_ops_per_sec` rate limit (excess COMPOUNDs get `NFS4ERR_DELAY`)
 - **RPC-over-TLS** (RFC 9289) — set `tls_cert` + `tls_key` and the NFS listener requires TLS on every connection
 - **State recovery** — with `state_dir` set, client state is snapshotted every 30 s and restored on restart; the server never holds a grace period
-- **REST API + Web UI** — manage exports, view per-export stats, health checks (axum on :8080); Dracula-themed dashboard that integrates into stormd as an iframe tab
+- **REST API + Web UI** — manage exports, view per-export stats, health checks (axum on :8080); dark-themed dashboard; in the container, stormd shows it as a UI tab by proxying `127.0.0.1:8080` (`[process.ui]` in `stormd.toml`)
 - **Operationally lean** — ~5 MB stripped static binary (x86_64-musl), TCP tuning (4 MB socket buffers, `TCP_NODELAY`, keepalive), scratch container
 
 ## NFSv4 correctness
@@ -122,7 +122,7 @@ TOML, loaded with `--config FILE` (see `nextnfs.example.toml`). Every key is opt
 | `name` | required | Export name — the top-level directory under the pseudo-root, and the API key |
 | `path` | required | Existing directory; canonicalized at startup, the server exits if it is missing or not a directory |
 | `read_only` | `false` | Refuse changes with `NFS4ERR_ROFS` (client sees `EROFS`): WRITE, COMMIT, CREATE, REMOVE, RENAME, LINK, SETATTR, ALLOCATE, COPY, and OPEN that creates or asks for write access. ACCESS never grants MODIFY/EXTEND/DELETE |
-| `clients` | `[]` (all) | Allowed client IPs or CIDRs (IPv4/IPv6) |
+| `clients` | `[]` (all) | Allowed client IPs or CIDRs (IPv4/IPv6). Checked at PUTFH and single-export PUTROOTFH; not when entering an export by LOOKUP from the pseudo-root ([#97](https://github.com/glennswest/nextnfs/issues/97)) |
 | `max_ops_per_sec` | `0` (unlimited) | Per-export operation rate limit |
 | `max_bytes_per_sec` | `0` | **Not enforced** yet ([#90](https://github.com/glennswest/nextnfs/issues/90)) |
 | `squash` | `""` (none) | `root_squash` or `all_squash`; any other value means none. **Today this only rewrites the owner/group shown by GETATTR** — requests still run as the server's uid ([#91](https://github.com/glennswest/nextnfs/issues/91)) |
