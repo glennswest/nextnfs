@@ -34,6 +34,8 @@ pub struct NfsRequest<'a> {
     quota_manager: Option<Arc<QuotaManager>>,
     // cached per-export access control
     access_control: Option<Arc<AccessControl>>,
+    // current export is read-only (mutating ops get NFS4ERR_ROFS)
+    read_only: bool,
     // current export id (extracted from filehandle)
     current_export_id: Option<u8>,
     // time the server was booted
@@ -78,6 +80,7 @@ impl<'a> NfsRequest<'a> {
             rate_limiter: None,
             quota_manager: None,
             access_control: None,
+            read_only: false,
             current_export_id: None,
             boot_time,
             request_time,
@@ -134,6 +137,7 @@ impl<'a> NfsRequest<'a> {
             self.rate_limiter = None;
             self.quota_manager = None;
             self.access_control = None;
+            self.read_only = false;
             return;
         }
         if let Some((info, fm)) = self.export_manager.get_export_by_id(export_id).await {
@@ -142,7 +146,13 @@ impl<'a> NfsRequest<'a> {
             self.rate_limiter = Some(info.rate_limiter);
             self.quota_manager = Some(info.quota_manager);
             self.access_control = Some(info.access_control);
+            self.read_only = info.read_only;
         }
+    }
+
+    /// Whether the current export is read-only.
+    pub fn is_read_only(&self) -> bool {
+        self.read_only
     }
 
     /// Check if the current filehandle is the pseudo-root.

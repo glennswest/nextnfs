@@ -98,6 +98,12 @@ impl NfsOperation for Access4args {
             // No filehandle — grant what was requested (best effort)
             self.access
         };
+        // A read-only export never grants write access (issue #93)
+        let access = if request.is_read_only() {
+            access & !(ACCESS4_MODIFY | ACCESS4_EXTEND | ACCESS4_DELETE)
+        } else {
+            access
+        };
 
         NfsOpResponse {
             request,

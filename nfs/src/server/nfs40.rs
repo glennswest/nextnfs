@@ -6,6 +6,47 @@ use tracing::info;
 use super::{operation::NfsOperation, request::NfsRequest, response::NfsOpResponse};
 use nextnfs_proto::{nfs4_proto::*, rpc_proto::*};
 
+const OPEN4_SHARE_ACCESS_WRITE: u32 = 0x0000_0002;
+
+/// Whether an operation modifies the filesystem and must be refused with
+/// NFS4ERR_ROFS on a read-only export (RFC 7530 §13.1.2, issue #93).
+/// OPEN is mutating when it may create/truncate or asks for write access.
+fn is_mutating(arg: &NfsArgOp) -> bool {
+    match arg {
+        NfsArgOp::Opopen(args) => {
+            matches!(&args.openhow, OpenFlag4::How(_))
+                || args.share_access & OPEN4_SHARE_ACCESS_WRITE != 0
+        }
+        NfsArgOp::Opwrite(_)
+        | NfsArgOp::Opcommit(_)
+        | NfsArgOp::Opcreate(_)
+        | NfsArgOp::Opremove(_)
+        | NfsArgOp::Oprename(_)
+        | NfsArgOp::Oplink(_)
+        | NfsArgOp::Opsetattr(_)
+        | NfsArgOp::Opallocate(_)
+        | NfsArgOp::Opcopy(_) => true,
+        _ => false,
+    }
+}
+
+/// Wire opcode of the mutating operations `is_mutating` can refuse.
+fn op_code(arg: &NfsArgOp) -> u32 {
+    match arg {
+        NfsArgOp::Opcommit(_) => 5,
+        NfsArgOp::Opcreate(_) => 6,
+        NfsArgOp::Oplink(_) => 11,
+        NfsArgOp::Opopen(_) => 18,
+        NfsArgOp::Opremove(_) => 28,
+        NfsArgOp::Oprename(_) => 29,
+        NfsArgOp::Opsetattr(_) => 34,
+        NfsArgOp::Opwrite(_) => 38,
+        NfsArgOp::Opallocate(_) => 59,
+        NfsArgOp::Opcopy(_) => 60,
+        _ => 0,
+    }
+}
+
 /// Extract a short operation name from an NfsArgOp for audit logging.
 fn op_name(arg: &NfsArgOp) -> &'static str {
     match arg {
@@ -466,6 +507,33 @@ impl NfsProtoImpl for NFS40Server {
                         }
                     }
 
+                    // Read-only export: refuse mutating ops with NFS4ERR_ROFS (#93).
+                    // The export is the one selected by the current filehandle.
+                    if request.is_read_only() && is_mutating(&arg) {
+                        info!(
+                            client = %request.client_addr(),
+                            op = operation,
+                            status = "Nfs4errRofs",
+                            export = ?request.current_export_id(),
+                            "nfs_audit: operation denied on read-only export"
+                        );
+                        resarray.push(NfsResOp4::OpError {
+                            op: op_code(&arg),
+                            status: NfsStat4::Nfs4errRofs,
+                        });
+                        return (
+                            request,
+                            ReplyBody::MsgAccepted(AcceptedReply {
+                                verf: OpaqueAuth::AuthNull(Vec::<u8>::new()),
+                                reply_data: AcceptBody::Success(Compound4res {
+                                    status: NfsStat4::Nfs4errRofs,
+                                    tag: "".to_string(),
+                                    resarray,
+                                }),
+                            }),
+                        );
+                    }
+
                     let response = match arg {
                         // undefined ops
                         NfsArgOp::OpUndef0 | NfsArgOp::OpUndef1 | NfsArgOp::OpUndef2 => {
@@ -636,6 +704,121 @@ mod tests {
                 minor_version: 0,
                 argarray: ops,
             }),
+        }
+    }
+
+    /// Request whose current export is a read-only (or writable) real export.
+    async fn request_on_export(read_only: bool, dir: &std::path::Path) -> NfsRequest<'static> {
+        let mut request = create_nfs40_server(None).await;
+        let info = request
+            .export_manager()
+            .add_export("ro".to_string(), dir.to_path_buf(), read_only)
+            .await
+            .unwrap();
+        request.set_export(info.export_id).await;
+        request
+    }
+
+    fn open_args(share_access: u32, openhow: OpenFlag4) -> Open4args {
+        Open4args {
+            seqid: 1,
+            share_access,
+            share_deny: 0,
+            owner: OpenOwner4 {
+                clientid: 1,
+                owner: b"owner".to_vec(),
+            },
+            openhow,
+            claim: OpenClaim4::ClaimNull("f".to_string()),
+        }
+    }
+
+    fn write_op() -> NfsArgOp {
+        NfsArgOp::Opwrite(Write4args {
+            stateid: Stateid4 {
+                seqid: 0,
+                other: [0; NFS4_OTHER_SIZE],
+            },
+            offset: 0,
+            stable: StableHow4::FileSync4,
+            data: b"x".to_vec(),
+        })
+    }
+
+    #[test]
+    fn test_is_mutating_open() {
+        let create = OpenFlag4::How(CreateHow4::UNCHECKED4(Fattr4 {
+            attrmask: Attrlist4(vec![]),
+            attr_vals: Attrlist4(vec![]),
+        }));
+        assert!(!is_mutating(&NfsArgOp::Opopen(open_args(1, OpenFlag4::Open4Nocreate))));
+        assert!(is_mutating(&NfsArgOp::Opopen(open_args(2, OpenFlag4::Open4Nocreate))));
+        assert!(is_mutating(&NfsArgOp::Opopen(open_args(3, OpenFlag4::Open4Nocreate))));
+        assert!(is_mutating(&NfsArgOp::Opopen(open_args(1, create))));
+        assert!(is_mutating(&write_op()));
+        assert!(is_mutating(&NfsArgOp::Opremove(Remove4args {
+            target: "f".to_string()
+        })));
+        assert!(!is_mutating(&NfsArgOp::Opputrootfh(())));
+    }
+
+    #[tokio::test]
+    async fn test_compound_read_only_export_refuses_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let request = request_on_export(true, dir.path()).await;
+        let server = NFS40Server::new();
+        let (_request, reply) = server.compound(make_compound(vec![write_op()]), request).await;
+        match reply {
+            ReplyBody::MsgAccepted(accepted) => match accepted.reply_data {
+                AcceptBody::Success(res) => {
+                    assert_eq!(res.status, NfsStat4::Nfs4errRofs);
+                    assert_eq!(
+                        res.resarray,
+                        vec![NfsResOp4::OpError {
+                            op: 38,
+                            status: NfsStat4::Nfs4errRofs
+                        }]
+                    );
+                }
+                _ => panic!("Expected Success"),
+            },
+            _ => panic!("Expected MsgAccepted"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_compound_read_only_export_refuses_remove() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("f"), b"keep").unwrap();
+        let request = request_on_export(true, dir.path()).await;
+        let server = NFS40Server::new();
+        let msg = make_compound(vec![NfsArgOp::Opremove(Remove4args {
+            target: "f".to_string(),
+        })]);
+        let (_request, reply) = server.compound(msg, request).await;
+        match reply {
+            ReplyBody::MsgAccepted(accepted) => match accepted.reply_data {
+                AcceptBody::Success(res) => assert_eq!(res.status, NfsStat4::Nfs4errRofs),
+                _ => panic!("Expected Success"),
+            },
+            _ => panic!("Expected MsgAccepted"),
+        }
+        assert!(dir.path().join("f").exists());
+    }
+
+    #[tokio::test]
+    async fn test_compound_writable_export_not_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let request = request_on_export(false, dir.path()).await;
+        let server = NFS40Server::new();
+        // No filehandle: WRITE fails, but with its own error, not ROFS
+        let (_request, reply) = server.compound(make_compound(vec![write_op()]), request).await;
+        match reply {
+            ReplyBody::MsgAccepted(accepted) => match accepted.reply_data {
+                AcceptBody::Success(res) => assert_ne!(res.status, NfsStat4::Nfs4errRofs),
+                _ => panic!("Expected Success"),
+            },
+            _ => panic!("Expected MsgAccepted"),
         }
     }
 

@@ -8,7 +8,6 @@ state_dir = "/var/lib/nextnfs"
 # tls_key = "/etc/nextnfs/tls/key.pem"
 
 # Legacy single-export (still works)
-# NOTE: read_only is not enforced yet (issue #93) — writes still succeed.
 [export]
 path = "/export"
 read_only = false

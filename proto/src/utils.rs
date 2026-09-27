@@ -27,7 +27,14 @@ where
     if values.is_empty() {
         serializer.serialize_none()
     } else {
-        values.serialize(serializer)
+        let mut seq = serializer.serialize_seq(Some(values.len()))?;
+        for value in values {
+            match value {
+                NfsResOp4::OpError { op, status } => seq.serialize_element(&(op, status))?,
+                other => seq.serialize_element(other)?,
+            }
+        }
+        seq.end()
     }
 }
 

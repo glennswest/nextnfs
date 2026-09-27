@@ -3,6 +3,8 @@
 ## [Unreleased]
 
 ### 2026-09-27
+- **fix:** `read_only` exports are now enforced (#93). The COMPOUND dispatcher refuses WRITE, COMMIT, CREATE, REMOVE, RENAME, LINK, SETATTR, ALLOCATE, COPY, and OPEN that creates or requests write access with `NFS4ERR_ROFS` on a read-only export, and ACCESS no longer grants MODIFY/EXTEND/DELETE there. Previously the flag was stored and reported but every write went through
+- **feat(proto):** `NfsResOp4::OpError { op, status }` — a failed op result encoded per RFC 7530 as opcode + status, for errors whose `*4res` type can only encode success
 - **docs:** Refreshed README from the code: NFSv4.1 sessions (v4.2 rejected), full configuration reference with defaults (`[server]`, `[[exports]]`, legacy `[export]`, CLI precedence), per-export `clients`/`max_ops_per_sec`, RPC-over-TLS, `state_dir` snapshots (30 s, no grace period), REST API response shapes and `/api/v1/qos/{name}`, container vs RPM/DEB shipping (container runs CLI flags, ignores the baked TOML), `tests/*.sh` / `nextnfs-tests` RPM. Unimplemented keys flagged with issues: `read_only` (#93), `max_bytes_per_sec` (#90), `squash`/`anon_*` (#91), `rdma_*` (#92)
 - **docs:** `doc/deploynextnfsusingcloudid.md` — image build via `build.sh`/`make container-*` (bare `podman build .` compiled nothing and used the aarch64 Containerfile); mkube steps marked retired; ports 8080/9080 noted
 - **docs:** `nextnfs.example.toml` comments mark the unenforced keys; project `CLAUDE.md` added

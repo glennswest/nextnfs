@@ -2258,6 +2258,13 @@ pub enum NfsResOp4 {
     Opallocate(Allocate4res) = 59,
     Opcopy(Copy4res) = 60,
     Opseek(Seek4res) = 69,
+    /// A failed operation whose result is only its status (RFC 7530 §16:
+    /// `nfs_resop4` for an error is the opcode followed by the status). Most
+    /// `*4res` types here can only encode success, so the dispatcher uses
+    /// this for errors it raises itself. Encoded by `write_argarray` as
+    /// `op` then `status`; never decoded.
+    #[serde(skip)]
+    OpError { op: u32, status: NfsStat4 },
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -2722,6 +2729,26 @@ mod tests {
         let bytes = to_bytes(&res).unwrap();
         let decoded: Readlink4res = from_bytes(&bytes).unwrap();
         assert_eq!(decoded.link, "/données/café");
+    }
+
+    #[test]
+    fn test_op_error_encodes_opcode_and_status() {
+        // RFC 7530: a failed op's nfs_resop4 is the opcode then the status
+        let res = Compound4res {
+            status: NfsStat4::Nfs4errRofs,
+            tag: String::new(),
+            resarray: vec![NfsResOp4::OpError {
+                op: 38,
+                status: NfsStat4::Nfs4errRofs,
+            }],
+        };
+        let bytes = to_bytes(&res).unwrap();
+        let words: Vec<u32> = bytes
+            .chunks(4)
+            .map(|c| u32::from_be_bytes([c[0], c[1], c[2], c[3]]))
+            .collect();
+        // status, tag length, resarray length, opcode, status
+        assert_eq!(words, vec![30, 0, 1, 38, 30]);
     }
 
     #[test]

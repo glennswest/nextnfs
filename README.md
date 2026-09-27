@@ -93,7 +93,7 @@ read_only = false
 [[exports]]
 name = "backup"
 path = "/backup"
-read_only = true   # not enforced yet — see #93
+read_only = true
 ```
 
 ## Configuration reference
@@ -116,7 +116,7 @@ TOML, loaded with `--config FILE` (see `nextnfs.example.toml`). Every key is opt
 |---|---|---|
 | `name` | required | Export name — the top-level directory under the pseudo-root, and the API key |
 | `path` | required | Existing directory; canonicalized at startup, the server exits if it is missing or not a directory |
-| `read_only` | `false` | **Not enforced** yet — stored and reported by the API, but writes still succeed ([#93](https://github.com/glennswest/nextnfs/issues/93)) |
+| `read_only` | `false` | Refuse changes with `NFS4ERR_ROFS` (client sees `EROFS`): WRITE, COMMIT, CREATE, REMOVE, RENAME, LINK, SETATTR, ALLOCATE, COPY, and OPEN that creates or asks for write access. ACCESS never grants MODIFY/EXTEND/DELETE |
 | `clients` | `[]` (all) | Allowed client IPs or CIDRs (IPv4/IPv6) |
 | `max_ops_per_sec` | `0` (unlimited) | Per-export operation rate limit |
 | `max_bytes_per_sec` | `0` | **Not enforced** yet ([#90](https://github.com/glennswest/nextnfs/issues/90)) |
