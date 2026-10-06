@@ -48,7 +48,7 @@ systemctl daemon-reload
 %dir /export
 
 %changelog
-* Wed Apr 02 2026 Glenn West <glenn@nextnfs.dev> - 0.12.0-1
+* Thu Apr 02 2026 Glenn West <glenn@nextnfs.dev> - 0.12.0-1
 - NFSv4.1 sessions (EXCHANGE_ID, CREATE_SESSION, SEQUENCE, etc.)
 - NFSv4.2 operations (COPY, SEEK, ALLOCATE)
 - pNFS layout operations (LAYOUTGET, LAYOUTCOMMIT, LAYOUTRETURN, GETDEVICEINFO)

@@ -101,9 +101,10 @@ rewrites GETATTR owner display), `rdma_device`/`rdma_port` (logged only). See `g
       `dpkg-deb -c` (root:root, both dirs, both binaries),
       `systemd-analyze verify` OK. No root on dev, so `dpkg -i` + unit
       start on a clean host was not run.
-- [ ] 2026-10-06 — #95 (in progress): `build-rpm.sh` stages
-      `nextnfs-stress` (spec Source3) and honours `CARGO_TARGET_DIR`
-      (Makefile half done in #96). Verify on dev: musl build +
-      `build-rpm.sh x86_64` + `rpm -qlpv`.
+- [x] 2026-10-06 — #95: `build-rpm.sh` stages `nextnfs-stress` (spec
+      Source3) and honours `CARGO_TARGET_DIR`; spec changelog weekday fixed.
+      Verified on dev (8aeffa6): musl build, `build-rpm.sh x86_64`,
+      `rpm -qlpv` lists both binaries, `/export`, `/var/lib/nextnfs`
+      (root:root); extracted binaries run.
 - [ ] #101 (ACCESS as uid 0 for non-AUTH_SYS),
       #90/#91/#92.

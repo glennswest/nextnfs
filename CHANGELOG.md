@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### 2026-10-06
+- **fix:** `nextnfs.spec` `%changelog` weekday corrected (2026-04-02 is a Thursday); rpmbuild warned "bogus date" (#95)
 - **fix:** `make rpm-x86|rpm-arm64` work again (#95): `packaging/build-rpm.sh` stages `nextnfs-stress` (the spec's `Source3`, which rpmbuild failed on) and looks for the binaries under `$CARGO_TARGET_DIR` when it is set
 - **fix:** `build-deb.sh` builds with `dpkg-deb --root-owner-group`: a DEB built by a non-root user recorded that user as owner of every file, so `dpkg -i` installed `/export`, `/var/lib/nextnfs` and the binaries owned by the build user's uid (#96)
 - **fix:** `packaging/build-deb.sh` looks for the binaries under `$CARGO_TARGET_DIR` when it is set (it assumed `./target`) (#96)
