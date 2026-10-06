@@ -76,7 +76,11 @@ sudo dpkg -i nextnfs_0.13.9_amd64.deb        # Debian/Ubuntu
 
 `nextnfs.service` runs `nextnfs serve --config /etc/nextnfs/nextnfs.toml` as root with systemd hardening; only `/export` and `/var/lib/nextnfs` are writable (`ReadWritePaths`), so exports elsewhere need a drop-in that adds their paths. The shipped config is `nextnfs.example.toml` (single export `/export`, `state_dir = /var/lib/nextnfs`), marked `%config(noreplace)`.
 
-nextnfs is not a stormcentral component: there is no golden image, releases are the RPM/DEB and container above.
+### stormcos golden
+
+nextnfs is also a registered stormcentral component (`stormcentral component list` / `component export`): kind `service`, optional — it ships in the stormcos release but is started only by its operator, `nfsop` ([nextnfs-operator](https://github.com/glennswest/nextnfs-operator)), one pod per NFSServer with its own drive at `/export`. In the golden, stormd runs `nextnfs --config /etc/nextnfs/nextnfs.toml` (stormcentral's registry holds that config: one `[export]` at `/export`, `state_dir = /var/lib/nextnfs`; the operator mounts its own over it), health is `GET /health` on 8080, and the golden's stormd listens on 8180 — not the 9080 of this repo's `stormd.toml`, which only the container image above uses. The registry entry (port, health, argv, config) lives in stormcentral's database and is changed with `stormcentral component edit nextnfs`, not in this repo.
+
+Goldens are built from pushed commits on request (`stormcentral component build nextnfs`); the first is `golden-nextnfs-81fcd9ea25dc` (0.13.9, `a3d625d`).
 
 ### Binary / config
 

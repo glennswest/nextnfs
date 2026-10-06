@@ -41,8 +41,15 @@ RPM with `packaging/nextnfs-run-tests`), `packaging/` (RPM/DEB/systemd),
 - **Container** (`build.sh`, `make container-*`): `stormdbase` image, stormd as
   PID 1, which runs `nextnfs serve --export /export` (CLI flags — the copied
   `/etc/nextnfs/nextnfs.toml` is **not** read in the container).
-- nextnfs is **not** a stormcentral component (no golden; not in
-  `stormcentral component list`). There is no `test/` test container yet.
+- **stormcos golden**: nextnfs is a registered stormcentral component
+  (`service`, optional, started only by `nfsop` — one pod per NFSServer).
+  stormd runs `nextnfs --config /etc/nextnfs/nextnfs.toml`, health
+  `/health` on 8080, the golden's stormd on 8180 (the repo's `stormd.toml`
+  9080 is the container image only). Registry entry: `stormcentral component
+  edit nextnfs`, not a commit. After an issue's work is pushed and sc-build
+  is green: `stormcentral component build nextnfs --url
+  http://stormcentral.g8.lo`. First golden: golden-nextnfs-81fcd9ea25dc
+  (0.13.9, a3d625d). There is no `test/` test container yet.
 
 ## Known gaps (tracked as issues)
 
@@ -70,5 +77,8 @@ rewrites GETATTR owner display), `rdma_device`/`rdma_port` (logged only),
 - [x] 2026-09-27 — fourth pass (no code change since the third): verified
       TLS, rate limit, web UI and test-RPM claims; `clients` allow-list gap in
       multi-export mode filed as #97 and documented.
+- [x] 2026-10-06 — #100: README/CLAUDE.md say nextnfs is a stormcentral
+      component with a golden (checked against `stormcentral component
+      export`); #98 (request the golden) closed as already done.
 - [ ] #97 (access-control gap — highest priority of the open items),
       #95/#96 (packaging), #90/#91/#92.

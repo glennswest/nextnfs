@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### 2026-10-06
+- **docs:** README and `CLAUDE.md` no longer say nextnfs is not a stormcentral component (#100). It is registered (optional `service`, started by `nfsop`; `nextnfs --config /etc/nextnfs/nextnfs.toml`, `/health` on 8080, golden stormd on 8180 vs the container's 9080) and golden-nextnfs-81fcd9ea25dc (0.13.9) exists; README gains a "stormcos golden" section
+
 ### 2026-09-27
 - **docs:** README access control now says where the `clients` allow-list is checked (PUTFH, single-export PUTROOTFH) and that LOOKUP from the pseudo-root into an export is not checked (#97); web UI described as it is (dark theme, shown in stormd via `[process.ui]` proxy, not Dracula/iframe)
 - **docs:** README test count corrected to 544 (`cargo test --workspace`); plain `cargo test` runs none of the library tests
