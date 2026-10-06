@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use nextnfs_server::export_manager::{AccessConfig, ExportManagerHandle, QosConfig, SquashMode};
 use nextnfs_server::NFSServer;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
 mod api;
@@ -162,7 +162,7 @@ async fn run_server(
     config_path: Option<PathBuf>,
 ) {
     // Load config and merge with CLI args
-    let (exports, listen, api_listen, state_dir, tls_cert, tls_key, rdma_device) = if let Some(config_path) = config_path {
+    let (exports, listen, api_listen, state_dir, tls_cert, tls_key) = if let Some(config_path) = config_path {
         match config::Config::load(&config_path) {
             Ok(cfg) => {
                 let resolved = cfg.resolved_exports();
@@ -179,9 +179,8 @@ async fn run_server(
                 let state_dir = cfg.server.state_dir.map(PathBuf::from);
                 let tls_cert = cfg.server.tls_cert.map(PathBuf::from);
                 let tls_key = cfg.server.tls_key.map(PathBuf::from);
-                let rdma_device = cfg.server.rdma_device;
-                if let Some(ref rdma_port) = cfg.server.rdma_port {
-                    info!(rdma_port = %rdma_port, "RDMA listen port configured");
+                if let Some(msg) = cfg.server.rdma_unsupported_warning() {
+                    warn!("{}", msg);
                 }
                 if resolved.is_empty() {
                     // No exports in config — use CLI export path
@@ -206,10 +205,9 @@ async fn run_server(
                         state_dir,
                         tls_cert,
                         tls_key,
-                        rdma_device,
                     )
                 } else {
-                    (resolved, listen, api, state_dir, tls_cert, tls_key, rdma_device)
+                    (resolved, listen, api, state_dir, tls_cert, tls_key)
                 }
             }
             Err(e) => {
@@ -236,7 +234,6 @@ async fn run_server(
             }],
             listen_addr,
             api_listen_addr,
-            None,
             None,
             None,
             None,
@@ -334,9 +331,6 @@ async fn run_server(
     if let (Some(cert), Some(key)) = (tls_cert, tls_key) {
         info!(cert = %cert.display(), key = %key.display(), "RPC-over-TLS enabled (RFC 9289)");
         builder.tls(cert, key);
-    }
-    if let Some(ref device) = rdma_device {
-        info!(device = %device, "RDMA transport configured (RFC 8166/8267)");
     }
     let server = builder.build();
 

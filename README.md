@@ -118,7 +118,7 @@ TOML, loaded with `--config FILE` (see `nextnfs.example.toml`). Every key is opt
 | `api_listen` | `0.0.0.0:8080` | REST API + web UI listen address (plain HTTP, no auth) |
 | `state_dir` | unset | Directory for client-state snapshots (created if missing); written every 30 s, restored and cleared at startup |
 | `tls_cert`, `tls_key` | unset | PEM cert and key; when **both** are set the NFS port speaks RPC-over-TLS only |
-| `rdma_device`, `rdma_port` | unset | **Not implemented** — parsed and logged, no RDMA listener is started ([#92](https://github.com/glennswest/nextnfs/issues/92)) |
+| `rdma_device`, `rdma_port` | unset | **Not implemented** — accepted so a config that sets them still loads, but no RDMA listener is started; nextnfs logs a warning at startup that they are ignored and serves TCP only ([#92](https://github.com/glennswest/nextnfs/issues/92)) |
 
 **`[[exports]]`** (repeatable)
 

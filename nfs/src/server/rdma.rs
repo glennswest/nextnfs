@@ -19,8 +19,10 @@
 //! - A queue pair for RDMA Send/Receive/Read/Write operations
 //! - Memory regions registered for zero-copy DMA access
 //!
-//! On Linux, this uses `rdma-core` (libibverbs) via the system's RDMA stack.
-//! The transport is behind the `rdma` feature flag since it requires
+//! **Status:** only the RPCRdma header/segment framing below exists. There is
+//! no verbs/QP code and no listener, so the server serves NFS over TCP only;
+//! the `rdma_device`/`rdma_port` config keys log a warning and are ignored
+//! (#92). A real transport would need libibverbs (`rdma-core`) and
 //! RDMA-capable hardware (InfiniBand, RoCEv2, iWARP).
 
 use std::fmt;
