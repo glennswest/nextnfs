@@ -3,6 +3,8 @@
 ## [Unreleased]
 
 ### 2026-10-06
+- **fix:** SECINFO and SECINFO_NO_NAME no longer advertise RPCSEC_GSS krb5/krb5i/krb5p (or AUTH_NONE): the server has no GSS context setup or keytab, so they offer `AUTH_SYS` only (#99)
+- **fix:** RPC calls carrying an RPCSEC_GSS credential are denied with `MSG_DENIED`/`AUTH_ERROR`/`AUTH_BADCRED`; previously an `RPCSEC_GSS_INIT` NULL got a plain success and GSS COMPOUNDs were served with uid 0 (#99)
 - **docs:** README and `CLAUDE.md` no longer say nextnfs is not a stormcentral component (#100). It is registered (optional `service`, started by `nfsop`; `nextnfs --config /etc/nextnfs/nextnfs.toml`, `/health` on 8080, golden stormd on 8180 vs the container's 9080) and golden-nextnfs-81fcd9ea25dc (0.13.9) exists; README gains a "stormcos golden" section
 
 ### 2026-09-27
