@@ -84,5 +84,12 @@ rewrites GETATTR owner display), `rdma_device`/`rdma_port` (logged only),
       (no krb5*, no AUTH_NONE); RPCSEC_GSS calls rejected with
       MSG_DENIED/AUTH_BADCRED instead of being served as uid 0.
       `sc-build 'cargo test --workspace'` green (546 tests).
+- [ ] 2026-10-06 — #97 in progress: `clients` checked on every export switch.
+      LOOKUP from the pseudo-root refuses a denied export (NFS4ERR_ACCESS);
+      the COMPOUND dispatcher refuses any op that leaves the client on an
+      export it is not allowed (defense in depth); RESTOREFH restores the
+      saved handle's export (it kept the previous one, which also let a
+      write into a read-only export through); pseudo-root READDIR hides
+      denied exports. Unit tests for each.
 - [ ] #97 (access-control gap — highest priority of the open items),
       #95/#96 (packaging), #90/#91/#92.
