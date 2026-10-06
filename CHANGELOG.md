@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### 2026-10-06
+- **docs:** README test count 551 (474 server, 71 proto, 6 nextnfstest) after the #97 tests
 - **fix:** The per-export `clients` allow-list is checked on every export switch (#97). LOOKUP from the pseudo-root into an export refuses a client outside the list with `NFS4ERR_ACCESS` (it switched in unchecked, so one COMPOUND could read the export); the COMPOUND dispatcher refuses any op that leaves the client on an export it is not allowed; pseudo-root READDIR hides those exports
 - **fix:** File handles carry their export id in byte 1 (it was 0 for every handle but a LOOKUP-stamped export root), so PUTFH of an ordinary handle selects its own export and that export's `clients` list — before, it selected no export and the list was skipped, in single-export mode too. Handles issued by an older server get `NFS4ERR_STALE` (they did not survive a restart anyway) (#97)
 - **fix:** RESTOREFH restores the saved handle's export as well as the handle; it kept the current export, so SAVEFH on a read-only export followed by RESTOREFH from a writable one let REMOVE/WRITE through (#97)
