@@ -3,6 +3,8 @@
 ## [Unreleased]
 
 ### 2026-10-06
+- **fix:** The DEB creates `/export` and `/var/lib/nextnfs` and ships `/usr/bin/nextnfs-stress`, like the RPM (#96). On a clean host `dpkg -i` started a unit that failed with 226/NAMESPACE (its `ReadWritePaths` named two missing directories), and the shipped config's `/export` did not exist either. `make build-x86|build-arm64` build and strip `nextnfs-stress` too
+- **fix:** `nextnfs.service` prefixes its `ReadWritePaths` entries with `-`, so a missing `/export` (an export moved elsewhere) no longer fails namespace setup before nextnfs runs (#96)
 - **docs:** README test count 551 (474 server, 71 proto, 6 nextnfstest) after the #97 tests
 - **fix:** The per-export `clients` allow-list is checked on every export switch (#97). LOOKUP from the pseudo-root into an export refuses a client outside the list with `NFS4ERR_ACCESS` (it switched in unchecked, so one COMPOUND could read the export); the COMPOUND dispatcher refuses any op that leaves the client on an export it is not allowed; pseudo-root READDIR hides those exports
 - **fix:** File handles carry their export id in byte 1 (it was 0 for every handle but a LOOKUP-stamped export root), so PUTFH of an ordinary handle selects its own export and that export's `clients` list — before, it selected no export and the list was skipped, in single-export mode too. Handles issued by an older server get `NFS4ERR_STALE` (they did not survive a restart anyway) (#97)

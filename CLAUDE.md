@@ -35,8 +35,9 @@ RPM with `packaging/nextnfs-run-tests`), `packaging/` (RPM/DEB/systemd),
   `/usr/bin/nextnfs-stress`, `/etc/nextnfs/nextnfs.toml` (from
   `nextnfs.example.toml`), `nextnfs.service` running `serve --config /etc/nextnfs/nextnfs.toml`.
   RPM `%post` enables the service but does not start it; DEB `postinst`
-  enables and starts it. The DEB lacks `nextnfs-stress` and does not create
-  `/export` / `/var/lib/nextnfs` (#96). `make rpm-*` is broken (#95) —
+  enables and starts it. Both ship `nextnfs-stress` and own `/export` and
+  `/var/lib/nextnfs` (#96). `make build-*` builds and strips both binaries
+  (needs `*-linux-musl-strip`, absent on dev). `make rpm-*` is broken (#95) —
   `ci-rpm.sh` is the working RPM path.
 - **Container** (`build.sh`, `make container-*`): `stormdbase` image, stormd as
   PID 1, which runs `nextnfs serve --export /export` (CLI flags — the copied
@@ -55,8 +56,7 @@ RPM with `packaging/nextnfs-run-tests`), `packaging/` (RPM/DEB/systemd),
 
 Config keys that parse but do not do what their names say:
 `max_bytes_per_sec` (not enforced), `squash`/`anon_uid`/`anon_gid` (only
-rewrites GETATTR owner display), `rdma_device`/`rdma_port` (logged only). Packaging: #95 (`make rpm-*`),
-#96 (DEB dirs). See `gh issue list`.
+rewrites GETATTR owner display), `rdma_device`/`rdma_port` (logged only). Packaging: #95 (`make rpm-*`). See `gh issue list`.
 
 ## Work plan
 

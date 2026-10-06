@@ -71,11 +71,11 @@ sudo dpkg -i nextnfs_0.13.9_amd64.deb        # Debian/Ubuntu
 | | RPM | DEB |
 |---|---|---|
 | `/usr/bin/nextnfs`, `/etc/nextnfs/nextnfs.toml`, `nextnfs.service` | yes | yes |
-| `/usr/bin/nextnfs-stress` | yes | no |
-| creates `/export`, `/var/lib/nextnfs` | yes | **no** — create them before starting ([#96](https://github.com/glennswest/nextnfs/issues/96)) |
+| `/usr/bin/nextnfs-stress` | yes | yes |
+| creates `/export`, `/var/lib/nextnfs` | yes | yes |
 | after install | service **enabled**, not started (`systemctl start nextnfs`) | service enabled and started |
 
-`nextnfs.service` runs `nextnfs serve --config /etc/nextnfs/nextnfs.toml` as root with systemd hardening; only `/export` and `/var/lib/nextnfs` are writable (`ReadWritePaths`), so exports elsewhere need a drop-in that adds their paths. The shipped config is `nextnfs.example.toml` (single export `/export`, `state_dir = /var/lib/nextnfs`), marked `%config(noreplace)`.
+`nextnfs.service` runs `nextnfs serve --config /etc/nextnfs/nextnfs.toml` as root with systemd hardening; only `/export` and `/var/lib/nextnfs` are writable (`ReadWritePaths`, each `-`-prefixed so a missing one does not stop the unit), so exports elsewhere need a drop-in that adds their paths. The shipped config is `nextnfs.example.toml` (single export `/export`, `state_dir = /var/lib/nextnfs`), marked `%config(noreplace)`.
 
 ### stormcos golden
 
