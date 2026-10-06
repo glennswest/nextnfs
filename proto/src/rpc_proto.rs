@@ -257,6 +257,23 @@ mod tests {
     }
 
     #[test]
+    fn test_rpc_reply_auth_badcred_wire_format() {
+        // MSG_DENIED / AUTH_ERROR / AUTH_BADCRED (RFC 5531 §9), sent for
+        // RPCSEC_GSS credentials (#99)
+        let reply = RpcReplyMsg {
+            xid: 7,
+            body: MsgType::Reply(ReplyBody::MsgDenied(RejectedReply::AuthError(
+                AuthStat::AuthBadCred,
+            ))),
+        };
+        let bytes = reply.to_bytes().unwrap();
+        assert_eq!(
+            bytes,
+            vec![0, 0, 0, 7, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1]
+        );
+    }
+
+    #[test]
     fn test_auth_stat_default() {
         let stat = AuthStat::default();
         assert!(matches!(stat, AuthStat::AuthBadCred));

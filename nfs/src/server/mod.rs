@@ -16,8 +16,8 @@ use request::NfsRequest;
 use tracing::debug;
 
 use nextnfs_proto::rpc_proto::{
-    AcceptBody, AcceptedReply, CallBody, MismatchInfo, MsgType, OpaqueAuth, ReplyBody, RpcCallMsg,
-    RpcReplyMsg,
+    AcceptBody, AcceptedReply, AuthStat, CallBody, MismatchInfo, MsgType, OpaqueAuth,
+    RejectedReply, ReplyBody, RpcCallMsg, RpcReplyMsg,
 };
 
 #[async_trait]
@@ -86,6 +86,22 @@ where
                             verf: OpaqueAuth::AuthNull(Vec::new()),
                             reply_data: AcceptBody::ProgMismatch(MismatchInfo::new(4, 4)),
                         })),
+                    });
+                }
+
+                // RPCSEC_GSS (flavor 6) is parsed but there is no context
+                // establishment or keytab (#99): answering an RPCSEC_GSS_INIT
+                // NULL with a plain success, or serving GSS DATA calls as
+                // uid 0, would leave a krb5 client believing it was
+                // authenticated. Deny the credential instead.
+                if matches!(call_body.cred, OpaqueAuth::AuthGss(_)) {
+                    debug!("RPCSEC_GSS credential (proc {}) not supported, returning AUTH_BADCRED", call_body.proc);
+                    request.close().await;
+                    return Box::new(RpcReplyMsg {
+                        xid: rpc_call_message.xid,
+                        body: MsgType::Reply(ReplyBody::MsgDenied(RejectedReply::AuthError(
+                            AuthStat::AuthBadCred,
+                        ))),
                     });
                 }
 
@@ -187,6 +203,33 @@ mod tests {
                 }
             }
             _ => panic!("Expected MsgAccepted"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_rpc_gss_cred_denied() {
+        use nextnfs_proto::rpc_proto::RpcSecGssCred;
+        // NULL with RPCSEC_GSS_INIT and COMPOUND with RPCSEC_GSS_DATA (#99)
+        for (proc, gss_proc) in [(0, 1), (1, 0)] {
+            let service = NFSService::new(NFS40Server::new());
+            let request = create_nfs40_server(None).await;
+            let mut msg = make_rpc_call(proc);
+            if let MsgType::Call(ref mut call) = msg.body {
+                call.cred = OpaqueAuth::AuthGss(RpcSecGssCred {
+                    gss_proc,
+                    seq_num: 0,
+                    service: 1,
+                    handle: vec![],
+                });
+            }
+            let reply = service.call(msg, request).await;
+            assert_eq!(reply.xid, 42);
+            match reply.body {
+                MsgType::Reply(ReplyBody::MsgDenied(RejectedReply::AuthError(
+                    AuthStat::AuthBadCred,
+                ))) => {}
+                other => panic!("Expected AUTH_BADCRED for proc {}, got {:?}", proc, other),
+            }
         }
     }
 
