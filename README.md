@@ -185,7 +185,7 @@ make container-x86 | container-arm64 | push
 make rpm-x86 | rpm-arm64 | deb-x86 | deb-arm64
 ```
 
-`make rpm-*` currently fails because `packaging/build-rpm.sh` does not stage `nextnfs-stress` ([#95](https://github.com/glennswest/nextnfs/issues/95)); `ci-rpm.sh` (x86_64: workspace tests, clippy, musl build of both binaries, rpmbuild) is the working RPM path. `make build-*` builds only the `nextnfs` binary.
+`make build-*` builds and strips both `nextnfs` and `nextnfs-stress` (it needs the `x86_64-linux-musl-strip` / `aarch64-linux-musl-strip` cross tools); `make rpm-*` / `deb-*` package them. Without the cross strip tools, run `cargo build --release --target <triple>-unknown-linux-musl -p nextnfs -p nextnfs-stress` and then `packaging/build-rpm.sh <x86_64|aarch64>` or `packaging/build-deb.sh <amd64|arm64>` directly; both scripts look for the binaries under `$CARGO_TARGET_DIR` when it is set. `ci-rpm.sh` (x86_64: workspace tests, clippy, musl build of both binaries, rpmbuild) is the CI path.
 
 Development builds and tests in the stormcentral environment go through `sc-build` (`cargo build && cargo test` on the build box, after `git push`).
 

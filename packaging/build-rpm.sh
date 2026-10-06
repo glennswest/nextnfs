@@ -14,12 +14,16 @@ case "${ARCH}" in
     *) echo "Unknown arch: ${ARCH}"; exit 1 ;;
 esac
 
-BINARY="target/${TRIPLE}/release/nextnfs"
-if [ ! -f "${BINARY}" ]; then
-    echo "Binary not found: ${BINARY}"
-    echo "Run 'make build-x86' or 'make build-arm64' first."
-    exit 1
-fi
+TARGET_DIR="${CARGO_TARGET_DIR:-target}"
+BINARY="${TARGET_DIR}/${TRIPLE}/release/nextnfs"
+STRESS_BINARY="${TARGET_DIR}/${TRIPLE}/release/nextnfs-stress"
+for bin in "${BINARY}" "${STRESS_BINARY}"; do
+    if [ ! -f "${bin}" ]; then
+        echo "Binary not found: ${bin}"
+        echo "Run 'make build-x86' or 'make build-arm64' first."
+        exit 1
+    fi
+done
 
 # Create rpmbuild tree
 rm -rf "${TOPDIR}"
@@ -27,6 +31,7 @@ mkdir -p "${TOPDIR}"/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
 
 # Copy sources
 cp "${BINARY}"                      "${TOPDIR}/SOURCES/nextnfs"
+cp "${STRESS_BINARY}"               "${TOPDIR}/SOURCES/nextnfs-stress"
 cp nextnfs.example.toml             "${TOPDIR}/SOURCES/nextnfs.toml"
 cp packaging/nextnfs.service        "${TOPDIR}/SOURCES/nextnfs.service"
 cp packaging/nextnfs.spec           "${TOPDIR}/SPECS/nextnfs.spec"
