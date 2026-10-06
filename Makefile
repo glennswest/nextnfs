@@ -10,15 +10,15 @@ build:
 
 # Build static x86_64 binary
 build-x86:
-	cargo build --release --target x86_64-unknown-linux-musl
-	x86_64-linux-musl-strip target/x86_64-unknown-linux-musl/release/nextnfs
-	@ls -lh target/x86_64-unknown-linux-musl/release/nextnfs
+	cargo build --release --target x86_64-unknown-linux-musl -p nextnfs -p nextnfs-stress
+	x86_64-linux-musl-strip target/x86_64-unknown-linux-musl/release/nextnfs target/x86_64-unknown-linux-musl/release/nextnfs-stress
+	@ls -lh target/x86_64-unknown-linux-musl/release/nextnfs target/x86_64-unknown-linux-musl/release/nextnfs-stress
 
 # Build static aarch64 binary (for MikroTik Rose)
 build-arm64:
-	cargo build --release --target aarch64-unknown-linux-musl
-	aarch64-linux-musl-strip target/aarch64-unknown-linux-musl/release/nextnfs
-	@ls -lh target/aarch64-unknown-linux-musl/release/nextnfs
+	cargo build --release --target aarch64-unknown-linux-musl -p nextnfs -p nextnfs-stress
+	aarch64-linux-musl-strip target/aarch64-unknown-linux-musl/release/nextnfs target/aarch64-unknown-linux-musl/release/nextnfs-stress
+	@ls -lh target/aarch64-unknown-linux-musl/release/nextnfs target/aarch64-unknown-linux-musl/release/nextnfs-stress
 
 # Build x86_64 container (for Fedora CoreOS)
 container-x86: build-x86

@@ -15,11 +15,14 @@ case "${ARCH}" in
 esac
 
 BINARY="target/${TRIPLE}/release/nextnfs"
-if [ ! -f "${BINARY}" ]; then
-    echo "Binary not found: ${BINARY}"
-    echo "Run 'make build-x86' or 'make build-arm64' first."
-    exit 1
-fi
+STRESS_BINARY="target/${TRIPLE}/release/nextnfs-stress"
+for bin in "${BINARY}" "${STRESS_BINARY}"; do
+    if [ ! -f "${bin}" ]; then
+        echo "Binary not found: ${bin}"
+        echo "Run 'make build-x86' or 'make build-arm64' first."
+        exit 1
+    fi
+done
 
 # Create staging tree
 rm -rf "${STAGING}"
@@ -27,10 +30,17 @@ mkdir -p "${STAGING}/usr/bin"
 mkdir -p "${STAGING}/etc/nextnfs"
 mkdir -p "${STAGING}/usr/lib/systemd/system"
 mkdir -p "${STAGING}/DEBIAN"
+# nextnfs.service has ReadWritePaths=/export /var/lib/nextnfs and the shipped
+# config exports /export with state_dir /var/lib/nextnfs, so the package owns
+# both directories (like the RPM's %dir entries) (#96)
+install -d -m 0755 "${STAGING}/export"
+install -d -m 0755 "${STAGING}/var/lib/nextnfs"
 
 # Copy files
 cp "${BINARY}"                      "${STAGING}/usr/bin/nextnfs"
 chmod 755                           "${STAGING}/usr/bin/nextnfs"
+cp "${STRESS_BINARY}"               "${STAGING}/usr/bin/nextnfs-stress"
+chmod 755                           "${STAGING}/usr/bin/nextnfs-stress"
 cp nextnfs.example.toml             "${STAGING}/etc/nextnfs/nextnfs.toml"
 cp packaging/nextnfs.service        "${STAGING}/usr/lib/systemd/system/nextnfs.service"
 

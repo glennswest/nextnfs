@@ -27,8 +27,10 @@ RestrictSUIDSGID=yes
 RestrictRealtime=yes
 MemoryDenyWriteExecute=yes
 
-# Allow write access to export and state directories
-ReadWritePaths=/export /var/lib/nextnfs
+# Allow write access to export and state directories. The RPM and DEB create
+# both; the "-" keeps a missing one (an export moved elsewhere) from failing
+# namespace setup (status 226/NAMESPACE) before nextnfs runs (#96)
+ReadWritePaths=-/export -/var/lib/nextnfs
 
 # Run as root (NFS needs port 2049 and uid/gid mapping)
 User=root
