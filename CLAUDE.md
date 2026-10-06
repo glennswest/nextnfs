@@ -80,8 +80,9 @@ rewrites GETATTR owner display), `rdma_device`/`rdma_port` (logged only),
 - [x] 2026-10-06 — #100: README/CLAUDE.md say nextnfs is a stormcentral
       component with a golden (checked against `stormcentral component
       export`); #98 (request the golden) closed as already done.
-- [ ] 2026-10-06 — #99: SECINFO/SECINFO_NO_NAME advertise only AUTH_SYS
+- [x] 2026-10-06 — #99: SECINFO/SECINFO_NO_NAME advertise only AUTH_SYS
       (no krb5*, no AUTH_NONE); RPCSEC_GSS calls rejected with
       MSG_DENIED/AUTH_BADCRED instead of being served as uid 0.
+      `sc-build 'cargo test --workspace'` green (546 tests).
 - [ ] #97 (access-control gap — highest priority of the open items),
       #95/#96 (packaging), #90/#91/#92.
