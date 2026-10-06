@@ -12,37 +12,16 @@ use crate::server::request::NfsRequest;
 use crate::server::response::NfsOpResponse;
 use nextnfs_proto::nfs4_proto::*;
 
-/// Kerberos 5 OID (1.2.840.113554.1.2.2) encoded as ASN.1/DER integer components.
-const KRB5_OID: &[u64] = &[1, 2, 840, 113554, 1, 2, 2];
-
 #[async_trait]
 impl NfsOperation for SecinfoNoName4args {
     async fn execute<'a>(&self, request: NfsRequest<'a>) -> NfsOpResponse<'a> {
         debug!("Operation 52: SECINFO_NO_NAME style={:?}", self.sina_style);
 
-        // Return supported security flavors including RPCSEC_GSS
-        let flavors = vec![
-            SeCinfo4::AuthSys,
-            SeCinfo4::AuthNone,
-            // Kerberos 5 authentication (krb5)
-            SeCinfo4::FlavorInfo(RpcSecGssInfo {
-                oid: KRB5_OID.to_vec(),
-                qop: 0,
-                service: RpcGssSvc::RpcGssSvcNone,
-            }),
-            // Kerberos 5 with integrity (krb5i)
-            SeCinfo4::FlavorInfo(RpcSecGssInfo {
-                oid: KRB5_OID.to_vec(),
-                qop: 0,
-                service: RpcGssSvc::RpcGssSvcIntegrity,
-            }),
-            // Kerberos 5 with privacy (krb5p)
-            SeCinfo4::FlavorInfo(RpcSecGssInfo {
-                oid: KRB5_OID.to_vec(),
-                qop: 0,
-                service: RpcGssSvc::RpcGssSvcPrivacy,
-            }),
-        ];
+        // Advertise only the flavors the server can serve. There is no
+        // RPCSEC_GSS context setup or keytab (#99), so krb5/krb5i/krb5p must
+        // not be offered: a client negotiating from this list would pick a
+        // flavor the server rejects (and AUTH_NONE would be answered as uid 0).
+        let flavors = vec![SeCinfo4::AuthSys];
 
         NfsOpResponse {
             request,
@@ -72,13 +51,8 @@ mod tests {
         assert_eq!(response.status, NfsStat4::Nfs4Ok);
         match response.result {
             Some(NfsResOp4::OpsecinfoNoName(SecinfoNoName4res::Resok4(flavors))) => {
-                assert_eq!(flavors.len(), 5);
-                assert_eq!(flavors[0], SeCinfo4::AuthSys);
-                assert_eq!(flavors[1], SeCinfo4::AuthNone);
-                // krb5, krb5i, krb5p
-                assert!(matches!(flavors[2], SeCinfo4::FlavorInfo(ref info) if info.service == RpcGssSvc::RpcGssSvcNone));
-                assert!(matches!(flavors[3], SeCinfo4::FlavorInfo(ref info) if info.service == RpcGssSvc::RpcGssSvcIntegrity));
-                assert!(matches!(flavors[4], SeCinfo4::FlavorInfo(ref info) if info.service == RpcGssSvc::RpcGssSvcPrivacy));
+                // Only AUTH_SYS: no RPCSEC_GSS (krb5*) until contexts land (#99)
+                assert_eq!(flavors, vec![SeCinfo4::AuthSys]);
             }
             _ => panic!("Expected SECINFO_NO_NAME Resok4"),
         }
