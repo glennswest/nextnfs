@@ -57,5 +57,7 @@ done
 
 # Build .deb
 mkdir -p dist
-dpkg-deb --build "${STAGING}" "dist/nextnfs_${VERSION}_${ARCH}.deb"
+# Files are root:root in the package whoever builds it (an unprivileged build
+# otherwise installs /export and the binaries owned by the build user)
+dpkg-deb --root-owner-group --build "${STAGING}" "dist/nextnfs_${VERSION}_${ARCH}.deb"
 echo "Output: dist/nextnfs_${VERSION}_${ARCH}.deb"
