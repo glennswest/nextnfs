@@ -14,8 +14,9 @@ case "${ARCH}" in
     *) echo "Unknown arch: ${ARCH}. Use amd64 or arm64."; exit 1 ;;
 esac
 
-BINARY="target/${TRIPLE}/release/nextnfs"
-STRESS_BINARY="target/${TRIPLE}/release/nextnfs-stress"
+TARGET_DIR="${CARGO_TARGET_DIR:-target}"
+BINARY="${TARGET_DIR}/${TRIPLE}/release/nextnfs"
+STRESS_BINARY="${TARGET_DIR}/${TRIPLE}/release/nextnfs-stress"
 for bin in "${BINARY}" "${STRESS_BINARY}"; do
     if [ ! -f "${bin}" ]; then
         echo "Binary not found: ${bin}"

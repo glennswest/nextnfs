@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### 2026-10-06
+- **fix:** `packaging/build-deb.sh` looks for the binaries under `$CARGO_TARGET_DIR` when it is set (it assumed `./target`) (#96)
 - **fix:** The DEB creates `/export` and `/var/lib/nextnfs` and ships `/usr/bin/nextnfs-stress`, like the RPM (#96). On a clean host `dpkg -i` started a unit that failed with 226/NAMESPACE (its `ReadWritePaths` named two missing directories), and the shipped config's `/export` did not exist either. `make build-x86|build-arm64` build and strip `nextnfs-stress` too
 - **fix:** `nextnfs.service` prefixes its `ReadWritePaths` entries with `-`, so a missing `/export` (an export moved elsewhere) no longer fails namespace setup before nextnfs runs (#96)
 - **docs:** README test count 551 (474 server, 71 proto, 6 nextnfstest) after the #97 tests
