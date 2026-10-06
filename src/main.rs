@@ -165,6 +165,9 @@ async fn run_server(
     let (exports, listen, api_listen, state_dir, tls_cert, tls_key) = if let Some(config_path) = config_path {
         match config::Config::load(&config_path) {
             Ok(cfg) => {
+                if let Some(msg) = cfg.server.rdma_unsupported_warning() {
+                    warn!("{}", msg);
+                }
                 let resolved = cfg.resolved_exports();
                 let listen = if listen_addr != "0.0.0.0:2049" {
                     listen_addr
@@ -179,9 +182,6 @@ async fn run_server(
                 let state_dir = cfg.server.state_dir.map(PathBuf::from);
                 let tls_cert = cfg.server.tls_cert.map(PathBuf::from);
                 let tls_key = cfg.server.tls_key.map(PathBuf::from);
-                if let Some(msg) = cfg.server.rdma_unsupported_warning() {
-                    warn!("{}", msg);
-                }
                 if resolved.is_empty() {
                     // No exports in config — use CLI export path
                     let name = export_path
