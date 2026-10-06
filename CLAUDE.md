@@ -100,5 +100,9 @@ rewrites GETATTR owner display), `rdma_device`/`rdma_port` (logged only). Packag
       `dpkg-deb -c` (root:root, both dirs, both binaries),
       `systemd-analyze verify` OK. No root on dev, so `dpkg -i` + unit
       start on a clean host was not run.
-- [ ] #101 (ACCESS as uid 0 for non-AUTH_SYS), #95 (packaging),
+- [ ] 2026-10-06 — #95 (in progress): `build-rpm.sh` stages
+      `nextnfs-stress` (spec Source3) and honours `CARGO_TARGET_DIR`
+      (Makefile half done in #96). Verify on dev: musl build +
+      `build-rpm.sh x86_64` + `rpm -qlpv`.
+- [ ] #101 (ACCESS as uid 0 for non-AUTH_SYS),
       #90/#91/#92.
