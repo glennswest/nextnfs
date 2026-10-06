@@ -193,9 +193,12 @@ pub fn pseudo_root_getattr(
     (answer_attrs, attrs)
 }
 
-/// Build READDIR entries for the pseudo-root — one entry per export.
+/// Build READDIR entries for the pseudo-root — one entry per export the
+/// client is allowed into (`clients` list, #97). Cookies stay tied to the
+/// export's position in the full list, so hiding one does not shift them.
 pub async fn pseudo_readdir(
     export_manager: &ExportManagerHandle,
+    client_addr: &str,
     attr_request: &[FileAttr],
     cookie: u64,
 ) -> (Vec<Entry4>, bool) {
@@ -205,6 +208,9 @@ pub async fn pseudo_readdir(
     for (i, export) in exports.iter().enumerate() {
         let entry_cookie = (i + 3) as u64; // cookies 0,1,2 reserved per RFC
         if entry_cookie <= cookie {
+            continue;
+        }
+        if !export.access_control.check_client(client_addr) {
             continue;
         }
 

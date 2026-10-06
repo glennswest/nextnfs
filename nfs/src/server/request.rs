@@ -316,10 +316,15 @@ impl<'a> NfsRequest<'a> {
         self.saved_filehandle = self.filehandle.clone();
     }
 
-    /// Restore saved filehandle (RESTOREFH).
-    pub fn restore_filehandle(&mut self) -> bool {
-        if let Some(ref saved) = self.saved_filehandle {
-            self.filehandle = Some(saved.clone());
+    /// Restore saved filehandle (RESTOREFH). The saved handle may belong to
+    /// another export than the current one, so its export is restored too.
+    pub async fn restore_filehandle(&mut self) -> bool {
+        if let Some(saved) = self.saved_filehandle.clone() {
+            let export_id = op_pseudo::export_id_from_fh(&saved.id);
+            if self.current_export_id != Some(export_id) {
+                self.set_export(export_id).await;
+            }
+            self.filehandle = Some(saved);
             true
         } else {
             false
@@ -377,14 +382,14 @@ mod tests {
         assert!(request.current_filehandle().is_none());
 
         // Restore
-        assert!(request.restore_filehandle());
+        assert!(request.restore_filehandle().await);
         assert_eq!(request.current_filehandle_id().unwrap(), fh_id);
     }
 
     #[tokio::test]
     async fn test_request_restore_without_save() {
         let mut request = create_nfs40_server(None).await;
-        assert!(!request.restore_filehandle());
+        assert!(!request.restore_filehandle().await);
     }
 
     #[tokio::test]

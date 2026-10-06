@@ -22,7 +22,13 @@ impl NfsOperation for Readdir4args {
         if request.is_pseudo_root() {
             let em = request.export_manager();
             let (entries, eof) =
-                op_pseudo::pseudo_readdir(&em, &self.attr_request, self.cookie).await;
+                op_pseudo::pseudo_readdir(
+                &em,
+                request.client_addr(),
+                &self.attr_request,
+                self.cookie,
+            )
+            .await;
 
             // Build linked list from entries (reverse order for linked list construction)
             let mut next_entry = None;

@@ -24,6 +24,16 @@ impl NfsOperation for Lookup4args {
             if let Some((info, _fm)) = em.get_export_by_name(&self.objname).await {
                 // Switch to this export
                 request.set_export(info.export_id).await;
+                // Entering an export is an access boundary, like PUTFH (#97)
+                if !request.check_client_access() {
+                    return NfsOpResponse {
+                        request,
+                        result: Some(NfsResOp4::Oplookup(Lookup4res {
+                            status: NfsStat4::Nfs4errAccess,
+                        })),
+                        status: NfsStat4::Nfs4errAccess,
+                    };
+                }
                 match request.file_manager().get_root_filehandle().await {
                     Ok(mut root_fh) => {
                         // Stamp export_id into the filehandle

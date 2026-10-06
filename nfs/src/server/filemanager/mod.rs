@@ -40,6 +40,9 @@ pub struct FileManager {
     pub symlink_support: bool,
     pub unique_handles: bool,
     pub fsid: u64,
+    /// Export id written into byte 1 of every handle, so a handle routes to
+    /// its own export (and that export's `clients` list) on PUTFH (#97).
+    pub export_id: u8,
     pub fhdb: FilehandleDb,
     pub next_fh_id: u128,
     pub lockdb: LockingStateDb,
@@ -60,6 +63,7 @@ impl FileManager {
         fsid: Option<u64>,
         export_root: PathBuf,
     ) -> Self {
+        let export_id = fsid.map(|f| f as u8).unwrap_or(0);
         let fsid = fsid.unwrap_or(152);
         let boot_time = std::time::UNIX_EPOCH.elapsed().unwrap_or_default().as_secs();
         let mut fmanager = FileManager {
@@ -72,6 +76,7 @@ impl FileManager {
             unique_handles: true,
             boot_time,
             fsid,
+            export_id,
             next_fh_id: 100,
             next_stateid_id: 100,
             fhdb: FilehandleDb::default(),
@@ -479,6 +484,7 @@ impl FileManager {
             if let Some(meta) = RealMeta::from_path(&real_path) {
                 let mut id = [0u8; 26];
                 id[0] = 0x01; // inode-based persistent handle
+                id[1] = self.export_id;
                 id[2..10].copy_from_slice(&meta.dev.to_be_bytes());
                 id[10..18].copy_from_slice(&meta.ino.to_be_bytes());
                 old_fh = self.fhdb.get_by_id(&id).cloned();
@@ -645,7 +651,7 @@ impl FileManager {
         if let Some(meta) = RealMeta::from_path(&real_path) {
             let mut id = [0u8; 26];
             id[0] = 0x01; // version: inode-based persistent handle
-            id[1] = 0x00; // reserved
+            id[1] = self.export_id;
             id[2..10].copy_from_slice(&meta.dev.to_be_bytes());
             id[10..18].copy_from_slice(&meta.ino.to_be_bytes());
             // bytes 18..26 are zero padding
@@ -656,7 +662,7 @@ impl FileManager {
         // Fallback: volatile handle using boot_time + sequence
         let mut id = [0u8; 26];
         id[0] = 0x80; // version: volatile
-        id[1] = 0x00;
+        id[1] = self.export_id;
         id[2..10].copy_from_slice(&self.boot_time.to_be_bytes());
         let seq_bytes = self.next_fh_id.to_be_bytes();
         id[10..26].copy_from_slice(&seq_bytes);
@@ -1500,6 +1506,8 @@ mod tests {
         let id = fm.get_filehandle_id(&subdir);
         // Volatile handles start with 0x80
         assert_eq!(id[0], 0x80);
+        // and carry the export id (#97)
+        assert_eq!(id[1], fm.export_id);
     }
 
     #[test]

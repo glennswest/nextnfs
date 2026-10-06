@@ -30,15 +30,23 @@ fn is_mutating(arg: &NfsArgOp) -> bool {
     }
 }
 
-/// Wire opcode of the mutating operations `is_mutating` can refuse.
+/// Wire opcode of the operations the dispatcher can refuse itself: the
+/// mutating ones `is_mutating` covers, and the ones that can move the
+/// current filehandle onto another export (#97).
 fn op_code(arg: &NfsArgOp) -> u32 {
     match arg {
         NfsArgOp::Opcommit(_) => 5,
         NfsArgOp::Opcreate(_) => 6,
         NfsArgOp::Oplink(_) => 11,
+        NfsArgOp::Oplookup(_) => 15,
+        NfsArgOp::Oplookupp(_) => 16,
         NfsArgOp::Opopen(_) => 18,
+        NfsArgOp::Opputfh(_) => 22,
+        NfsArgOp::Opputpubfh(_) => 23,
+        NfsArgOp::Opputrootfh(_) => 24,
         NfsArgOp::Opremove(_) => 28,
         NfsArgOp::Oprename(_) => 29,
+        NfsArgOp::Oprestorefh(_) => 31,
         NfsArgOp::Opsetattr(_) => 34,
         NfsArgOp::Opwrite(_) => 38,
         NfsArgOp::Opallocate(_) => 59,
@@ -275,8 +283,8 @@ impl NFS40Server {
         }
     }
 
-    fn restore_filehandle<'a>(&self, mut request: NfsRequest<'a>) -> NfsOpResponse<'a> {
-        if request.restore_filehandle() {
+    async fn restore_filehandle<'a>(&self, mut request: NfsRequest<'a>) -> NfsOpResponse<'a> {
+        if request.restore_filehandle().await {
             debug!("RESTOREFH: restored saved filehandle");
             NfsOpResponse {
                 request,
@@ -534,7 +542,9 @@ impl NfsProtoImpl for NFS40Server {
                         );
                     }
 
-                    let response = match arg {
+                    let opnum = op_code(&arg);
+                    let export_before = request.current_export_id();
+                    let mut response = match arg {
                         // undefined ops
                         NfsArgOp::OpUndef0 | NfsArgOp::OpUndef1 | NfsArgOp::OpUndef2 => {
                             self.operation_not_supported(request)
@@ -545,7 +555,7 @@ impl NfsProtoImpl for NFS40Server {
                         NfsArgOp::Opputrootfh(_) => self.put_root_filehandle(request).await,
                         NfsArgOp::Opputpubfh(_) => self.put_root_filehandle(request).await,
                         NfsArgOp::Opsavefh(_) => self.save_filehandle(request),
-                        NfsArgOp::Oprestorefh(_) => self.restore_filehandle(request),
+                        NfsArgOp::Oprestorefh(_) => self.restore_filehandle(request).await,
 
                         // client management
                         NfsArgOp::Opsetclientid(args) => args.execute(request).await,
@@ -616,6 +626,27 @@ impl NfsProtoImpl for NFS40Server {
                         NfsArgOp::Opcopy(args) => args.execute(request).await,
                         NfsArgOp::Opseek(args) => args.execute(request).await,
                     };
+                    // An op that moved the client onto another export (PUTFH,
+                    // PUTROOTFH, LOOKUP from the pseudo-root, RESTOREFH, ...)
+                    // must pass that export's `clients` list (#97).
+                    if response.status == NfsStat4::Nfs4Ok
+                        && response.request.current_export_id() != export_before
+                        && !response.request.check_client_access()
+                    {
+                        info!(
+                            client = %response.request.client_addr(),
+                            op = operation,
+                            status = "Nfs4errAccess",
+                            export = ?response.request.current_export_id(),
+                            "nfs_audit: client not in export's clients list"
+                        );
+                        response.result = Some(NfsResOp4::OpError {
+                            op: opnum,
+                            status: NfsStat4::Nfs4errAccess,
+                        });
+                        response.status = NfsStat4::Nfs4errAccess;
+                    }
+
                     let res = response.result;
                     last_status = response.status.clone();
 
@@ -2222,7 +2253,7 @@ mod tests {
         assert_ne!(request.current_filehandle_id().unwrap(), root_fh_id);
 
         // RESTOREFH — restores root
-        assert!(request.restore_filehandle());
+        assert!(request.restore_filehandle().await);
         assert_eq!(request.current_filehandle_id().unwrap(), root_fh_id);
     }
 
@@ -2553,5 +2584,163 @@ mod tests {
         };
         let response = reopen.execute(request).await;
         assert_eq!(response.status, NfsStat4::Nfs4Ok);
+    }
+
+    // --- #97: `clients` allow-list on every export switch ---
+
+    /// Two exports, so PUTROOTFH lands on the pseudo-root. "locked" only
+    /// allows 10.0.0.0/8; the test client is 127.0.0.1.
+    async fn multi_export_request(
+        open_dir: &std::path::Path,
+        locked_dir: &std::path::Path,
+    ) -> (NfsRequest<'static>, u8) {
+        let request = create_nfs40_server(None).await;
+        let em = request.export_manager();
+        em.add_export("open".to_string(), open_dir.to_path_buf(), false)
+            .await
+            .unwrap();
+        let locked = em
+            .add_export("locked".to_string(), locked_dir.to_path_buf(), false)
+            .await
+            .unwrap();
+        em.set_access(
+            "locked",
+            crate::server::export_manager::AccessConfig {
+                clients: vec!["10.0.0.0/8".to_string()],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        (request, locked.export_id)
+    }
+
+    fn compound_result(reply: ReplyBody) -> (NfsStat4, Vec<NfsResOp4>) {
+        match reply {
+            ReplyBody::MsgAccepted(accepted) => match accepted.reply_data {
+                AcceptBody::Success(res) => (res.status, res.resarray),
+                _ => panic!("Expected Success"),
+            },
+            _ => panic!("Expected MsgAccepted"),
+        }
+    }
+
+    fn lookup_op(name: &str) -> NfsArgOp {
+        NfsArgOp::Oplookup(Lookup4args {
+            objname: name.to_string(),
+        })
+    }
+
+    #[tokio::test]
+    async fn test_lookup_from_pseudo_root_refuses_denied_export() {
+        let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        std::fs::write(b.path().join("secret"), b"x").unwrap();
+        let (request, _) = multi_export_request(a.path(), b.path()).await;
+        let server = NFS40Server::new();
+        let msg = make_compound(vec![
+            NfsArgOp::Opputrootfh(()),
+            lookup_op("locked"),
+            lookup_op("secret"),
+            NfsArgOp::Opgetfh(()),
+        ]);
+        let (_request, reply) = server.compound(msg, request).await;
+        let (status, resarray) = compound_result(reply);
+        assert_eq!(status, NfsStat4::Nfs4errAccess);
+        assert_eq!(resarray.len(), 2);
+        assert_eq!(
+            resarray[1],
+            NfsResOp4::Oplookup(Lookup4res {
+                status: NfsStat4::Nfs4errAccess
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn test_lookup_from_pseudo_root_allows_open_export() {
+        let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let (request, _) = multi_export_request(a.path(), b.path()).await;
+        let server = NFS40Server::new();
+        let msg = make_compound(vec![
+            NfsArgOp::Opputrootfh(()),
+            lookup_op("open"),
+            NfsArgOp::Opgetfh(()),
+        ]);
+        let (_request, reply) = server.compound(msg, request).await;
+        let (status, resarray) = compound_result(reply);
+        assert_eq!(status, NfsStat4::Nfs4Ok);
+        assert_eq!(resarray.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_putfh_of_unstamped_export_handle_refused() {
+        // Handles the file manager mints carry their export id, so PUTFH of
+        // any handle in "locked" (not just its stamped root) hits its list.
+        let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let (request, locked_id) = multi_export_request(a.path(), b.path()).await;
+        let (_, fm) = request
+            .export_manager()
+            .get_export_by_id(locked_id)
+            .await
+            .unwrap();
+        let root = fm.get_root_filehandle().await.unwrap();
+        assert_eq!(op_pseudo::export_id_from_fh(&root.id), locked_id);
+        let server = NFS40Server::new();
+        let msg = make_compound(vec![
+            NfsArgOp::Opputfh(PutFh4args { object: root.id }),
+            NfsArgOp::Opgetattr(Getattr4args {
+                attr_request: Attrlist4(vec![]),
+            }),
+        ]);
+        let (_request, reply) = server.compound(msg, request).await;
+        let (status, resarray) = compound_result(reply);
+        assert_eq!(status, NfsStat4::Nfs4errAccess);
+        assert_eq!(resarray.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_restorefh_restores_saved_export() {
+        // SAVEFH on a read-only export, move to a writable one, RESTOREFH:
+        // the read-only flag must come back with the handle.
+        let (rw, ro) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        std::fs::write(ro.path().join("f"), b"keep").unwrap();
+        let request = create_nfs40_server(None).await;
+        let em = request.export_manager();
+        em.add_export("rw".to_string(), rw.path().to_path_buf(), false)
+            .await
+            .unwrap();
+        em.add_export("ro".to_string(), ro.path().to_path_buf(), true)
+            .await
+            .unwrap();
+        let server = NFS40Server::new();
+        let msg = make_compound(vec![
+            NfsArgOp::Opputrootfh(()),
+            lookup_op("ro"),
+            NfsArgOp::Opsavefh(()),
+            NfsArgOp::Opputrootfh(()),
+            lookup_op("rw"),
+            NfsArgOp::Oprestorefh(()),
+            NfsArgOp::Opremove(Remove4args {
+                target: "f".to_string(),
+            }),
+        ]);
+        let (_request, reply) = server.compound(msg, request).await;
+        let (status, _) = compound_result(reply);
+        assert_eq!(status, NfsStat4::Nfs4errRofs);
+        assert!(ro.path().join("f").exists());
+    }
+
+    #[tokio::test]
+    async fn test_pseudo_root_readdir_hides_denied_export() {
+        let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let (request, _) = multi_export_request(a.path(), b.path()).await;
+        let em = request.export_manager();
+        let (entries, eof) =
+            op_pseudo::pseudo_readdir(&em, request.client_addr(), &[], 0).await;
+        assert!(eof);
+        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, vec!["open"]);
+        // An allowed client sees both
+        let (entries, _) = op_pseudo::pseudo_readdir(&em, "10.1.2.3:700", &[], 0).await;
+        assert_eq!(entries.len(), 2);
     }
 }
