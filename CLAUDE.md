@@ -106,5 +106,8 @@ rewrites GETATTR owner display), `rdma_device`/`rdma_port` (logged only). See `g
       Verified on dev (8aeffa6): musl build, `build-rpm.sh x86_64`,
       `rpm -qlpv` lists both binaries, `/export`, `/var/lib/nextnfs`
       (root:root); extracted binaries run.
+- [ ] 2026-10-06 — #92: `rdma_device`/`rdma_port` warn at startup that
+      NFS-over-RDMA is not implemented and the keys are ignored (instead of
+      logging "RDMA transport configured"); docs say the same.
 - [ ] #101 (ACCESS as uid 0 for non-AUTH_SYS),
-      #90/#91/#92.
+      #90/#91.
