@@ -3,6 +3,9 @@
 ## [Unreleased]
 
 ### 2026-10-06
+- **fix:** The per-export `clients` allow-list is checked on every export switch (#97). LOOKUP from the pseudo-root into an export refuses a client outside the list with `NFS4ERR_ACCESS` (it switched in unchecked, so one COMPOUND could read the export); the COMPOUND dispatcher refuses any op that leaves the client on an export it is not allowed; pseudo-root READDIR hides those exports
+- **fix:** File handles carry their export id in byte 1 (it was 0 for every handle but a LOOKUP-stamped export root), so PUTFH of an ordinary handle selects its own export and that export's `clients` list — before, it selected no export and the list was skipped, in single-export mode too. Handles issued by an older server get `NFS4ERR_STALE` (they did not survive a restart anyway) (#97)
+- **fix:** RESTOREFH restores the saved handle's export as well as the handle; it kept the current export, so SAVEFH on a read-only export followed by RESTOREFH from a writable one let REMOVE/WRITE through (#97)
 - **fix:** SECINFO and SECINFO_NO_NAME no longer advertise RPCSEC_GSS krb5/krb5i/krb5p (or AUTH_NONE): the server has no GSS context setup or keytab, so they offer `AUTH_SYS` only (#99)
 - **fix:** RPC calls carrying an RPCSEC_GSS credential are denied with `MSG_DENIED`/`AUTH_ERROR`/`AUTH_BADCRED`; previously an `RPCSEC_GSS_INIT` NULL got a plain success and GSS COMPOUNDs were served with uid 0 (#99)
 - **docs:** README test count 546 (469 server, 71 proto, 6 nextnfstest)
