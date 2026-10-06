@@ -92,5 +92,10 @@ rewrites GETATTR owner display), `rdma_device`/`rdma_port` (logged only). Packag
       denied exports. Handles now carry their export id in byte 1 (it was
       0, so PUTFH skipped the list everywhere). `sc-build 'cargo test
       --workspace'` on ce4338d green (551 tests).
-- [ ] #101 (ACCESS as uid 0 for non-AUTH_SYS), #95/#96 (packaging),
+- [ ] 2026-10-06 — #96 (in progress): DEB stages `/export`,
+      `/var/lib/nextnfs` and `nextnfs-stress`; `make build-*` builds and
+      strips both binaries; unit `ReadWritePaths` entries get `-`. Verify on
+      dev: musl build + `build-deb.sh amd64` + `dpkg-deb -c` and
+      `systemd-analyze verify`.
+- [ ] #101 (ACCESS as uid 0 for non-AUTH_SYS), #95 (packaging),
       #90/#91/#92.
