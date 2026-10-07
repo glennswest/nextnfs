@@ -119,4 +119,8 @@ rewrites GETATTR owner display), `rdma_device`/`rdma_port` (logged only). See `g
       `none` or `root_squash`. Plan once answered: map uid/gid via
       `AccessConfig::squash_*`, check mode bits/sticky/owner-only
       chmod+chown per op in the dispatcher, chown created objects.
-- [ ] #101 (ACCESS as uid 0 for non-AUTH_SYS), #90.
+- [ ] 2026-10-06 — #90: `max_bytes_per_sec` enforced in the COMPOUND
+      loop — READ (requested count) and WRITE (data length) charge the
+      export's byte bucket, NFS4ERR_DELAY when over; an op bigger than the
+      bucket is let through once it is full (bucket goes into debt).
+- [ ] #101 (ACCESS as uid 0 for non-AUTH_SYS).
