@@ -38,7 +38,7 @@ Two companion workspace crates:
 
 Plus shell integration suites in `tests/*.sh` (NFSv4 basic/edge/stress, NFSv4.1 sessions, integrity, performance), packaged as the `nextnfs-tests` RPM and run with `nextnfs-run-tests <server> [suite...]`.
 
-551 unit tests pass with `cargo test --workspace` (474 `nextnfs-server`, 71 `nextnfs-proto`, 6 `nextnfstest`); plain `cargo test` only runs the root binary crate, which has none. `ci/ci-stress.sh` drives an end-to-end pipeline (written for the now-retired mkube runners): build RPM → `rpm -Uvh` on each target → restart service → run `nextnfs-stress` against the live mount → collect per-server logs and journals.
+553 unit tests pass with `cargo test --workspace` (474 `nextnfs-server`, 71 `nextnfs-proto`, 6 `nextnfstest`, 2 in the `nextnfs` binary's config parser). `ci/ci-stress.sh` drives an end-to-end pipeline (written for the now-retired mkube runners): build RPM → `rpm -Uvh` on each target → restart service → run `nextnfs-stress` against the live mount → collect per-server logs and journals.
 
 ## Quick start
 

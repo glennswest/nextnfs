@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### 2026-10-06
+- **docs:** README test count 553 (the `nextnfs` binary now has 2 config tests, #92)
 - **fix:** `[server] rdma_device` / `rdma_port` now log a warning at startup that NFS-over-RDMA is not implemented and the keys are ignored (TCP only). Before, nextnfs logged "RDMA transport configured (RFC 8166/8267)" and "RDMA listen port configured" while nothing listened on RDMA (#92)
 - **fix:** `nextnfs.spec` `%changelog` weekday corrected (2026-04-02 is a Thursday); rpmbuild warned "bogus date" (#95)
 - **fix:** `make rpm-x86|rpm-arm64` work again (#95): `packaging/build-rpm.sh` stages `nextnfs-stress` (the spec's `Source3`, which rpmbuild failed on) and looks for the binaries under `$CARGO_TARGET_DIR` when it is set
