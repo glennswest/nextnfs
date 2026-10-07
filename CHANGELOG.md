@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### 2026-10-07
+- **docs:** removed references to the CoreOS trademark (owner); the Ignition interface name `opt/com.coreos/config` stays where Ignition requires it
+
 ### 2026-10-06
 - **fix:** `max_bytes_per_sec` is enforced (#90): READ (requested count) and WRITE (data length) are charged against the export's byte bucket, and an op over the limit gets `NFS4ERR_DELAY`. Before, only `max_ops_per_sec` was checked. An op larger than the whole bucket passes once it is full and leaves it in debt, so it is slowed rather than refused forever. The op and byte buckets are charged together, so a refusal takes from neither
 - **fix:** A QoS refusal (`NFS4ERR_DELAY`) now includes the refused op's result in `resarray`, as for other refusals; it was missing

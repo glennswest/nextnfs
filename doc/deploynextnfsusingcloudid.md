@@ -2,11 +2,11 @@
 
 > **Status (2026-09-27):** this guide was written for the mkube-managed lab, and mkube was retired on 2026-08-27. The CloudID/Ignition flow and container settings below are still what the `nextnfs.ign.json` template does; the mkube-specific steps (BareMetalHost CRD, `mk annotate`) no longer apply — reboot the host by whatever manages it now.
 
-This guide covers deploying NextNFS on bare metal hosts running Fedora CoreOS (FCOS) using CloudID's template system. CloudID serves an Ignition config at boot time that partitions the disk, sets up the filesystem, and runs the NextNFS container automatically.
+This guide covers deploying NextNFS on bare metal hosts running an Ignition-based OS using CloudID's template system. CloudID serves an Ignition config at boot time that partitions the disk, sets up the filesystem, and runs the NextNFS container automatically.
 
 ## Prerequisites
 
-- A bare metal host that PXE boots Fedora CoreOS (previously managed by mkube's BareMetalHost CRD — mkube is retired)
+- A bare metal host that PXE boots an Ignition-based OS (previously managed by mkube's BareMetalHost CRD — mkube is retired)
 - CloudID running and reachable at `192.168.200.20:8090`
 - The host's network has DNS resolution for `registry.gt.lo` (see Known Issues below)
 - The NextNFS container image pushed to the registry
@@ -18,7 +18,7 @@ The image is built from a locally compiled static musl binary — `podman build 
 ```bash
 cd /path/to/nextnfs
 
-# x86_64 (Fedora CoreOS) — cargo build --target x86_64-unknown-linux-musl, then Containerfile.x86_64
+# x86_64 — cargo build --target x86_64-unknown-linux-musl, then Containerfile.x86_64
 ./build.sh x86
 
 # or ARM64 — cargo build --target aarch64-unknown-linux-musl, then Containerfile

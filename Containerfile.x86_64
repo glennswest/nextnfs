@@ -3,7 +3,7 @@
 # Build:  make build-x86 && podman build --format docker --tls-verify=false -f Containerfile.x86_64 -t nextnfs .
 # Run:    podman run -d -v /export:/export:z -p 2049:2049 -p 8080:8080 -p 9080:9080 -p 2222:22 nextnfs
 #
-# This is the x86_64 variant for Fedora CoreOS.
+# This is the x86_64 variant (static musl; runs on any x86_64 Linux host).
 
 FROM registry.gt.lo:5000/stormdbase:latest
 

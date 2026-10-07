@@ -20,7 +20,7 @@ build-arm64:
 	aarch64-linux-musl-strip target/aarch64-unknown-linux-musl/release/nextnfs target/aarch64-unknown-linux-musl/release/nextnfs-stress
 	@ls -lh target/aarch64-unknown-linux-musl/release/nextnfs target/aarch64-unknown-linux-musl/release/nextnfs-stress
 
-# Build x86_64 container (for Fedora CoreOS)
+# Build x86_64 container
 container-x86: build-x86
 	podman build --format docker --tls-verify=false -f Containerfile.x86_64 -t $(IMAGE):$(VERSION) -t $(IMAGE):latest .
 

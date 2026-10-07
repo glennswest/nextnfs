@@ -179,7 +179,7 @@ Five-crate Rust workspace:
 
 ```bash
 make build            # debug (dev)
-make build-x86        # static x86_64-musl (Fedora CoreOS)
+make build-x86        # static x86_64-musl (any x86_64 Linux host)
 make build-arm64      # static aarch64 (MikroTik Rose)
 make container-x86 | container-arm64 | push
 make rpm-x86 | rpm-arm64 | deb-x86 | deb-arm64
