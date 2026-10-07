@@ -112,5 +112,11 @@ rewrites GETATTR owner display), `rdma_device`/`rdma_port` (logged only). See `g
       verbs transport would be a new feature, not this fix.
       `sc-build 'cargo test --workspace'` on ff30e99 green (553 tests;
       first attempt failed to compile, #104).
-- [ ] #101 (ACCESS as uid 0 for non-AUTH_SYS),
-      #90/#91.
+- [ ] 2026-10-06 — #91 waiting on the owner (`needs-owner`): squash needs
+      per-caller permission enforcement, which no op does today (all ops
+      run as the server's uid). Asked: enforce mode bits for every AUTH_SYS
+      caller (A) or only on exports that set `squash` (B); default squash
+      `none` or `root_squash`. Plan once answered: map uid/gid via
+      `AccessConfig::squash_*`, check mode bits/sticky/owner-only
+      chmod+chown per op in the dispatcher, chown created objects.
+- [ ] #101 (ACCESS as uid 0 for non-AUTH_SYS), #90.
