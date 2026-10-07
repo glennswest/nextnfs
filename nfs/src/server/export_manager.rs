@@ -92,8 +92,47 @@ impl RateLimiter {
         }
     }
 
+    /// Charge one operation that moves `bytes` bytes of READ/WRITE data
+    /// (0 for other ops) against both buckets; nothing is taken unless both
+    /// allow it. An op larger than the whole byte bucket passes once the
+    /// bucket is full and leaves it in debt, so a client whose READ/WRITE
+    /// size exceeds `max_bytes_per_sec` is slowed to the limit rather than
+    /// refused forever (#90).
+    pub fn try_consume(&mut self, bytes: u64) -> bool {
+        let ops_limited = self.config.max_ops_per_sec > 0;
+        let bytes_limited = self.config.max_bytes_per_sec > 0 && bytes > 0;
+        if !ops_limited && !bytes_limited {
+            return true;
+        }
+        self.refill();
+        if ops_limited && self.ops_tokens < 1.0 {
+            return false;
+        }
+        if bytes_limited {
+            let needed = bytes as f64;
+            let capacity = self.config.max_bytes_per_sec as f64;
+            if self.bytes_tokens < needed.min(capacity) {
+                return false;
+            }
+            self.bytes_tokens -= needed;
+        }
+        if ops_limited {
+            self.ops_tokens -= 1.0;
+        }
+        true
+    }
+
     /// Update the QoS configuration.
+    /// A changed limit starts with a full bucket, as a new limiter does
+    /// (the bucket of a previously unlimited export was empty).
     pub fn update_config(&mut self, config: QosConfig) {
+        if config.max_ops_per_sec != self.config.max_ops_per_sec {
+            self.ops_tokens = config.max_ops_per_sec as f64;
+        }
+        if config.max_bytes_per_sec != self.config.max_bytes_per_sec {
+            self.bytes_tokens = config.max_bytes_per_sec as f64;
+        }
+        self.last_refill = Instant::now();
         self.config = config;
     }
 
@@ -1016,6 +1055,47 @@ mod tests {
     }
 
     #[test]
+    fn test_rate_limiter_try_consume_bytes() {
+        let mut rl = RateLimiter::new(QosConfig {
+            max_ops_per_sec: 0,
+            max_bytes_per_sec: 1000,
+        });
+        // Non-data ops are not charged bytes
+        assert!(rl.try_consume(0));
+        assert!(rl.try_consume(600));
+        assert!(!rl.try_consume(600));
+        assert!(rl.try_consume(400));
+        assert!(!rl.try_consume(1));
+        assert!(rl.try_consume(0));
+    }
+
+    #[test]
+    fn test_rate_limiter_try_consume_larger_than_bucket() {
+        let mut rl = RateLimiter::new(QosConfig {
+            max_ops_per_sec: 0,
+            max_bytes_per_sec: 1000,
+        });
+        // A full bucket lets one oversized op through, then it is in debt
+        assert!(rl.try_consume(5000));
+        assert!(!rl.try_consume(1));
+        assert!(!rl.try_consume(5000));
+    }
+
+    #[test]
+    fn test_rate_limiter_try_consume_takes_nothing_when_refused() {
+        let mut rl = RateLimiter::new(QosConfig {
+            max_ops_per_sec: 2,
+            max_bytes_per_sec: 1000,
+        });
+        assert!(rl.try_consume(1000));
+        // Byte bucket empty: refused, and the op token is not spent
+        assert!(!rl.try_consume(10));
+        assert!(rl.try_consume(0));
+        // Now the op bucket is empty too
+        assert!(!rl.try_consume(0));
+    }
+
+    #[test]
     fn test_rate_limiter_config_update() {
         let mut rl = RateLimiter::new(QosConfig::default());
         assert_eq!(rl.config().max_ops_per_sec, 0);
@@ -1025,6 +1105,9 @@ mod tests {
         });
         assert_eq!(rl.config().max_ops_per_sec, 100);
         assert_eq!(rl.config().max_bytes_per_sec, 50000);
+        // The new limits start with full buckets
+        assert!(rl.try_consume(50000));
+        assert!(!rl.try_consume(1));
     }
 
     #[test]

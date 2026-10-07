@@ -56,8 +56,8 @@ RPM with `packaging/nextnfs-run-tests`), `packaging/` (RPM/DEB/systemd),
 ## Known gaps (tracked as issues)
 
 Config keys that parse but do not do what their names say:
-`max_bytes_per_sec` (not enforced), `squash`/`anon_uid`/`anon_gid` (only
-rewrites GETATTR owner display), `rdma_device`/`rdma_port` (logged only). See `gh issue list`.
+`squash`/`anon_uid`/`anon_gid` (only rewrites GETATTR owner display, #91
+waiting on the owner), `rdma_device`/`rdma_port` (warn and are ignored). See `gh issue list`.
 
 ## Work plan
 

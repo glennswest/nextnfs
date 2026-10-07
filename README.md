@@ -128,8 +128,8 @@ TOML, loaded with `--config FILE` (see `nextnfs.example.toml`). Every key is opt
 | `path` | required | Existing directory; canonicalized at startup, the server exits if it is missing or not a directory |
 | `read_only` | `false` | Refuse changes with `NFS4ERR_ROFS` (client sees `EROFS`): WRITE, COMMIT, CREATE, REMOVE, RENAME, LINK, SETATTR, ALLOCATE, COPY, and OPEN that creates or asks for write access. ACCESS never grants MODIFY/EXTEND/DELETE |
 | `clients` | `[]` (all) | Allowed client IPs or CIDRs (IPv4/IPv6). Others get `NFS4ERR_ACCESS` on any op that moves them onto the export (PUTFH, single-export PUTROOTFH, LOOKUP from the pseudo-root, RESTOREFH), and the export is left out of pseudo-root READDIR |
-| `max_ops_per_sec` | `0` (unlimited) | Per-export operation rate limit |
-| `max_bytes_per_sec` | `0` | **Not enforced** yet ([#90](https://github.com/glennswest/nextnfs/issues/90)) |
+| `max_ops_per_sec` | `0` (unlimited) | Per-export operation rate limit (token bucket, one second of burst); ops over it get `NFS4ERR_DELAY` and the client retries |
+| `max_bytes_per_sec` | `0` (unlimited) | Per-export READ+WRITE data rate limit (token bucket, one second of burst). READ is charged its requested count, WRITE its data length; over the limit the op gets `NFS4ERR_DELAY`. A single READ/WRITE larger than the limit passes once the bucket is full and leaves it in debt, so the average rate still holds |
 | `squash` | `""` (none) | `root_squash` or `all_squash`; any other value means none. **Today this only rewrites the owner/group shown by GETATTR** — requests still run as the server's uid ([#91](https://github.com/glennswest/nextnfs/issues/91)) |
 | `anon_uid`, `anon_gid` | `65534` | Identity shown for squashed owners |
 
@@ -156,7 +156,7 @@ nextnfs stats | health   [--api URL]     # default http://127.0.0.1:8080
 | POST | `/api/v1/exports` | Add `{"name","path","read_only"}` (in-memory; no `clients`/QoS/squash) |
 | DELETE | `/api/v1/exports/{name}` | Remove export |
 | GET | `/api/v1/stats` · `/api/v1/stats/{name}` | Server totals (`total_reads`, `total_writes`, `total_bytes_read`, `total_bytes_written`, `total_ops`, `exports`) / one export |
-| GET · PUT | `/api/v1/qos/{name}` | Read / set `{"max_ops_per_sec","max_bytes_per_sec"}` (bytes limit not enforced, #90); 404 for unknown export |
+| GET · PUT | `/api/v1/qos/{name}` | Read / set `{"max_ops_per_sec","max_bytes_per_sec"}` (applies at once; a changed limit starts with a full bucket); 404 for unknown export |
 | GET | `/` · `/ui/exports` · `/ui/stats` | Web UI |
 
 The API has no authentication — bind `api_listen` to a trusted address.

@@ -3,6 +3,9 @@
 ## [Unreleased]
 
 ### 2026-10-06
+- **fix:** `max_bytes_per_sec` is enforced (#90): READ (requested count) and WRITE (data length) are charged against the export's byte bucket, and an op over the limit gets `NFS4ERR_DELAY`. Before, only `max_ops_per_sec` was checked. An op larger than the whole bucket passes once it is full and leaves it in debt, so it is slowed rather than refused forever. The op and byte buckets are charged together, so a refusal takes from neither
+- **fix:** A QoS refusal (`NFS4ERR_DELAY`) now includes the refused op's result in `resarray` (RFC 7530 §16.2.3); it was missing
+- **fix:** Changing an export's QoS limits (config at startup or `PUT /api/v1/qos/{name}`) starts the new limit with a full bucket; the bucket of a previously unlimited export started empty and refused the first second of traffic
 - **docs:** README test count 553 (the `nextnfs` binary now has 2 config tests, #92)
 - **fix:** `[server] rdma_device` / `rdma_port` now log a warning at startup that NFS-over-RDMA is not implemented and the keys are ignored (TCP only). Before, nextnfs logged "RDMA transport configured (RFC 8166/8267)" and "RDMA listen port configured" while nothing listened on RDMA (#92)
 - **fix:** `nextnfs.spec` `%changelog` weekday corrected (2026-04-02 is a Thursday); rpmbuild warned "bogus date" (#95)

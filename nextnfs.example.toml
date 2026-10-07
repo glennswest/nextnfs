@@ -18,7 +18,7 @@ read_only = false
 # path = "/data"
 # read_only = false
 # max_ops_per_sec = 0
-# max_bytes_per_sec = 0          # not enforced yet (#90)
+# max_bytes_per_sec = 0          # READ+WRITE bytes/s, 0 = unlimited
 # clients = ["192.168.1.0/24"]
 # squash = "root_squash"        # only rewrites GETATTR owner today (#91)
 #

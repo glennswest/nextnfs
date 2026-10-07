@@ -456,15 +456,27 @@ impl NfsProtoImpl for NFS40Server {
                     let operation = op_name(&arg);
                     debug!(op = operation, idx = op_idx, total = op_count, "compound: dispatching op");
 
-                    // QoS rate limit check — if rate exceeded, return NFS4ERR_DELAY
+                    // QoS rate limit check — if rate exceeded, return NFS4ERR_DELAY.
+                    // READ (requested count) and WRITE (data length) are also
+                    // charged against max_bytes_per_sec (#90).
+                    let op_bytes = match &arg {
+                        NfsArgOp::Opread(a) => a.count as u64,
+                        NfsArgOp::Opwrite(a) => a.data.len() as u64,
+                        _ => 0,
+                    };
                     let rate_limited = if let Some(rl) = request.rate_limiter() {
                         let rl = rl.clone();
                         let mut limiter = rl.lock().await;
-                        !limiter.try_consume_op()
+                        !limiter.try_consume(op_bytes)
                     } else {
                         false
                     };
                     if rate_limited {
+                        debug!(op = operation, bytes = op_bytes, "compound: QoS limit, NFS4ERR_DELAY");
+                        resarray.push(NfsResOp4::OpError {
+                            op: op_code(&arg),
+                            status: NfsStat4::Nfs4errDelay,
+                        });
                         return (
                             request,
                             ReplyBody::MsgAccepted(AcceptedReply {
@@ -835,6 +847,42 @@ mod tests {
             _ => panic!("Expected MsgAccepted"),
         }
         assert!(dir.path().join("f").exists());
+    }
+
+    #[tokio::test]
+    async fn test_compound_max_bytes_per_sec_delays_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let request = request_on_export(false, dir.path()).await;
+        request
+            .rate_limiter()
+            .unwrap()
+            .lock()
+            .await
+            .update_config(crate::server::export_manager::QosConfig {
+                max_ops_per_sec: 0,
+                max_bytes_per_sec: 1,
+            });
+        let server = NFS40Server::new();
+        // The first one-byte WRITE takes the whole bucket (it then fails on
+        // its own, there is no filehandle); the second is delayed.
+        let (request, _reply) = server.compound(make_compound(vec![write_op()]), request).await;
+        let (_request, reply) = server.compound(make_compound(vec![write_op()]), request).await;
+        match reply {
+            ReplyBody::MsgAccepted(accepted) => match accepted.reply_data {
+                AcceptBody::Success(res) => {
+                    assert_eq!(res.status, NfsStat4::Nfs4errDelay);
+                    assert_eq!(
+                        res.resarray,
+                        vec![NfsResOp4::OpError {
+                            op: 38,
+                            status: NfsStat4::Nfs4errDelay
+                        }]
+                    );
+                }
+                _ => panic!("Expected Success"),
+            },
+            _ => panic!("Expected MsgAccepted"),
+        }
     }
 
     #[tokio::test]
