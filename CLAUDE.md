@@ -123,4 +123,7 @@ waiting on the owner), `rdma_device`/`rdma_port` (warn and are ignored). See `gh
       loop — READ (requested count) and WRITE (data length) charge the
       export's byte bucket, NFS4ERR_DELAY when over; an op bigger than the
       bucket is let through once it is full (bucket goes into debt).
+      Code + docs pushed (f08bfb7, 3b7b9b3). `sc-build 'cargo test
+      --workspace'` got no slot in an hour twice (exit 75, dev busy); still
+      to verify, then close #90 and request the golden.
 - [ ] #101 (ACCESS as uid 0 for non-AUTH_SYS).
