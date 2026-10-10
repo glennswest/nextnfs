@@ -5,7 +5,7 @@ live in `../CLAUDE.md`; this file is the project context and work plan.
 
 ## Version
 
-**0.13.9** (tag `v0.13.9`). Version locations — all must match:
+**0.14.0** (tag `v0.14.0`). Version locations — all must match:
 
 - `Cargo.toml` → `[workspace.package] version` (every crate inherits it)
 - `build.sh` → `VERSION=`
@@ -115,7 +115,7 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       verbs transport would be a new feature, not this fix.
       `sc-build 'cargo test --workspace'` on ff30e99 green (553 tests;
       first attempt failed to compile, #104).
-- [ ] 2026-10-10 — #91 decided (owner 2026-10-09: option A + default
+- [x] 2026-10-10 — #91 decided (owner 2026-10-09: option A + default
       `root_squash`, breaking minor bump → 0.14.0). In progress:
       new `nfs/src/server/perm.rs` — `Caller` (AUTH_SYS uid/gid/gids mapped
       through the export's squash; AUTH_NONE/other flavours = anon),
@@ -130,7 +130,10 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       Code pushed (d3d4eec, dd89aa4 `--squash` CLI flag + test harness
       `--squash none`, 229b1a8); docs/CHANGELOG done (1e1c167). Next:
       `sc-build 'cargo test --workspace && cargo clippy --workspace
-      --all-targets'` green → bump 0.14.0 → close #91 and #101 → golden.
+      --all-targets'` on 229b1a8 green (577 tests; clippy warnings only in
+      pre-existing code: filehandle.rs, nfstest, stress). Released v0.14.0;
+      #91 and #101 closed; golden requested. #90 is verified by the same
+      build (its code is in 229b1a8).
 - [ ] 2026-10-06 — #90: `max_bytes_per_sec` enforced in the COMPOUND
       loop — READ (requested count) and WRITE (data length) charge the
       export's byte bucket, NFS4ERR_DELAY when over; an op bigger than the
@@ -138,4 +141,4 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       Code + docs pushed (f08bfb7, 3b7b9b3). `sc-build 'cargo test
       --workspace'` got no slot in an hour twice (exit 75, dev busy); still
       to verify, then close #90 and request the golden.
-- [ ] #101 (ACCESS as uid 0 for non-AUTH_SYS).
+- [x] #101 fixed with #91 (ACCESS uses the squash-mapped caller; AUTH_NONE = anon).
