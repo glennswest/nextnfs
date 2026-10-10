@@ -32,6 +32,11 @@ struct Cli {
     /// Config file path
     #[arg(short, long, global = true)]
     config: Option<PathBuf>,
+
+    /// Squash mode of the --export export: root_squash (default),
+    /// all_squash or none. Config-file exports use their own `squash`.
+    #[arg(long, global = true)]
+    squash: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -145,12 +150,20 @@ async fn main() {
                 listen.unwrap_or(cli.listen),
                 api_listen.unwrap_or(cli.api_listen),
                 config.or(cli.config),
+                cli.squash.unwrap_or_default(),
             )
             .await;
         }
         None => {
             // Default: run server (backwards-compatible)
-            run_server(cli.export, cli.listen, cli.api_listen, cli.config).await;
+            run_server(
+                cli.export,
+                cli.listen,
+                cli.api_listen,
+                cli.config,
+                cli.squash.unwrap_or_default(),
+            )
+            .await;
         }
     }
 }
@@ -160,6 +173,7 @@ async fn run_server(
     listen_addr: String,
     api_listen_addr: String,
     config_path: Option<PathBuf>,
+    cli_squash: String,
 ) {
     // Load config and merge with CLI args
     let (exports, listen, api_listen, state_dir, tls_cert, tls_key) = if let Some(config_path) = config_path {
@@ -196,7 +210,7 @@ async fn run_server(
                             max_ops_per_sec: 0,
                             max_bytes_per_sec: 0,
                             clients: vec![],
-                            squash: String::new(),
+                            squash: cli_squash,
                             anon_uid: 65534,
                             anon_gid: 65534,
                         }],
@@ -228,7 +242,7 @@ async fn run_server(
                 max_ops_per_sec: 0,
                 max_bytes_per_sec: 0,
                 clients: vec![],
-                squash: String::new(),
+                squash: cli_squash,
                 anon_uid: 65534,
                 anon_gid: 65534,
             }],

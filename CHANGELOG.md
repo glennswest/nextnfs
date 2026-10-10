@@ -9,6 +9,7 @@
 - **fix:** AUTH_NONE (and any credential without a uid) is the export's anonymous user for permission checks and ACCESS; ACCESS answered it as uid 0 (#101). ACCESS also counts the caller's supplementary groups and stat()s the object instead of using cached attributes
 - **fix:** GETATTR reports the real owner and group; it rewrote uid/gid 0 to `anon_uid`/`anon_gid` on squashed exports, which was all `squash` did
 - **fix:** RENAME and LINK between two exports get `NFS4ERR_XDEV`
+- **feat:** `--squash MODE` sets the squash mode of the `--export` export (config-file exports use their `squash` key). The shell test harness (`tests/helpers.sh`, `ci/server-runner.sh`) starts the server with `--squash none`, since its clients mount and write as root
 
 ### 2026-10-07
 - **docs:** removed references to the CoreOS trademark (owner); the Ignition interface name `opt/com.coreos/config` stays where Ignition requires it

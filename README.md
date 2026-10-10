@@ -143,10 +143,12 @@ Exports added through the API or CLI live in memory only; they are gone after a 
 ## CLI
 
 ```
-nextnfs [serve] [-e|--export PATH] [-l|--listen ADDR] [-a|--api-listen ADDR] [-c|--config FILE]
+nextnfs [serve] [-e|--export PATH] [-l|--listen ADDR] [-a|--api-listen ADDR] [-c|--config FILE] [--squash MODE]
 nextnfs export list | add --name N --path P [--read-only] | remove --name N
 nextnfs stats | health   [--api URL]     # default http://127.0.0.1:8080
 ```
+
+`--squash` (`root_squash` by default, `all_squash`, `none`) sets the squash mode of the `--export` export only; config-file exports use their own `squash` key. The `[export]` legacy section has no `squash` key and is `root_squash`. Exports added through the API are `root_squash`.
 
 ## REST API
 

@@ -142,8 +142,10 @@ start_server() {
     info "Listen:  $NEXTNFS_LISTEN"
     info "API:     $NEXTNFS_API"
 
+    # Test clients run as root: let them be root on the export (#91)
     RUST_LOG=info "$bin_path" \
         --export "$NEXTNFS_EXPORT" \
+        --squash none \
         --listen "$NEXTNFS_LISTEN" \
         --api-listen "$NEXTNFS_API" \
         > "$LOG_FILE" 2>&1 &

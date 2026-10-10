@@ -378,9 +378,10 @@ start_nextnfs() {
 
     mkdir -p "$export_dir"
 
-    echo "Starting nextnfs: $NEXTNFS_BIN --export $export_dir --listen $listen --api-listen $api_listen"
+    echo "Starting nextnfs: $NEXTNFS_BIN --export $export_dir --squash none --listen $listen --api-listen $api_listen"
     RUST_LOG=info "$NEXTNFS_BIN" \
         --export "$export_dir" \
+        --squash none \
         --listen "$listen" \
         --api-listen "$api_listen" \
         > /tmp/nextnfs-test.log 2>&1 &
