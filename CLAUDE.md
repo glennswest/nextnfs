@@ -127,6 +127,10 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       ACCESS uses the same caller (also fixes #101); GETATTR owner rewrite
       removed; `SquashMode` default `root_squash`, `AccessConfig` Default
       gives 65534. nfsop side: glennswest/nextnfs-operator#13.
+      Code pushed (d3d4eec, dd89aa4 `--squash` CLI flag + test harness
+      `--squash none`, 229b1a8); docs/CHANGELOG done (1e1c167). Next:
+      `sc-build 'cargo test --workspace && cargo clippy --workspace
+      --all-targets'` green → bump 0.14.0 → close #91 and #101 → golden.
 - [ ] 2026-10-06 — #90: `max_bytes_per_sec` enforced in the COMPOUND
       loop — READ (requested count) and WRITE (data length) charge the
       export's byte bucket, NFS4ERR_DELAY when over; an op bigger than the
