@@ -62,7 +62,8 @@ pub struct ExportEntry {
     /// Allowed client IP addresses or CIDR subnets (empty = allow all)
     #[serde(default)]
     pub clients: Vec<String>,
-    /// UID/GID squash mode: "none", "root_squash", "all_squash"
+    /// UID/GID squash mode: "root_squash" (default when empty), "all_squash",
+    /// "none". Permissions are checked for the mapped identity (#91).
     #[serde(default)]
     pub squash: String,
     /// Anonymous UID for squashed requests (default 65534)

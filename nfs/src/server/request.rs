@@ -126,6 +126,17 @@ impl<'a> NfsRequest<'a> {
             .expect("file_manager() called before export was selected")
     }
 
+    /// The current export's FileManagerHandle, if an export is selected.
+    pub fn file_manager_opt(&self) -> Option<&FileManagerHandle> {
+        self.cached_fmanager.as_ref()
+    }
+
+    /// Identity the current op runs as: the credential mapped through the
+    /// current export's squash rules (#91).
+    pub fn caller(&self) -> super::perm::Caller {
+        super::perm::Caller::new(self.auth_cred.as_ref(), self.access_control.as_deref())
+    }
+
     /// Switch to a different export by id. Updates the cached file manager.
     /// Called by PUTROOTFH, PUTFH, LOOKUP when routing to an export.
     pub async fn set_export(&mut self, export_id: u8) {

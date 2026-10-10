@@ -9,7 +9,7 @@ use crate::server::{
 };
 
 use nextnfs_proto::nfs4_proto::{
-    Fattr4, FileAttrValue, Getattr4args, Getattr4resok, NfsResOp4,
+    Fattr4, Getattr4args, Getattr4resok, NfsResOp4,
 };
 
 use crate::server::filemanager::QuotaInfo;
@@ -70,7 +70,7 @@ impl NfsOperation for Getattr4args {
                     .file_manager()
                     .filehandle_attrs(&self.attr_request, filehandle, quota_info.as_ref());
 
-                let (answer_attrs, mut attrs) = match resp {
+                let (answer_attrs, attrs) = match resp {
                     Some(inner) => inner,
                     None => {
                         return NfsOpResponse {
@@ -83,31 +83,6 @@ impl NfsOperation for Getattr4args {
                         };
                     }
                 };
-
-                // Apply UID/GID squash to Owner/OwnerGroup attributes
-                if let Some(ac) = request.access_control() {
-                    for attr in attrs.0.iter_mut() {
-                        match attr {
-                            FileAttrValue::Owner(ref mut owner) => {
-                                if let Ok(uid) = owner.parse::<u32>() {
-                                    let squashed = ac.squash_uid(uid);
-                                    if squashed != uid {
-                                        *owner = squashed.to_string();
-                                    }
-                                }
-                            }
-                            FileAttrValue::OwnerGroup(ref mut group) => {
-                                if let Ok(gid) = group.parse::<u32>() {
-                                    let squashed = ac.squash_gid(gid);
-                                    if squashed != gid {
-                                        *group = squashed.to_string();
-                                    }
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                }
 
                 NfsOpResponse {
                     request,

@@ -6,6 +6,7 @@ pub mod nfs41;
 pub mod nfs42;
 pub mod rdma;
 pub mod operation;
+pub mod perm;
 pub mod request;
 pub mod response;
 pub mod state_recovery;

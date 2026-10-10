@@ -267,21 +267,23 @@ impl QuotaManager {
     }
 }
 
-/// Squash mode for UID/GID mapping.
+/// Squash mode for UID/GID mapping. Permissions are checked for the mapped
+/// identity on every export (#91); `RootSquash` is the default, as in
+/// exports(5).
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SquashMode {
-    /// No squashing — UIDs passed through as-is.
-    #[default]
+    /// No squashing — UIDs passed through as-is (root keeps root's rights).
     None,
     /// Map UID 0 (root) to anon_uid/anon_gid.
+    #[default]
     RootSquash,
     /// Map all UIDs to anon_uid/anon_gid.
     AllSquash,
 }
 
 /// Per-export access control configuration.
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct AccessConfig {
     /// Allowed client IP addresses or CIDR subnets (empty = allow all).
     #[serde(default)]
@@ -297,8 +299,22 @@ pub struct AccessConfig {
     pub anon_gid: u32,
 }
 
-fn default_anon_uid() -> u32 { 65534 }
-fn default_anon_gid() -> u32 { 65534 }
+/// uid/gid of `nobody`/`nogroup`, the default anonymous identity.
+pub const DEFAULT_ANON_ID: u32 = 65534;
+
+fn default_anon_uid() -> u32 { DEFAULT_ANON_ID }
+fn default_anon_gid() -> u32 { DEFAULT_ANON_ID }
+
+impl Default for AccessConfig {
+    fn default() -> Self {
+        Self {
+            clients: Vec::new(),
+            squash: SquashMode::default(),
+            anon_uid: DEFAULT_ANON_ID,
+            anon_gid: DEFAULT_ANON_ID,
+        }
+    }
+}
 
 /// Parsed access control list for fast IP matching.
 #[derive(Debug)]
@@ -399,6 +415,47 @@ impl AccessControl {
             SquashMode::None => gid,
             SquashMode::RootSquash => if gid == 0 { config.anon_gid } else { gid },
             SquashMode::AllSquash => config.anon_gid,
+        }
+    }
+
+    /// Anonymous (uid, gid) for this export.
+    pub fn anon_ids(&self) -> (u32, u32) {
+        let config = self.config.read().unwrap();
+        (config.anon_uid, config.anon_gid)
+    }
+
+    /// Map an AUTH_SYS identity (uid, gid, supplementary gids) through the
+    /// squash rules: the identity permissions are checked for (#91).
+    pub fn map_ids(&self, uid: u32, gid: u32, gids: &[u32]) -> (u32, u32, Vec<u32>) {
+        let config = self.config.read().unwrap();
+        Self::map_with(&config.squash, config.anon_uid, config.anon_gid, uid, gid, gids)
+    }
+
+    /// `map_ids` with the default config (root_squash, 65534), for callers
+    /// that are on no export (the pseudo-root).
+    pub fn default_map_ids(uid: u32, gid: u32, gids: &[u32]) -> (u32, u32, Vec<u32>) {
+        Self::map_with(&SquashMode::default(), DEFAULT_ANON_ID, DEFAULT_ANON_ID, uid, gid, gids)
+    }
+
+    fn map_with(
+        squash: &SquashMode,
+        anon_uid: u32,
+        anon_gid: u32,
+        uid: u32,
+        gid: u32,
+        gids: &[u32],
+    ) -> (u32, u32, Vec<u32>) {
+        match squash {
+            SquashMode::None => (uid, gid, gids.to_vec()),
+            SquashMode::RootSquash => {
+                let g = |g: u32| if g == 0 { anon_gid } else { g };
+                (
+                    if uid == 0 { anon_uid } else { uid },
+                    g(gid),
+                    gids.iter().map(|&x| g(x)).collect(),
+                )
+            }
+            SquashMode::AllSquash => (anon_uid, anon_gid, Vec::new()),
         }
     }
 

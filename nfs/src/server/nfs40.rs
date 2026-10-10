@@ -31,8 +31,9 @@ fn is_mutating(arg: &NfsArgOp) -> bool {
 }
 
 /// Wire opcode of the operations the dispatcher can refuse itself: the
-/// mutating ones `is_mutating` covers, and the ones that can move the
-/// current filehandle onto another export (#97).
+/// mutating ones `is_mutating` covers, the ones that can move the
+/// current filehandle onto another export (#97), and the ones
+/// `perm::check_op` checks (#91).
 fn op_code(arg: &NfsArgOp) -> u32 {
     match arg {
         NfsArgOp::Opcommit(_) => 5,
@@ -44,6 +45,8 @@ fn op_code(arg: &NfsArgOp) -> u32 {
         NfsArgOp::Opputfh(_) => 22,
         NfsArgOp::Opputpubfh(_) => 23,
         NfsArgOp::Opputrootfh(_) => 24,
+        NfsArgOp::Opread(_) => 25,
+        NfsArgOp::Opreaddir(_) => 26,
         NfsArgOp::Opremove(_) => 28,
         NfsArgOp::Oprename(_) => 29,
         NfsArgOp::Oprestorefh(_) => 31,
@@ -554,6 +557,37 @@ impl NfsProtoImpl for NFS40Server {
                         );
                     }
 
+                    // Permissions: the caller (squash-mapped, #91) must have
+                    // the mode bits the op needs on the objects it touches.
+                    let caller = request.caller();
+                    if let Err(status) = super::perm::check_op(&arg, &request, &caller) {
+                        info!(
+                            client = %request.client_addr(),
+                            op = operation,
+                            uid = caller.uid,
+                            status = ?status,
+                            export = ?request.current_export_id(),
+                            path = request.current_filehandle().map(|fh| fh.path.as_str()).unwrap_or("-"),
+                            "nfs_audit: permission denied"
+                        );
+                        resarray.push(NfsResOp4::OpError {
+                            op: op_code(&arg),
+                            status: status.clone(),
+                        });
+                        return (
+                            request,
+                            ReplyBody::MsgAccepted(AcceptedReply {
+                                verf: OpaqueAuth::AuthNull(Vec::<u8>::new()),
+                                reply_data: AcceptBody::Success(Compound4res {
+                                    status,
+                                    tag: "".to_string(),
+                                    resarray,
+                                }),
+                            }),
+                        );
+                    }
+                    let creates = super::perm::creates_object(&arg, &request);
+
                     let opnum = op_code(&arg);
                     let export_before = request.current_export_id();
                     let mut response = match arg {
@@ -638,6 +672,10 @@ impl NfsProtoImpl for NFS40Server {
                         NfsArgOp::Opcopy(args) => args.execute(request).await,
                         NfsArgOp::Opseek(args) => args.execute(request).await,
                     };
+                    // A new file, directory or symlink belongs to the caller.
+                    if creates && response.status == NfsStat4::Nfs4Ok {
+                        super::perm::chown_new_object(&mut response.request, &caller).await;
+                    }
                     // An op that moved the client onto another export (PUTFH,
                     // PUTROOTFH, LOOKUP from the pseudo-root, RESTOREFH, ...)
                     // must pass that export's `clients` list (#97).
@@ -733,14 +771,38 @@ impl NfsProtoImpl for NFS40Server {
 mod tests {
     use super::*;
     use crate::test_utils::*;
+    use crate::server::export_manager::{AccessConfig, SquashMode};
+    use std::os::unix::fs::PermissionsExt;
 
+    /// AUTH_SYS credential for `uid`/`gid`.
+    fn auth_sys(uid: u32, gid: u32) -> OpaqueAuth {
+        OpaqueAuth::AuthUnix(AuthUnix {
+            stamp: 0,
+            machinename: "test".to_string(),
+            uid,
+            gid,
+            gids: vec![gid],
+        })
+    }
+
+    /// The test process's own identity: it owns the tempdirs tests export.
+    fn own_ids() -> (u32, u32) {
+        unsafe { (libc::geteuid(), libc::getegid()) }
+    }
+
+    /// COMPOUND sent as the test process's own uid/gid (AUTH_SYS).
     fn make_compound(ops: Vec<NfsArgOp>) -> CallBody {
+        let (uid, gid) = own_ids();
+        make_compound_as(auth_sys(uid, gid), ops)
+    }
+
+    fn make_compound_as(cred: OpaqueAuth, ops: Vec<NfsArgOp>) -> CallBody {
         CallBody {
             rpcvers: 2,
             prog: 100003,
             vers: 4,
             proc: 1,
-            cred: OpaqueAuth::AuthNull(vec![]),
+            cred,
             verf: OpaqueAuth::AuthNull(vec![]),
             args: Some(Compound4args {
                 tag: "test".to_string(),
@@ -750,12 +812,25 @@ mod tests {
         }
     }
 
-    /// Request whose current export is a read-only (or writable) real export.
+    /// Request whose current export is a read-only (or writable) real export,
+    /// with `squash = "none"` so the test process passes the permission
+    /// checks (#91) as itself, root or not.
     async fn request_on_export(read_only: bool, dir: &std::path::Path) -> NfsRequest<'static> {
+        request_on_export_squash(read_only, dir, SquashMode::None).await
+    }
+
+    async fn request_on_export_squash(
+        read_only: bool,
+        dir: &std::path::Path,
+        squash: SquashMode,
+    ) -> NfsRequest<'static> {
         let mut request = create_nfs40_server(None).await;
-        let info = request
-            .export_manager()
+        let em = request.export_manager();
+        let info = em
             .add_export("ro".to_string(), dir.to_path_buf(), read_only)
+            .await
+            .unwrap();
+        em.set_access("ro", AccessConfig { squash, ..Default::default() })
             .await
             .unwrap();
         request.set_export(info.export_id).await;
@@ -2655,6 +2730,7 @@ mod tests {
             "locked",
             crate::server::export_manager::AccessConfig {
                 clients: vec!["10.0.0.0/8".to_string()],
+                squash: SquashMode::None,
                 ..Default::default()
             },
         )
@@ -2790,5 +2866,228 @@ mod tests {
         // An allowed client sees both
         let (entries, _) = op_pseudo::pseudo_readdir(&em, "10.1.2.3:700", &[], 0).await;
         assert_eq!(entries.len(), 2);
+    }
+
+    // --- #91: permissions checked for the squash-mapped caller ---
+
+    /// An unprivileged uid that does not own the test's tempdirs.
+    const OTHER: u32 = 54321;
+
+    fn chmod(path: &std::path::Path, mode: u32) {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    fn mkdir_op(name: &str) -> NfsArgOp {
+        NfsArgOp::Opcreate(Create4args {
+            objtype: Createtype4::Nf4dir,
+            objname: name.to_string(),
+            createattrs: Fattr4 {
+                attrmask: Attrlist4(vec![]),
+                attr_vals: Attrlist4(vec![]),
+            },
+        })
+    }
+
+    async fn run_as(
+        dir: &std::path::Path,
+        squash: SquashMode,
+        cred: OpaqueAuth,
+        ops: Vec<NfsArgOp>,
+    ) -> (NfsStat4, Vec<NfsResOp4>) {
+        let request = request_on_export_squash(false, dir, squash).await;
+        let server = NFS40Server::new();
+        let (_request, reply) = server.compound(make_compound_as(cred, ops), request).await;
+        compound_result(reply)
+    }
+
+    #[tokio::test]
+    async fn test_perm_other_uid_cannot_create_in_0755_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        chmod(dir.path(), 0o755);
+        let (status, resarray) = run_as(
+            dir.path(),
+            SquashMode::RootSquash,
+            auth_sys(OTHER, OTHER),
+            vec![NfsArgOp::Opputrootfh(()), mkdir_op("d")],
+        )
+        .await;
+        assert_eq!(status, NfsStat4::Nfs4errAccess);
+        assert_eq!(resarray[1], NfsResOp4::OpError { op: 6, status: NfsStat4::Nfs4errAccess });
+        assert!(!dir.path().join("d").exists());
+    }
+
+    #[tokio::test]
+    async fn test_perm_owner_can_create() {
+        let dir = tempfile::tempdir().unwrap();
+        chmod(dir.path(), 0o755);
+        let (uid, gid) = own_ids();
+        let (status, _) = run_as(
+            dir.path(),
+            SquashMode::None,
+            auth_sys(uid, gid),
+            vec![NfsArgOp::Opputrootfh(()), mkdir_op("d")],
+        )
+        .await;
+        assert_eq!(status, NfsStat4::Nfs4Ok);
+        assert!(dir.path().join("d").is_dir());
+    }
+
+    #[tokio::test]
+    async fn test_perm_root_is_squashed_by_default() {
+        let dir = tempfile::tempdir().unwrap();
+        chmod(dir.path(), 0o755);
+        // AccessConfig::default() is root_squash: root becomes nobody.
+        let (status, _) = run_as(
+            dir.path(),
+            AccessConfig::default().squash,
+            auth_sys(0, 0),
+            vec![NfsArgOp::Opputrootfh(()), mkdir_op("d")],
+        )
+        .await;
+        assert_eq!(status, NfsStat4::Nfs4errAccess);
+        assert!(!dir.path().join("d").exists());
+    }
+
+    #[tokio::test]
+    async fn test_perm_all_squash_maps_owner_too() {
+        let dir = tempfile::tempdir().unwrap();
+        chmod(dir.path(), 0o755);
+        let (uid, gid) = own_ids();
+        let (status, _) = run_as(
+            dir.path(),
+            SquashMode::AllSquash,
+            auth_sys(uid, gid),
+            vec![NfsArgOp::Opputrootfh(()), mkdir_op("d")],
+        )
+        .await;
+        assert_eq!(status, NfsStat4::Nfs4errAccess);
+    }
+
+    #[tokio::test]
+    async fn test_perm_unsquashed_root_passes() {
+        let dir = tempfile::tempdir().unwrap();
+        chmod(dir.path(), 0o700);
+        let (status, _) = run_as(
+            dir.path(),
+            SquashMode::None,
+            auth_sys(0, 0),
+            vec![NfsArgOp::Opputrootfh(()), mkdir_op("d")],
+        )
+        .await;
+        assert_eq!(status, NfsStat4::Nfs4Ok);
+        assert!(dir.path().join("d").is_dir());
+    }
+
+    #[tokio::test]
+    async fn test_perm_auth_none_is_anonymous() {
+        let dir = tempfile::tempdir().unwrap();
+        chmod(dir.path(), 0o755);
+        let (status, _) = run_as(
+            dir.path(),
+            SquashMode::None,
+            OpaqueAuth::AuthNull(vec![]),
+            vec![NfsArgOp::Opputrootfh(()), mkdir_op("d")],
+        )
+        .await;
+        assert_eq!(status, NfsStat4::Nfs4errAccess);
+    }
+
+    #[tokio::test]
+    async fn test_perm_lookup_needs_search() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("f"), b"x").unwrap();
+        chmod(dir.path(), 0o700);
+        let (status, resarray) = run_as(
+            dir.path(),
+            SquashMode::RootSquash,
+            auth_sys(OTHER, OTHER),
+            vec![NfsArgOp::Opputrootfh(()), lookup_op("f")],
+        )
+        .await;
+        assert_eq!(status, NfsStat4::Nfs4errAccess);
+        assert_eq!(resarray[1], NfsResOp4::OpError { op: 15, status: NfsStat4::Nfs4errAccess });
+    }
+
+    #[tokio::test]
+    async fn test_perm_write_needs_w() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("f"), b"x").unwrap();
+        chmod(&dir.path().join("f"), 0o644);
+        chmod(dir.path(), 0o755);
+        let (status, resarray) = run_as(
+            dir.path(),
+            SquashMode::RootSquash,
+            auth_sys(OTHER, OTHER),
+            vec![NfsArgOp::Opputrootfh(()), lookup_op("f"), write_op()],
+        )
+        .await;
+        assert_eq!(status, NfsStat4::Nfs4errAccess);
+        assert_eq!(resarray[2], NfsResOp4::OpError { op: 38, status: NfsStat4::Nfs4errAccess });
+        assert_eq!(std::fs::read(dir.path().join("f")).unwrap(), b"x");
+    }
+
+    #[tokio::test]
+    async fn test_perm_sticky_dir_remove_by_non_owner() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("f"), b"x").unwrap();
+        chmod(dir.path(), 0o1777);
+        let (status, _) = run_as(
+            dir.path(),
+            SquashMode::RootSquash,
+            auth_sys(OTHER, OTHER),
+            vec![
+                NfsArgOp::Opputrootfh(()),
+                NfsArgOp::Opremove(Remove4args { target: "f".to_string() }),
+            ],
+        )
+        .await;
+        assert_eq!(status, NfsStat4::Nfs4errPerm);
+        assert!(dir.path().join("f").exists());
+    }
+
+    #[tokio::test]
+    async fn test_perm_chmod_by_non_owner() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("f"), b"x").unwrap();
+        chmod(&dir.path().join("f"), 0o666);
+        chmod(dir.path(), 0o755);
+        let setattr = NfsArgOp::Opsetattr(SetAttr4args {
+            stateid: Stateid4 { seqid: 0, other: [0; 12] },
+            obj_attributes: Fattr4 {
+                attrmask: Attrlist4(vec![FileAttr::Mode]),
+                attr_vals: Attrlist4(vec![FileAttrValue::Mode(0o777)]),
+            },
+        });
+        let (status, _) = run_as(
+            dir.path(),
+            SquashMode::RootSquash,
+            auth_sys(OTHER, OTHER),
+            vec![NfsArgOp::Opputrootfh(()), lookup_op("f"), setattr],
+        )
+        .await;
+        assert_eq!(status, NfsStat4::Nfs4errPerm);
+        let mode = std::fs::metadata(dir.path().join("f")).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o666);
+    }
+
+    #[tokio::test]
+    async fn test_perm_access_for_squashed_root() {
+        let dir = tempfile::tempdir().unwrap();
+        chmod(dir.path(), 0o755);
+        let (status, resarray) = run_as(
+            dir.path(),
+            SquashMode::RootSquash,
+            auth_sys(0, 0),
+            vec![
+                NfsArgOp::Opputrootfh(()),
+                NfsArgOp::OpAccess(Access4args { access: ACCESS4_READ | ACCESS4_MODIFY }),
+            ],
+        )
+        .await;
+        assert_eq!(status, NfsStat4::Nfs4Ok);
+        match &resarray[1] {
+            NfsResOp4::OpAccess(Access4res::Resok4(res)) => assert_eq!(res.access, ACCESS4_READ),
+            other => panic!("unexpected {:?}", other),
+        }
     }
 }

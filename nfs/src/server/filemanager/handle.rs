@@ -1012,7 +1012,7 @@ impl FileManagerHandle {
 
     /// Resolve an NFSv4 owner string to a numeric uid.
     /// Handles: "1000", "user", "user@domain", "1000@domain"
-    fn resolve_nfs4_uid(owner: &str) -> Option<u32> {
+    pub(crate) fn resolve_nfs4_uid(owner: &str) -> Option<u32> {
         if let Ok(uid) = owner.parse::<u32>() {
             return Some(uid);
         }
@@ -1042,7 +1042,7 @@ impl FileManagerHandle {
 
     /// Resolve an NFSv4 owner_group string to a numeric gid.
     /// Handles: "1000", "group", "group@domain", "1000@domain"
-    fn resolve_nfs4_gid(group: &str) -> Option<u32> {
+    pub(crate) fn resolve_nfs4_gid(group: &str) -> Option<u32> {
         if let Ok(gid) = group.parse::<u32>() {
             return Some(gid);
         }

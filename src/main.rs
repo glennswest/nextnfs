@@ -286,27 +286,37 @@ async fn run_server(
                         "QoS rate limiting configured"
                     );
                 }
-                // Apply access control config from TOML if specified
-                if !entry.clients.is_empty() || !entry.squash.is_empty() {
-                    let squash = match entry.squash.as_str() {
-                        "root_squash" => SquashMode::RootSquash,
-                        "all_squash" => SquashMode::AllSquash,
-                        _ => SquashMode::None,
-                    };
-                    let access = AccessConfig {
-                        clients: entry.clients.clone(),
-                        squash,
-                        anon_uid: entry.anon_uid,
-                        anon_gid: entry.anon_gid,
-                    };
-                    let _ = export_manager.set_access(&entry.name, access).await;
-                    info!(
-                        name = %entry.name,
-                        clients = ?entry.clients,
-                        squash = %entry.squash,
-                        "access control configured"
-                    );
-                }
+                // Access control: `clients`, and the squash mapping every
+                // request's permissions are checked for (#91). An unset
+                // `squash` is root_squash, as in exports(5).
+                let squash = match entry.squash.as_str() {
+                    "" | "root_squash" => SquashMode::RootSquash,
+                    "all_squash" => SquashMode::AllSquash,
+                    "none" | "no_root_squash" => SquashMode::None,
+                    other => {
+                        error!(
+                            name = %entry.name,
+                            squash = other,
+                            "unknown squash mode (none, root_squash, all_squash)"
+                        );
+                        std::process::exit(1);
+                    }
+                };
+                let access = AccessConfig {
+                    clients: entry.clients.clone(),
+                    squash: squash.clone(),
+                    anon_uid: entry.anon_uid,
+                    anon_gid: entry.anon_gid,
+                };
+                let _ = export_manager.set_access(&entry.name, access).await;
+                info!(
+                    name = %entry.name,
+                    clients = ?entry.clients,
+                    squash = ?squash,
+                    anon_uid = entry.anon_uid,
+                    anon_gid = entry.anon_gid,
+                    "access control configured"
+                );
             }
             Err(e) => {
                 error!("Failed to add export '{}': {}", entry.name, e);

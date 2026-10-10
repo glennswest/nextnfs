@@ -1,7 +1,10 @@
 use async_trait::async_trait;
 use tracing::debug;
 
-use crate::server::{operation::NfsOperation, request::NfsRequest, response::NfsOpResponse};
+use crate::server::{
+    filemanager::RealMeta, operation::NfsOperation, perm::Caller, request::NfsRequest,
+    response::NfsOpResponse,
+};
 
 use nextnfs_proto::nfs4_proto::{
     Access4args, Access4res, Access4resok, NfsFtype4, NfsResOp4, NfsStat4, ACCESS4_DELETE,
@@ -9,29 +12,15 @@ use nextnfs_proto::nfs4_proto::{
 };
 
 /// Check POSIX permissions and return the subset of requested NFS access flags
-/// that the caller is allowed.
-fn check_access(
-    requested: u32,
-    mode: u32,
-    file_uid: u32,
-    file_gid: u32,
-    caller_uid: u32,
-    caller_gid: u32,
-    is_dir: bool,
-) -> u32 {
+/// that the caller (already squash-mapped, #91) is allowed.
+fn check_access(requested: u32, meta: &RealMeta, caller: &Caller, is_dir: bool) -> u32 {
     // Root gets everything
-    if caller_uid == 0 {
+    if caller.is_root() {
         return requested;
     }
 
-    // Determine which POSIX permission bits apply
-    let bits = if caller_uid == file_uid {
-        (mode >> 6) & 7 // owner bits
-    } else if caller_gid == file_gid {
-        (mode >> 3) & 7 // group bits
-    } else {
-        mode & 7 // other bits
-    };
+    // Owner, group (primary or supplementary) or other bits
+    let bits = caller.mode_bits(meta);
 
     let has_read = bits & 4 != 0;
     let has_write = bits & 2 != 0;
@@ -81,19 +70,32 @@ impl NfsOperation for Access4args {
             | ACCESS4_EXECUTE;
 
         // If we have a current filehandle, check real permissions
+        // AUTH_NONE and other uid-less flavours are the anonymous user,
+        // not root (#101).
         let access = if let Some(fh) = request.current_filehandle() {
-            let file_uid = fh.attr_owner.parse::<u32>().unwrap_or(0);
-            let file_gid = fh.attr_owner_group.parse::<u32>().unwrap_or(0);
             let is_dir = fh.attr_type == NfsFtype4::Nf4dir;
-            check_access(
-                self.access,
-                fh.attr_mode,
-                file_uid,
-                file_gid,
-                request.auth_uid(),
-                request.auth_gid(),
-                is_dir,
-            )
+            // Fresh stat (the cached handle's attrs may be stale); the
+            // handle's attrs when the object cannot be stat()ed.
+            let meta = request
+                .file_manager_opt()
+                .and_then(|fm| RealMeta::from_path(&fm.real_path(&fh.path)))
+                .unwrap_or_else(|| RealMeta {
+                    ino: fh.attr_fileid,
+                    dev: 0,
+                    mode: fh.attr_mode,
+                    nlink: fh.attr_nlink as u64,
+                    uid: fh.attr_owner.parse::<u32>().unwrap_or(0),
+                    gid: fh.attr_owner_group.parse::<u32>().unwrap_or(0),
+                    size: fh.attr_size,
+                    blocks: 0,
+                    atime: 0,
+                    atime_nsec: 0,
+                    mtime: 0,
+                    mtime_nsec: 0,
+                    ctime: 0,
+                    ctime_nsec: 0,
+                });
+            check_access(self.access, &meta, &request.caller(), is_dir)
         } else {
             // No filehandle — grant what was requested (best effort)
             self.access
