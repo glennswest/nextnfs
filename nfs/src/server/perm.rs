@@ -148,11 +148,14 @@ fn need(ok: bool, status: NfsStat4) -> Result<(), NfsStat4> {
     if ok { Ok(()) } else { Err(status) }
 }
 
-/// `want` on the directory at `dir` (skipped when it cannot be stat()ed).
+/// `want` on the directory at `dir`. Skipped when it cannot be stat()ed or
+/// is not a directory: the op then fails with its own error (NOTDIR, ...).
 fn need_dir(caller: &Caller, dir: &Path, want: u32) -> Result<(), NfsStat4> {
     match stat(dir) {
-        Some(m) => need(caller.may(&m, want), NfsStat4::Nfs4errAccess),
-        None => Ok(()),
+        Some(m) if m.mode & libc::S_IFMT == libc::S_IFDIR => {
+            need(caller.may(&m, want), NfsStat4::Nfs4errAccess)
+        }
+        _ => Ok(()),
     }
 }
 
@@ -160,6 +163,9 @@ fn need_dir(caller: &Caller, dir: &Path, want: u32) -> Result<(), NfsStat4> {
 /// directory only the owner of the directory or of the entry may do it.
 fn need_unlink(caller: &Caller, dir: &Path, name: &str) -> Result<(), NfsStat4> {
     let Some(dmeta) = stat(dir) else { return Ok(()) };
+    if dmeta.mode & libc::S_IFMT != libc::S_IFDIR {
+        return Ok(());
+    }
     need(caller.may(&dmeta, MAY_WRITE | MAY_EXEC), NfsStat4::Nfs4errAccess)?;
     if dmeta.mode & libc::S_ISVTX != 0 && !caller.is_owner(&dmeta) {
         if let Some(entry) = stat(&dir.join(name)) {
