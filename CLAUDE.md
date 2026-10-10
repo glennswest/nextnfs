@@ -132,7 +132,8 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       `sc-build 'cargo test --workspace && cargo clippy --workspace
       --all-targets'` on 229b1a8 green (577 tests; clippy warnings only in
       pre-existing code: filehandle.rs, nfstest, stress). Released v0.14.0;
-      #91 and #101 closed; golden requested. #90 is verified by the same
+      #91 and #101 closed; golden-nextnfs-1e46268c0918 (9a97461), release
+      request glennswest/stormcos#158. #90 is verified by the same
       build (its code is in 229b1a8).
 - [ ] 2026-10-06 — #90: `max_bytes_per_sec` enforced in the COMPOUND
       loop — READ (requested count) and WRITE (data length) charge the
