@@ -143,3 +143,13 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       --workspace'` got no slot in an hour twice (exit 75, dev busy); still
       to verify, then close #90 and request the golden.
 - [x] #101 fixed with #91 (ACCESS uses the squash-mapped caller; AUTH_NONE = anon).
+- [ ] 2026-10-10 — #106 (RPCSEC_GSS/Kerberos; owner: build it, not
+      urgent) waiting on the owner (`needs-owner`): crypto/implementation
+      choice. The golden is one static musl binary (rustls, no OpenSSL);
+      rocketsmbd links C GSSAPI (not static-linkable), irondirectory has a
+      pure-Rust acceptor + RFC 4121 wrap (`crates/ldap/src/gssapi`) on
+      OpenSSL FIPS (`ossl`, dynamic). Asked: (A, recommended) RustCrypto +
+      rasn-kerberos in nextnfs, porting irondirectory's logic; (B) reuse
+      iron-crypto/FIPS; (C) shared crate, pluggable crypto. Either way it
+      goes after #111 (serde-xdr replacement): krb5i/krb5p wrap RPC bodies
+      in that codec. Operator keytab side: irondirectory-operator#11.
