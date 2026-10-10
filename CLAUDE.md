@@ -112,13 +112,18 @@ waiting on the owner), `rdma_device`/`rdma_port` (warn and are ignored). See `gh
       verbs transport would be a new feature, not this fix.
       `sc-build 'cargo test --workspace'` on ff30e99 green (553 tests;
       first attempt failed to compile, #104).
-- [ ] 2026-10-06 — #91 waiting on the owner (`needs-owner`): squash needs
-      per-caller permission enforcement, which no op does today (all ops
-      run as the server's uid). Asked: enforce mode bits for every AUTH_SYS
-      caller (A) or only on exports that set `squash` (B); default squash
-      `none` or `root_squash`. Plan once answered: map uid/gid via
-      `AccessConfig::squash_*`, check mode bits/sticky/owner-only
-      chmod+chown per op in the dispatcher, chown created objects.
+- [ ] 2026-10-10 — #91 decided (owner 2026-10-09: option A + default
+      `root_squash`, breaking minor bump → 0.14.0). In progress:
+      new `nfs/src/server/perm.rs` — `Caller` (AUTH_SYS uid/gid/gids mapped
+      through the export's squash; AUTH_NONE/other flavours = anon),
+      per-op mode-bit checks in the COMPOUND dispatcher (dir w+x for
+      create/remove/rename/link, sticky bit, x for LOOKUP, r for READDIR,
+      r/w for OPEN/READ/WRITE with owner override, owner-only chmod/utimes,
+      root-only chown, owner chgrp to own groups), new objects from
+      OPEN/CREATE chowned to the caller (setgid dir keeps its gid);
+      ACCESS uses the same caller (also fixes #101); GETATTR owner rewrite
+      removed; `SquashMode` default `root_squash`, `AccessConfig` Default
+      gives 65534. nfsop side: glennswest/nextnfs-operator#13.
 - [ ] 2026-10-06 — #90: `max_bytes_per_sec` enforced in the COMPOUND
       loop — READ (requested count) and WRITE (data length) charge the
       export's byte bucket, NFS4ERR_DELAY when over; an op bigger than the
