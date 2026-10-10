@@ -56,8 +56,11 @@ RPM with `packaging/nextnfs-run-tests`), `packaging/` (RPM/DEB/systemd),
 ## Known gaps (tracked as issues)
 
 Config keys that parse but do not do what their names say:
-`squash`/`anon_uid`/`anon_gid` (only rewrites GETATTR owner display, #91
-waiting on the owner), `rdma_device`/`rdma_port` (warn and are ignored). See `gh issue list`.
+`rdma_device`/`rdma_port` (warn and are ignored). See `gh issue list`.
+
+Permissions (#91): `nfs/src/server/perm.rs` checks every op for the
+squash-mapped caller in the COMPOUND dispatcher (after the read-only
+check) and chowns new objects; `squash` defaults to `root_squash`.
 
 ## Work plan
 
