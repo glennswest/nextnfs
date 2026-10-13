@@ -146,7 +146,9 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       (own serde XDR codec, same wire format, same API); dependency and its
       lock entries removed. `sc-build 'cargo test --workspace && cargo
       clippy --workspace --all-targets'` on 01f038f green (584 tests, no
-      lockfile change, no clippy warnings in proto/). Closed; golden requested.
+      lockfile change, no clippy warnings in proto/). Closed;
+      golden-nextnfs-efc61bb35b25 (--locked musl build), release request
+      glennswest/stormcos#158.
 - [x] #101 fixed with #91 (ACCESS uses the squash-mapped caller; AUTH_NONE = anon).
 - [ ] 2026-10-10 — #106 (RPCSEC_GSS/Kerberos; owner: build it, not
       urgent). Decided 2026-10-13: option A (pure-Rust RustCrypto +
