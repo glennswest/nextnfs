@@ -259,7 +259,8 @@ impl<'a> NfsRequest<'a> {
         let flavors: Vec<SecFlavor> = if let Some(ac) = self.access_control.as_ref() {
             ac.sec_flavors()
         } else {
-            let exports = self.export_manager.list_exports().await;
+            let mut exports = self.export_manager.list_exports().await;
+            exports.sort_by_key(|e| e.export_id);
             let mut all: Vec<SecFlavor> = Vec::new();
             for e in exports.iter().filter(|e| name.is_none() || name == Some(e.name.as_str())) {
                 for f in e.access_control.sec_flavors() {

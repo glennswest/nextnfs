@@ -520,6 +520,250 @@ impl GssServer {
 mod tests {
     use super::*;
 
+    use nextnfs_krb5::acceptor::GSS_C_MUTUAL_FLAG;
+    use nextnfs_krb5::initiator::{issue_ticket, Initiator};
+    use nextnfs_krb5::{Enctype, KeytabEntry};
+    use nextnfs_proto::nfs4_proto::{Compound4args, Compound4res, NfsStat4};
+
+    fn now() -> i64 {
+        now_secs()
+    }
+
+    /// An RPC call as a client puts it on the wire: the header, then the
+    /// verifier (AUTH_NONE, or the MIC of the header), then `args`.
+    fn call_bytes(xid: u32, proc: u32, cred: &RpcSecGssCred, key: Option<&ContextKey>, args: &[u8]) -> Vec<u8> {
+        let mut b = Vec::new();
+        for w in [xid, 0, 2, 100003, 4, proc, 6] {
+            b.extend_from_slice(&w.to_be_bytes());
+        }
+        put_opaque(&mut b, &cred.encode());
+        match key {
+            Some(k) => {
+                let mic = k.get_mic(Sender::Initiator, 0, &b).unwrap();
+                b.extend_from_slice(&6u32.to_be_bytes());
+                put_opaque(&mut b, &mic);
+            }
+            None => b.extend_from_slice(&[0; 8]),
+        }
+        b.extend_from_slice(args);
+        b
+    }
+
+    /// Splits an accepted reply into (verifier flavour, verifier body,
+    /// accept_stat, results); or (u32::MAX, [], auth_stat, []) if denied.
+    fn parse_reply(reply: &RpcReplyMsg) -> (u32, Vec<u8>, u32, Vec<u8>) {
+        let b = reply.to_bytes().unwrap();
+        let w = |i: usize| u32::from_be_bytes(b[i..i + 4].try_into().unwrap());
+        assert_eq!(w(4), 1, "a reply");
+        if w(8) == 1 {
+            return (u32::MAX, Vec::new(), w(16), Vec::new());
+        }
+        let flavor = w(12);
+        let (verf, rest) = take_opaque(&b[16..]).unwrap();
+        let stat = u32::from_be_bytes(rest[..4].try_into().unwrap());
+        (flavor, verf.to_vec(), stat, rest[4..].to_vec())
+    }
+
+    fn handle_bytes(g: &GssServer, bytes: Vec<u8>) -> GssCall {
+        g.handle(nextnfs_proto::from_bytes(bytes).unwrap())
+    }
+
+    fn reply_of(call: GssCall) -> Box<RpcReplyMsg> {
+        match call {
+            GssCall::Reply(r) => r,
+            GssCall::Drop => panic!("dropped"),
+            GssCall::Proceed(..) => panic!("proceeded"),
+        }
+    }
+
+    fn setup() -> (GssServer, tempfile::TempDir, Initiator, Vec<u8>) {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("passwd"), "alice:x:1001:1001::/:/bin/sh\n").unwrap();
+        std::fs::write(dir.path().join("group"), "").unwrap();
+        let svc = KeytabEntry {
+            realm: "EXAMPLE.LO".into(),
+            components: vec!["nfs".into(), "server.example.lo".into()],
+            name_type: 3,
+            timestamp: 0,
+            kvno: 2,
+            enctype: Enctype::Aes256CtsHmacSha1_96.number(),
+            key: nextnfs_krb5::crypto::random_bytes(32).unwrap(),
+        };
+        let g = GssServer::with_etc(Keytab { entries: vec![svc.clone()] }, &[], dir.path());
+        let cred = issue_ticket(&svc, "alice", Enctype::Aes256CtsHmacSha1_96, now() - 10, now() + 3600).unwrap();
+        let (mut ini, token) = Initiator::start(&cred, GSS_C_MUTUAL_FLAG | 0x30, Some(Enctype::Aes256CtsHmacSha1_96), now()).unwrap();
+
+        let init = RpcSecGssCred { version: 1, gss_proc: RPCSEC_GSS_INIT, seq_num: 0, service: 1, handle: vec![] };
+        let mut args = Vec::new();
+        put_opaque(&mut args, &token);
+        let reply = reply_of(handle_bytes(&g, call_bytes(1, 0, &init, None, &args)));
+        let (flavor, verf, stat, res) = parse_reply(&reply);
+        assert_eq!((flavor, stat), (6, 0));
+        let (handle, rest) = take_opaque(&res).unwrap();
+        let w = |i: usize| u32::from_be_bytes(rest[i..i + 4].try_into().unwrap());
+        assert_eq!((w(0), w(4), w(8)), (0, 0, SEQ_WINDOW), "major, minor, window");
+        let (out_token, _) = take_opaque(&rest[12..]).unwrap();
+        ini.finish(out_token).unwrap();
+        ini.key.verify_mic(Sender::Acceptor, &SEQ_WINDOW.to_be_bytes(), &verf).expect("INIT verifier is the MIC of the window");
+        assert_eq!(g.context_count(), 1);
+        (g, dir, ini, handle.to_vec())
+    }
+
+    fn data_args(ini: &Initiator, service: u32, seq: u32, plain: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        if service == RPC_GSS_SVC_NONE {
+            return plain.to_vec();
+        }
+        let mut body = seq.to_be_bytes().to_vec();
+        body.extend_from_slice(plain);
+        if service == RPC_GSS_SVC_INTEGRITY {
+            put_opaque(&mut out, &body);
+            put_opaque(&mut out, &ini.key.get_mic(Sender::Initiator, seq as u64, &body).unwrap());
+        } else {
+            put_opaque(&mut out, &ini.key.wrap(Sender::Initiator, seq as u64, true, &body).unwrap());
+        }
+        out
+    }
+
+    #[test]
+    fn init_then_compound_under_each_service() {
+        let (g, _dir, ini, handle) = setup();
+        let args = Compound4args { tag: "gss".into(), minor_version: 0, argarray: vec![] };
+        let plain = nextnfs_proto::xdr::to_bytes(&args).unwrap();
+        let res = Compound4res { status: NfsStat4::Nfs4Ok, tag: "gss".into(), resarray: vec![] };
+        let res_bytes = nextnfs_proto::encode_compound_res(&res).unwrap();
+        for (i, service) in [RPC_GSS_SVC_NONE, RPC_GSS_SVC_INTEGRITY, RPC_GSS_SVC_PRIVACY].into_iter().enumerate() {
+            let seq = 10 + i as u32;
+            let cred = RpcSecGssCred { version: 1, gss_proc: RPCSEC_GSS_DATA, seq_num: seq, service, handle: handle.clone() };
+            let bytes = call_bytes(100 + seq, 1, &cred, Some(&ini.key), &data_args(&ini, service, seq, &plain));
+            if service == RPC_GSS_SVC_PRIVACY {
+                assert!(!bytes.windows(3).any(|w| w == b"gss"), "krb5p arguments are encrypted");
+            }
+            let (msg, info) = match handle_bytes(&g, bytes.clone()) {
+                GssCall::Proceed(m, info) => (m, info),
+                _ => panic!("service {} did not proceed", service),
+            };
+            assert_eq!(info.flavor, SecFlavor::from_gss_service(service).unwrap());
+            assert_eq!(info.principal(), "alice@EXAMPLE.LO");
+            let MsgType::Call(call) = &msg.body else { panic!() };
+            assert_eq!(call.args.as_ref().unwrap().tag, "gss");
+            match &call.cred {
+                OpaqueAuth::AuthUnix(a) => assert_eq!((a.uid, a.gid), (1001, 1001)),
+                other => panic!("identity not mapped: {:?}", other),
+            }
+
+            // The reply: verifier = MIC(seq); results wrapped per service.
+            let reply = Box::new(RpcReplyMsg {
+                xid: msg.xid,
+                body: MsgType::Reply(ReplyBody::MsgAccepted(AcceptedReply {
+                    verf: OpaqueAuth::AuthNull(Vec::new()),
+                    reply_data: AcceptBody::Success(res.clone()),
+                })),
+            });
+            let (flavor, verf, stat, results) = parse_reply(&g.wrap_reply(reply, &info));
+            assert_eq!((flavor, stat), (6, 0));
+            ini.key.verify_mic(Sender::Acceptor, &seq.to_be_bytes(), &verf).unwrap();
+            let body = match service {
+                RPC_GSS_SVC_NONE => {
+                    assert_eq!(results, res_bytes);
+                    continue;
+                }
+                RPC_GSS_SVC_INTEGRITY => {
+                    let (body, rest) = take_opaque(&results).unwrap();
+                    let (mic, _) = take_opaque(rest).unwrap();
+                    ini.key.verify_mic(Sender::Acceptor, body, mic).unwrap();
+                    body.to_vec()
+                }
+                _ => {
+                    let (tok, _) = take_opaque(&results).unwrap();
+                    let (body, sealed, _) = ini.key.unwrap(Sender::Acceptor, tok).unwrap();
+                    assert!(sealed);
+                    body
+                }
+            };
+            assert_eq!(&body[..4], &seq.to_be_bytes());
+            assert_eq!(&body[4..], &res_bytes[..]);
+
+            // The same call again is a replay: no reply at all.
+            assert!(matches!(handle_bytes(&g, bytes), GssCall::Drop));
+        }
+    }
+
+    #[test]
+    fn data_errors_and_destroy() {
+        let (g, _dir, ini, handle) = setup();
+        let args = nextnfs_proto::xdr::to_bytes(&Compound4args { tag: "t".into(), minor_version: 0, argarray: vec![] }).unwrap();
+        let cred = |seq: u32, service: u32, h: &[u8], p: u32| RpcSecGssCred {
+            version: 1,
+            gss_proc: p,
+            seq_num: seq,
+            service,
+            handle: h.to_vec(),
+        };
+        let denied_with = |call: GssCall| parse_reply(&reply_of(call)).2;
+
+        // Unknown context.
+        let c = cred(1, 1, b"nope", RPCSEC_GSS_DATA);
+        assert_eq!(denied_with(handle_bytes(&g, call_bytes(1, 1, &c, Some(&ini.key), &args))), 13);
+
+        // Verifier over a different header (another key).
+        let other = ContextKey { enctype: Enctype::Aes256CtsHmacSha1_96, key: vec![7; 32], acceptor_subkey: false };
+        let c = cred(2, 1, &handle, RPCSEC_GSS_DATA);
+        assert_eq!(denied_with(handle_bytes(&g, call_bytes(2, 1, &c, Some(&other), &args))), 13);
+
+        // Tampered integrity checksum: GARBAGE_ARGS (accept_stat 4).
+        let c = cred(3, RPC_GSS_SVC_INTEGRITY, &handle, RPCSEC_GSS_DATA);
+        let mut a = data_args(&ini, RPC_GSS_SVC_INTEGRITY, 3, &args);
+        let last = a.len() - 1;
+        a[last - 3] ^= 1;
+        let (flavor, _, stat, _) = parse_reply(&reply_of(handle_bytes(&g, call_bytes(3, 1, &c, Some(&ini.key), &a))));
+        assert_eq!((flavor, stat), (6, 4));
+
+        // Sequence number inside the body must match the credential's.
+        let c = cred(4, RPC_GSS_SVC_INTEGRITY, &handle, RPCSEC_GSS_DATA);
+        let a = data_args(&ini, RPC_GSS_SVC_INTEGRITY, 5, &args);
+        assert_eq!(parse_reply(&reply_of(handle_bytes(&g, call_bytes(4, 1, &c, Some(&ini.key), &a)))).2, 4);
+
+        // Unknown service.
+        let c = cred(6, 9, &handle, RPCSEC_GSS_DATA);
+        assert_eq!(denied_with(handle_bytes(&g, call_bytes(6, 1, &c, Some(&ini.key), &args))), 1);
+
+        // Sequence number at MAXSEQ ends the context.
+        let c = cred(MAXSEQ, 1, &handle, RPCSEC_GSS_DATA);
+        assert_eq!(denied_with(handle_bytes(&g, call_bytes(7, 1, &c, Some(&ini.key), &args))), 14);
+        assert_eq!(g.context_count(), 0);
+    }
+
+    #[test]
+    fn destroy_removes_the_context() {
+        let (g, _dir, ini, handle) = setup();
+        let c = RpcSecGssCred { version: 1, gss_proc: RPCSEC_GSS_DESTROY, seq_num: 1, service: 1, handle: handle.clone() };
+        let (flavor, verf, stat, results) = parse_reply(&reply_of(handle_bytes(&g, call_bytes(1, 0, &c, Some(&ini.key), &[]))));
+        assert_eq!((flavor, stat), (6, 0));
+        assert!(results.is_empty());
+        ini.key.verify_mic(Sender::Acceptor, &1u32.to_be_bytes(), &verf).unwrap();
+        assert_eq!(g.context_count(), 0);
+        let c = RpcSecGssCred { version: 1, gss_proc: RPCSEC_GSS_DATA, seq_num: 2, service: 1, handle };
+        assert_eq!(parse_reply(&reply_of(handle_bytes(&g, call_bytes(2, 0, &c, Some(&ini.key), &[])))).2, 13);
+    }
+
+    #[test]
+    fn init_failures_report_gss_status() {
+        let (g, _dir, _ini, _) = setup();
+        let init = RpcSecGssCred { version: 1, gss_proc: RPCSEC_GSS_INIT, seq_num: 0, service: 1, handle: vec![] };
+        let mut args = Vec::new();
+        put_opaque(&mut args, b"not a token");
+        let (flavor, _, stat, res) = parse_reply(&reply_of(handle_bytes(&g, call_bytes(1, 0, &init, None, &args))));
+        assert_eq!((flavor, stat), (0, 0));
+        let (h, rest) = take_opaque(&res).unwrap();
+        assert!(h.is_empty());
+        assert_eq!(u32::from_be_bytes(rest[..4].try_into().unwrap()), GSS_S_DEFECTIVE_TOKEN);
+        // INIT on a procedure other than NULL, and an unknown version.
+        assert_eq!(parse_reply(&reply_of(handle_bytes(&g, call_bytes(2, 1, &init, None, &args)))).2, 1);
+        let v2 = RpcSecGssCred { version: 2, ..init };
+        assert_eq!(parse_reply(&reply_of(handle_bytes(&g, call_bytes(3, 0, &v2, None, &args)))).2, 1);
+    }
+
     #[test]
     fn seq_window() {
         let mut w = SeqWindow::default();

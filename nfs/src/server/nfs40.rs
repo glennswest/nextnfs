@@ -2863,6 +2863,137 @@ mod tests {
         );
     }
 
+    // --- #106: per-export `sec` flavours (NFS4ERR_WRONGSEC, SECINFO) ---
+
+    /// Two exports: "open" (sys) and "krb" (krb5i only).
+    async fn sec_export_request(open_dir: &std::path::Path, krb_dir: &std::path::Path) -> NfsRequest<'static> {
+        use crate::server::export_manager::SecFlavor;
+        let request = create_nfs40_server(None).await;
+        let em = request.export_manager();
+        em.add_export("open".to_string(), open_dir.to_path_buf(), false).await.unwrap();
+        em.add_export("krb".to_string(), krb_dir.to_path_buf(), false).await.unwrap();
+        em.set_access("krb", AccessConfig { squash: SquashMode::None, sec: vec![SecFlavor::Krb5i], ..Default::default() })
+            .await
+            .unwrap();
+        em.set_access("open", AccessConfig { squash: SquashMode::None, ..Default::default() }).await.unwrap();
+        request
+    }
+
+    fn krb5i_secinfo() -> SeCinfo4 {
+        SeCinfo4::FlavorInfo(RpcSecGssInfo {
+            oid: KRB5_MECH_OID.to_vec(),
+            qop: 0,
+            service: RpcGssSvc::RpcGssSvcIntegrity,
+        })
+    }
+
+    #[tokio::test]
+    async fn test_wrongsec_lookup_into_kerberos_export_with_auth_sys() {
+        let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let request = sec_export_request(a.path(), b.path()).await;
+        let msg = make_compound(vec![NfsArgOp::Opputrootfh(()), lookup_op("krb"), NfsArgOp::Opgetfh(())]);
+        let (_request, reply) = NFS40Server::new().compound(msg, request).await;
+        let (status, resarray) = compound_result(reply);
+        assert_eq!(status, NfsStat4::Nfs4errWrongsec);
+        assert_eq!(resarray.len(), 2);
+        assert_eq!(resarray[1], NfsResOp4::OpError { op: 15, status: NfsStat4::Nfs4errWrongsec });
+    }
+
+    #[tokio::test]
+    async fn test_kerberos_flavour_reaches_kerberos_export_not_sys_one() {
+        use crate::server::export_manager::SecFlavor;
+        let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let mut request = sec_export_request(a.path(), b.path()).await;
+        request.set_sec_flavor(SecFlavor::Krb5i);
+        let msg = make_compound(vec![NfsArgOp::Opputrootfh(()), lookup_op("krb"), NfsArgOp::Opgetfh(())]);
+        let (_request, reply) = NFS40Server::new().compound(msg, request).await;
+        assert_eq!(compound_result(reply).0, NfsStat4::Nfs4Ok);
+
+        // krb5 (no integrity) is not in the export's list either.
+        let mut request = sec_export_request(a.path(), b.path()).await;
+        request.set_sec_flavor(SecFlavor::Krb5);
+        let msg = make_compound(vec![NfsArgOp::Opputrootfh(()), lookup_op("krb"), NfsArgOp::Opgetfh(())]);
+        let (_request, reply) = NFS40Server::new().compound(msg, request).await;
+        assert_eq!(compound_result(reply).0, NfsStat4::Nfs4errWrongsec);
+
+        // A krb5i call on the sys-only export is refused too.
+        let mut request = sec_export_request(a.path(), b.path()).await;
+        request.set_sec_flavor(SecFlavor::Krb5i);
+        let msg = make_compound(vec![NfsArgOp::Opputrootfh(()), lookup_op("open"), NfsArgOp::Opgetfh(())]);
+        let (_request, reply) = NFS40Server::new().compound(msg, request).await;
+        assert_eq!(compound_result(reply).0, NfsStat4::Nfs4errWrongsec);
+    }
+
+    #[tokio::test]
+    async fn test_putfh_then_secinfo_no_name_is_not_wrongsec() {
+        use crate::server::export_manager::SecFlavor;
+        let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        // Get the krb export's root handle with an allowed flavour.
+        let mut request = sec_export_request(a.path(), b.path()).await;
+        request.set_sec_flavor(SecFlavor::Krb5i);
+        let msg = make_compound(vec![NfsArgOp::Opputrootfh(()), lookup_op("krb"), NfsArgOp::Opgetfh(())]);
+        let (request, reply) = NFS40Server::new().compound(msg, request).await;
+        let fh = match compound_result(reply).1.pop() {
+            Some(NfsResOp4::Opgetfh(GetFh4res::Resok4(ok))) => ok.object,
+            other => panic!("expected GETFH, got {:?}", other),
+        };
+        let mut request = request;
+        request.set_sec_flavor(SecFlavor::Sys);
+
+        // PUTFH + SECINFO_NO_NAME: allowed, and lists krb5i.
+        let msg = make_compound(vec![
+            NfsArgOp::Opputfh(PutFh4args { object: fh.clone() }),
+            NfsArgOp::OpsecinfoNoName(SecinfoNoName4args { sina_style: SecinfoStyle4::SecinfoStyle4CurrentFh }),
+        ]);
+        let (request, reply) = NFS40Server::new().compound(msg, request).await;
+        let (status, resarray) = compound_result(reply);
+        assert_eq!(status, NfsStat4::Nfs4Ok);
+        assert_eq!(resarray[1], NfsResOp4::OpsecinfoNoName(SecinfoNoName4res::Resok4(vec![krb5i_secinfo()])));
+
+        // PUTFH + GETFH: WRONGSEC on the PUTFH.
+        let msg = make_compound(vec![NfsArgOp::Opputfh(PutFh4args { object: fh }), NfsArgOp::Opgetfh(())]);
+        let (_request, reply) = NFS40Server::new().compound(msg, request).await;
+        let (status, resarray) = compound_result(reply);
+        assert_eq!(status, NfsStat4::Nfs4errWrongsec);
+        assert_eq!(resarray, vec![NfsResOp4::OpError { op: 22, status: NfsStat4::Nfs4errWrongsec }]);
+    }
+
+    #[tokio::test]
+    async fn test_secinfo_at_pseudo_root_names_each_exports_flavours() {
+        let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let request = sec_export_request(a.path(), b.path()).await;
+        let msg = make_compound(vec![
+            NfsArgOp::Opputrootfh(()),
+            NfsArgOp::OpSecinfo(SecInfo4args { name: "krb".to_string() }),
+            NfsArgOp::Opputrootfh(()),
+            NfsArgOp::OpSecinfo(SecInfo4args { name: "open".to_string() }),
+            NfsArgOp::Opputrootfh(()),
+            NfsArgOp::OpsecinfoNoName(SecinfoNoName4args { sina_style: SecinfoStyle4::SecinfoStyle4CurrentFh }),
+        ]);
+        let (_request, reply) = NFS40Server::new().compound(msg, request).await;
+        let (status, resarray) = compound_result(reply);
+        assert_eq!(status, NfsStat4::Nfs4Ok);
+        assert_eq!(resarray[1], NfsResOp4::OpSecinfo(SecInfo4res::Resok4(vec![krb5i_secinfo()])));
+        assert_eq!(resarray[3], NfsResOp4::OpSecinfo(SecInfo4res::Resok4(vec![SeCinfo4::AuthSys])));
+        assert_eq!(
+            resarray[5],
+            NfsResOp4::OpsecinfoNoName(SecinfoNoName4res::Resok4(vec![SeCinfo4::AuthSys, krb5i_secinfo()]))
+        );
+    }
+
+    #[test]
+    fn test_secinfo4_krb5_wire_format() {
+        // flavor 6, sec_oid4 (11 bytes + 1 pad), qop 0, service 2.
+        let bytes = nextnfs_proto::xdr::to_bytes(&krb5i_secinfo()).unwrap();
+        let mut want = vec![0, 0, 0, 6, 0, 0, 0, 11];
+        want.extend_from_slice(KRB5_MECH_OID);
+        want.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0, 0, 2]);
+        assert_eq!(bytes, want);
+        let back: SeCinfo4 = nextnfs_proto::xdr::from_bytes(&bytes).unwrap();
+        assert_eq!(back, krb5i_secinfo());
+        assert_eq!(nextnfs_proto::xdr::to_bytes(&SeCinfo4::AuthSys).unwrap(), vec![0, 0, 0, 1]);
+    }
+
     #[tokio::test]
     async fn test_lookup_from_pseudo_root_allows_open_export() {
         let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
