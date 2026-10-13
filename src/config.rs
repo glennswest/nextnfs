@@ -37,6 +37,26 @@ pub struct ServerConfig {
     /// RDMA listen port (RFC 8267 uses 20049). Not implemented, see `rdma_device`.
     #[serde(default)]
     pub rdma_port: Option<u16>,
+    /// Kerberos keytab (MIT format) holding the server's `nfs/<host>@REALM`
+    /// keys. Set: RPCSEC_GSS (krb5, krb5i, krb5p) is served; unset: it is
+    /// refused (#106).
+    #[serde(default)]
+    pub krb5_keytab: Option<String>,
+    /// Kerberos principal → uid/gid, checked before `/etc/passwd`.
+    #[serde(default)]
+    pub krb5_map: Vec<Krb5Map>,
+}
+
+/// `[[server.krb5_map]]`: the identity a Kerberos principal's calls run as.
+#[derive(Deserialize, Clone, Debug)]
+pub struct Krb5Map {
+    /// Full principal, `name[/instance]@REALM`.
+    pub principal: String,
+    pub uid: u32,
+    pub gid: u32,
+    /// Supplementary groups.
+    #[serde(default)]
+    pub gids: Vec<u32>,
 }
 
 #[derive(Deserialize, Clone)]
@@ -72,6 +92,10 @@ pub struct ExportEntry {
     /// Anonymous GID for squashed requests (default 65534)
     #[serde(default = "default_anon_gid")]
     pub anon_gid: u32,
+    /// Security flavours clients may use: "sys", "krb5", "krb5i", "krb5p"
+    /// (exports(5) `sec=`), in order of preference. Empty: ["sys"] (#106).
+    #[serde(default)]
+    pub sec: Vec<String>,
 }
 
 fn default_anon_uid() -> u32 { 65534 }
@@ -99,6 +123,8 @@ impl Default for ServerConfig {
             tls_key: None,
             rdma_device: None,
             rdma_port: None,
+            krb5_keytab: None,
+            krb5_map: Vec::new(),
         }
     }
 }
@@ -163,6 +189,7 @@ impl Config {
                         squash: String::new(),
                         anon_uid: 65534,
                         anon_gid: 65534,
+                        sec: vec![],
                     },
                 );
             }
@@ -174,6 +201,39 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn krb5_keys_parse() {
+        let cfg: Config = toml::from_str(
+            r#"
+[server]
+krb5_keytab = "/etc/nextnfs/krb5.keytab"
+
+[[server.krb5_map]]
+principal = "alice@EXAMPLE.LO"
+uid = 1001
+gid = 1001
+gids = [10]
+
+[[exports]]
+name = "secure"
+path = "/srv/secure"
+sec = ["krb5p", "krb5i"]
+
+[[exports]]
+name = "plain"
+path = "/srv/plain"
+"#,
+        )
+        .unwrap();
+        assert_eq!(cfg.server.krb5_keytab.as_deref(), Some("/etc/nextnfs/krb5.keytab"));
+        assert_eq!(cfg.server.krb5_map.len(), 1);
+        assert_eq!(cfg.server.krb5_map[0].gids, vec![10]);
+        assert_eq!(cfg.exports[0].sec, vec!["krb5p", "krb5i"]);
+        assert!(cfg.exports[1].sec.is_empty());
+        let cfg: Config = toml::from_str("[server]\n").unwrap();
+        assert!(cfg.server.krb5_keytab.is_none() && cfg.server.krb5_map.is_empty());
+    }
 
     #[test]
     fn rdma_keys_unset_no_warning() {

@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-use nextnfs_server::export_manager::{AccessConfig, ExportManagerHandle, QosConfig, SquashMode};
+use nextnfs_server::export_manager::{AccessConfig, ExportManagerHandle, QosConfig, SecFlavor, SquashMode};
 use nextnfs_server::NFSServer;
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
@@ -176,7 +176,7 @@ async fn run_server(
     cli_squash: String,
 ) {
     // Load config and merge with CLI args
-    let (exports, listen, api_listen, state_dir, tls_cert, tls_key) = if let Some(config_path) = config_path {
+    let (exports, listen, api_listen, state_dir, tls_cert, tls_key, krb5) = if let Some(config_path) = config_path {
         match config::Config::load(&config_path) {
             Ok(cfg) => {
                 if let Some(msg) = cfg.server.rdma_unsupported_warning() {
@@ -196,6 +196,7 @@ async fn run_server(
                 let state_dir = cfg.server.state_dir.map(PathBuf::from);
                 let tls_cert = cfg.server.tls_cert.map(PathBuf::from);
                 let tls_key = cfg.server.tls_key.map(PathBuf::from);
+                let krb5 = (cfg.server.krb5_keytab.map(PathBuf::from), cfg.server.krb5_map);
                 if resolved.is_empty() {
                     // No exports in config — use CLI export path
                     let name = export_path
@@ -213,15 +214,17 @@ async fn run_server(
                             squash: cli_squash,
                             anon_uid: 65534,
                             anon_gid: 65534,
+                            sec: vec![],
                         }],
                         listen,
                         api,
                         state_dir,
                         tls_cert,
                         tls_key,
+                        krb5,
                     )
                 } else {
-                    (resolved, listen, api, state_dir, tls_cert, tls_key)
+                    (resolved, listen, api, state_dir, tls_cert, tls_key, krb5)
                 }
             }
             Err(e) => {
@@ -245,18 +248,44 @@ async fn run_server(
                 squash: cli_squash,
                 anon_uid: 65534,
                 anon_gid: 65534,
+                sec: vec![],
             }],
             listen_addr,
             api_listen_addr,
             None,
             None,
             None,
+            (None, Vec::new()),
         )
     };
+    let (krb5_keytab, krb5_map) = krb5;
+
+    // Security flavours per export (#106). Kerberos ones need a keytab.
+    let mut export_sec = Vec::with_capacity(exports.len());
+    for entry in &exports {
+        let mut flavors = Vec::new();
+        for name in &entry.sec {
+            match SecFlavor::parse(name) {
+                Some(f) => flavors.push(f),
+                None => {
+                    error!(name = %entry.name, sec = %name, "unknown sec flavour (sys, krb5, krb5i, krb5p)");
+                    std::process::exit(1);
+                }
+            }
+        }
+        if flavors.is_empty() {
+            flavors.push(SecFlavor::Sys);
+        }
+        if flavors.iter().any(|f| f.is_kerberos()) && krb5_keytab.is_none() {
+            error!(name = %entry.name, sec = ?entry.sec, "export uses Kerberos but [server] krb5_keytab is not set");
+            std::process::exit(1);
+        }
+        export_sec.push(flavors);
+    }
 
     // Create ExportManager and register exports
     let export_manager = ExportManagerHandle::new();
-    for entry in &exports {
+    for (entry, sec) in exports.iter().zip(&export_sec) {
         let path = PathBuf::from(&entry.path);
         // Validate path exists
         let canonical = match path.canonicalize() {
@@ -321,6 +350,7 @@ async fn run_server(
                     squash: squash.clone(),
                     anon_uid: entry.anon_uid,
                     anon_gid: entry.anon_gid,
+                    sec: sec.clone(),
                 };
                 let _ = export_manager.set_access(&entry.name, access).await;
                 info!(
@@ -329,6 +359,7 @@ async fn run_server(
                     squash = ?squash,
                     anon_uid = entry.anon_uid,
                     anon_gid = entry.anon_gid,
+                    sec = ?sec,
                     "access control configured"
                 );
             }
@@ -355,6 +386,32 @@ async fn run_server(
     if let (Some(cert), Some(key)) = (tls_cert, tls_key) {
         info!(cert = %cert.display(), key = %key.display(), "RPC-over-TLS enabled (RFC 9289)");
         builder.tls(cert, key);
+    }
+    if let Some(ref path) = krb5_keytab {
+        let keytab = match nextnfs_krb5::Keytab::load(path) {
+            Ok(k) => k,
+            Err(e) => {
+                error!(keytab = %path.display(), "cannot read Kerberos keytab: {}", e);
+                std::process::exit(1);
+            }
+        };
+        let usable = keytab.entries.iter().filter(|e| e.enctype().is_some()).count();
+        if usable == 0 {
+            error!(keytab = %path.display(), "keytab has no AES keys (aes128/256-cts-hmac-sha1-96, aes128-cts-hmac-sha256-128, aes256-cts-hmac-sha384-192)");
+            std::process::exit(1);
+        }
+        let mappings: Vec<_> = krb5_map
+            .iter()
+            .map(|m| nextnfs_server::server::gss::PrincipalMapping {
+                principal: m.principal.clone(),
+                uid: m.uid,
+                gid: m.gid,
+                gids: m.gids.clone(),
+            })
+            .collect();
+        let gss = nextnfs_server::server::gss::GssServer::new(keytab, &mappings);
+        info!(keytab = %path.display(), principals = ?gss.principals(), mapped = mappings.len(), "RPCSEC_GSS (Kerberos) enabled");
+        builder.gss(gss);
     }
     let server = builder.build();
 

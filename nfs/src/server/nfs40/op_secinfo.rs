@@ -37,15 +37,14 @@ impl NfsOperation for SecInfo4args {
             };
         }
 
-        // Advertise only AUTH_SYS: there is no RPCSEC_GSS context setup or
-        // keytab (#99), so krb5/krb5i/krb5p must not be offered.
+        // The flavours of the export the name is in (#106): the current
+        // export, or at the pseudo-root the export called `name`.
         // Per RFC 7530 S16.31.4, the current filehandle is consumed (set to absent)
         // after SECINFO completes.
+        let flavors = request.secinfo_flavors(Some(&self.name)).await;
         NfsOpResponse {
             request,
-            result: Some(NfsResOp4::OpSecinfo(SecInfo4res::Resok4(vec![
-                SeCinfo4::AuthSys,
-            ]))),
+            result: Some(NfsResOp4::OpSecinfo(SecInfo4res::Resok4(flavors))),
             status: NfsStat4::Nfs4Ok,
         }
     }
@@ -73,7 +72,7 @@ mod tests {
         assert_eq!(response.status, NfsStat4::Nfs4Ok);
         match response.result {
             Some(NfsResOp4::OpSecinfo(SecInfo4res::Resok4(flavors))) => {
-                // Only AUTH_SYS: no RPCSEC_GSS (krb5*) until contexts land (#99)
+                // Default export `sec` is ["sys"] (#106)
                 assert_eq!(flavors, vec![SeCinfo4::AuthSys]);
             }
             _ => panic!("Expected SECINFO Resok4"),

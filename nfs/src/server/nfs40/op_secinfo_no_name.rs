@@ -17,11 +17,9 @@ impl NfsOperation for SecinfoNoName4args {
     async fn execute<'a>(&self, request: NfsRequest<'a>) -> NfsOpResponse<'a> {
         debug!("Operation 52: SECINFO_NO_NAME style={:?}", self.sina_style);
 
-        // Advertise only the flavors the server can serve. There is no
-        // RPCSEC_GSS context setup or keytab (#99), so krb5/krb5i/krb5p must
-        // not be offered: a client negotiating from this list would pick a
-        // flavor the server rejects (and AUTH_NONE would be answered as uid 0).
-        let flavors = vec![SeCinfo4::AuthSys];
+        // The current export's flavours; at the pseudo-root, every flavour
+        // an export accepts (#106).
+        let flavors = request.secinfo_flavors(None).await;
 
         NfsOpResponse {
             request,
@@ -51,7 +49,7 @@ mod tests {
         assert_eq!(response.status, NfsStat4::Nfs4Ok);
         match response.result {
             Some(NfsResOp4::OpsecinfoNoName(SecinfoNoName4res::Resok4(flavors))) => {
-                // Only AUTH_SYS: no RPCSEC_GSS (krb5*) until contexts land (#99)
+                // Default export `sec` is ["sys"] (#106)
                 assert_eq!(flavors, vec![SeCinfo4::AuthSys]);
             }
             _ => panic!("Expected SECINFO_NO_NAME Resok4"),

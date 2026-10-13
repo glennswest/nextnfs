@@ -52,6 +52,8 @@ pub struct NfsRequest<'a> {
     pub sequence_slotid: Option<u32>,
     // RPC auth credentials from the calling client
     auth_cred: Option<OpaqueAuth>,
+    // Security flavour of the call (AUTH_SYS/AUTH_NONE = sys, or krb5*)
+    sec_flavor: super::export_manager::SecFlavor,
 }
 
 impl<'a> NfsRequest<'a> {
@@ -90,6 +92,7 @@ impl<'a> NfsRequest<'a> {
             session_id: None,
             sequence_slotid: None,
             auth_cred: None,
+            sec_flavor: super::export_manager::SecFlavor::Sys,
         }
     }
 
@@ -228,6 +231,49 @@ impl<'a> NfsRequest<'a> {
             Some(OpaqueAuth::AuthUnix(auth)) => auth.gid,
             _ => 0,
         }
+    }
+
+    /// Set the call's security flavour (krb5* for RPCSEC_GSS calls, #106).
+    pub fn set_sec_flavor(&mut self, flavor: super::export_manager::SecFlavor) {
+        self.sec_flavor = flavor;
+    }
+
+    pub fn sec_flavor(&self) -> super::export_manager::SecFlavor {
+        self.sec_flavor
+    }
+
+    /// Whether the current export accepts the call's flavour (exports(5)
+    /// `sec=`). The pseudo-root accepts every flavour.
+    pub fn sec_allowed(&self) -> bool {
+        match self.access_control.as_ref() {
+            Some(ac) => ac.allows_flavor(self.sec_flavor),
+            None => self.current_export_id.is_none() || self.sec_flavor == super::export_manager::SecFlavor::Sys,
+        }
+    }
+
+    /// The SECINFO answer for the current filehandle, or for the export
+    /// `name` when the current filehandle is the pseudo-root (#106). At the
+    /// pseudo-root without a name: every flavour any export accepts.
+    pub async fn secinfo_flavors(&self, name: Option<&str>) -> Vec<nextnfs_proto::nfs4_proto::SeCinfo4> {
+        use super::export_manager::SecFlavor;
+        let flavors: Vec<SecFlavor> = if let Some(ac) = self.access_control.as_ref() {
+            ac.sec_flavors()
+        } else {
+            let exports = self.export_manager.list_exports().await;
+            let mut all: Vec<SecFlavor> = Vec::new();
+            for e in exports.iter().filter(|e| name.is_none() || name == Some(e.name.as_str())) {
+                for f in e.access_control.sec_flavors() {
+                    if !all.contains(&f) {
+                        all.push(f);
+                    }
+                }
+            }
+            if all.is_empty() {
+                all.push(SecFlavor::Sys);
+            }
+            all
+        };
+        flavors.into_iter().map(SecFlavor::secinfo).collect()
     }
 
     /// Check if the client is using RPCSEC_GSS authentication.

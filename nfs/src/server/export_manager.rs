@@ -297,6 +297,65 @@ pub struct AccessConfig {
     /// Anonymous GID for squashed requests (default 65534 = nogroup).
     #[serde(default = "default_anon_gid")]
     pub anon_gid: u32,
+    /// Security flavours clients may use on this export (exports(5)
+    /// `sec=`), in order of preference; default `["sys"]` (#106).
+    #[serde(default = "default_sec")]
+    pub sec: Vec<SecFlavor>,
+}
+
+/// An NFS security flavour: AUTH_SYS (and AUTH_NONE, as the anonymous
+/// user), or Kerberos V5 through RPCSEC_GSS with no protection,
+/// integrity or privacy for the RPC data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SecFlavor {
+    Sys,
+    Krb5,
+    Krb5i,
+    Krb5p,
+}
+
+impl SecFlavor {
+    /// Parses an exports(5) / config name: sys, krb5, krb5i, krb5p.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "sys" => Some(SecFlavor::Sys),
+            "krb5" => Some(SecFlavor::Krb5),
+            "krb5i" => Some(SecFlavor::Krb5i),
+            "krb5p" => Some(SecFlavor::Krb5p),
+            _ => None,
+        }
+    }
+
+    pub fn is_kerberos(self) -> bool {
+        self != SecFlavor::Sys
+    }
+
+    /// The flavour of an RPCSEC_GSS call with this `rpc_gss_service_t`.
+    pub fn from_gss_service(service: u32) -> Option<Self> {
+        match service {
+            1 => Some(SecFlavor::Krb5),
+            2 => Some(SecFlavor::Krb5i),
+            3 => Some(SecFlavor::Krb5p),
+            _ => None,
+        }
+    }
+
+    /// The SECINFO entry announcing this flavour.
+    pub fn secinfo(self) -> nextnfs_proto::nfs4_proto::SeCinfo4 {
+        use nextnfs_proto::nfs4_proto::{RpcGssSvc, RpcSecGssInfo, SeCinfo4, KRB5_MECH_OID};
+        let service = match self {
+            SecFlavor::Sys => return SeCinfo4::AuthSys,
+            SecFlavor::Krb5 => RpcGssSvc::RpcGssSvcNone,
+            SecFlavor::Krb5i => RpcGssSvc::RpcGssSvcIntegrity,
+            SecFlavor::Krb5p => RpcGssSvc::RpcGssSvcPrivacy,
+        };
+        SeCinfo4::FlavorInfo(RpcSecGssInfo { oid: KRB5_MECH_OID.to_vec(), qop: 0, service })
+    }
+}
+
+fn default_sec() -> Vec<SecFlavor> {
+    vec![SecFlavor::Sys]
 }
 
 /// uid/gid of `nobody`/`nogroup`, the default anonymous identity.
@@ -312,6 +371,7 @@ impl Default for AccessConfig {
             squash: SquashMode::default(),
             anon_uid: DEFAULT_ANON_ID,
             anon_gid: DEFAULT_ANON_ID,
+            sec: default_sec(),
         }
     }
 }
@@ -415,6 +475,26 @@ impl AccessControl {
             SquashMode::None => gid,
             SquashMode::RootSquash => if gid == 0 { config.anon_gid } else { gid },
             SquashMode::AllSquash => config.anon_gid,
+        }
+    }
+
+    /// Whether clients may use `flavor` on this export (#106).
+    pub fn allows_flavor(&self, flavor: SecFlavor) -> bool {
+        let config = self.config.read().unwrap();
+        if config.sec.is_empty() {
+            flavor == SecFlavor::Sys
+        } else {
+            config.sec.contains(&flavor)
+        }
+    }
+
+    /// The export's flavours, in order of preference.
+    pub fn sec_flavors(&self) -> Vec<SecFlavor> {
+        let config = self.config.read().unwrap();
+        if config.sec.is_empty() {
+            default_sec()
+        } else {
+            config.sec.clone()
         }
     }
 

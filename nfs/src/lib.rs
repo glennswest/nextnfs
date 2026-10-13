@@ -37,6 +37,8 @@ pub struct NFSServer {
     state_dir: Option<std::path::PathBuf>,
     /// TLS acceptor for RPC-over-TLS (RFC 9289). None = plain TCP.
     tls_acceptor: Option<tokio_rustls::TlsAcceptor>,
+    /// RPCSEC_GSS (Kerberos) acceptor; None = RPCSEC_GSS refused (#106).
+    gss: Option<Arc<server::gss::GssServer>>,
 }
 
 impl NFSServer {
@@ -185,12 +187,13 @@ impl NFSServer {
                     let service_0 = self.service_0.clone();
                     let sm = self.session_manager.clone();
                     let tls = self.tls_acceptor.clone();
+                    let gss = self.gss.clone();
 
                     tokio::spawn(async move {
                         let span = span!(Level::DEBUG, "nfs_client", %addr);
                         let _enter = span.enter();
 
-                        let ctx = ConnectionContext { addr, cm, em, dfm, boot_time, service_0, sm };
+                        let ctx = ConnectionContext { addr, cm, em, dfm, boot_time, service_0, sm, gss };
                         if let Some(acceptor) = tls {
                             match acceptor.accept(stream).await {
                                 Ok(tls_stream) => {
@@ -223,6 +226,7 @@ struct ConnectionContext {
     boot_time: u64,
     service_0: Option<server::nfs40::NFS40Server>,
     sm: server::nfs41::SessionManager,
+    gss: Option<Arc<server::gss::GssServer>>,
 }
 
 /// Handle an NFS connection over any transport implementing AsyncRead + AsyncWrite.
@@ -232,7 +236,7 @@ async fn handle_connection<T>(
 ) where
     T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
-    let ConnectionContext { addr, cm, em, dfm, boot_time, service_0, sm } = ctx;
+    let ConnectionContext { addr, cm, em, dfm, boot_time, service_0, sm, gss } = ctx;
     let mut filehandle_cache = HashMap::new();
 
     loop {
@@ -260,7 +264,33 @@ async fn handle_connection<T>(
                     continue;
                 }
 
-                let request = NfsRequest::new(
+                // RPCSEC_GSS (#106): contexts, verifiers and the krb5i/krb5p
+                // wrapping are handled here when a keytab is configured;
+                // without one, NFSService refuses the credential.
+                let mut msg = msg;
+                let mut gss_reply = None;
+                let is_gss = matches!(
+                    &msg.body,
+                    nextnfs_proto::rpc_proto::MsgType::Call(c) if matches!(c.cred, OpaqueAuth::AuthGss(_))
+                );
+                if let (true, Some(g)) = (is_gss, gss.as_ref()) {
+                    match g.handle(msg) {
+                        server::gss::GssCall::Reply(reply) => {
+                            if let Err(e) = nfs_transport.send(reply).await {
+                                error!(%addr, "couldn't send response: {:?}", e);
+                                break;
+                            }
+                            continue;
+                        }
+                        server::gss::GssCall::Drop => continue,
+                        server::gss::GssCall::Proceed(m, info) => {
+                            msg = m;
+                            gss_reply = Some(info);
+                        }
+                    }
+                }
+
+                let mut request = NfsRequest::new(
                     addr.to_string(),
                     cm.clone(),
                     em.clone(),
@@ -269,10 +299,17 @@ async fn handle_connection<T>(
                     Some(&mut filehandle_cache),
                     Some(sm.clone()),
                 );
+                if let Some(info) = gss_reply.as_ref() {
+                    request.set_sec_flavor(info.flavor);
+                }
                 let nfs_protocol = service_0.as_ref().unwrap();
                 let service = NFSService::new(nfs_protocol.clone());
 
                 let resp = service.call(msg, request).await;
+                let resp = match (gss.as_ref(), gss_reply.as_ref()) {
+                    (Some(g), Some(info)) => g.wrap_reply(resp, info),
+                    _ => resp,
+                };
                 match nfs_transport.send(resp).await {
                     Ok(_) => {}
                     Err(e) => {
@@ -299,6 +336,7 @@ pub struct ServerBuilder {
     state_dir: Option<std::path::PathBuf>,
     tls_cert: Option<std::path::PathBuf>,
     tls_key: Option<std::path::PathBuf>,
+    gss: Option<Arc<server::gss::GssServer>>,
 }
 
 impl Default for ServerBuilder {
@@ -315,6 +353,7 @@ impl ServerBuilder {
             state_dir: None,
             tls_cert: None,
             tls_key: None,
+            gss: None,
         }
     }
 
@@ -340,6 +379,12 @@ impl ServerBuilder {
         self
     }
 
+    /// Enable RPCSEC_GSS (Kerberos krb5/krb5i/krb5p) with this acceptor (#106).
+    pub fn gss(&mut self, gss: server::gss::GssServer) -> &mut Self {
+        self.gss = Some(Arc::new(gss));
+        self
+    }
+
     pub fn build(&self) -> NFSServer {
         let boot_time = std::time::UNIX_EPOCH.elapsed().unwrap().as_secs();
         let session_manager = server::nfs41::SessionManager::new();
@@ -362,6 +407,7 @@ impl ServerBuilder {
             session_manager,
             state_dir: self.state_dir.clone(),
             tls_acceptor,
+            gss: self.gss.clone(),
         }
     }
 }

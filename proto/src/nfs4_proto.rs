@@ -146,7 +146,6 @@ pub type NfsFh4 = [u8; 26];
 pub type NfsLease4 = u32;
 type Offset4 = u64;
 type Qop4 = u32;
-type SecOid4 = Vec<u64>;
 type Seqid4 = u32;
 // type opaque  String<>;
 type Utf8strCis = String;
@@ -1372,28 +1371,86 @@ pub struct SecInfo4args {
 /*
  * From RFC 2203
  */
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+/// DER of the Kerberos V5 GSS-API mechanism OID 1.2.840.113554.1.2.2,
+/// the `sec_oid4` SECINFO announces for krb5/krb5i/krb5p.
+pub const KRB5_MECH_OID: &[u8] = &[0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x12, 0x01, 0x02, 0x02];
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RpcGssSvc {
     RpcGssSvcNone = 1,
     RpcGssSvcIntegrity = 2,
     RpcGssSvcPrivacy = 3,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+/// `rpcsec_gss_info` (RFC 7530 §16.31.1).
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RpcSecGssInfo {
-    pub oid: SecOid4,
+    /// DER-encoded mechanism OID (`opaque sec_oid4<>`).
+    pub oid: Vec<u8>,
     pub qop: Qop4,
     pub service: RpcGssSvc,
 }
 
-/* RPCSEC_GSS has a value of '6'.  See RFC 2203 */
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[repr(u32)]
+/// `secinfo4`: a union on the flavour; RPCSEC_GSS (6) carries
+/// `rpcsec_gss_info`. Hand-written serde: the derived form would send the
+/// variant index (2) instead of 6 and the service as 0..2.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SeCinfo4 {
-    AuthNone = 0,
-    AuthSys = 1,
-    FlavorInfo(RpcSecGssInfo) = 6,
+    AuthNone,
+    AuthSys,
+    FlavorInfo(RpcSecGssInfo),
+}
+
+impl serde::Serialize for SeCinfo4 {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeTuple;
+        let mut t = serializer.serialize_tuple(4)?;
+        match self {
+            SeCinfo4::AuthNone => t.serialize_element(&0u32)?,
+            SeCinfo4::AuthSys => t.serialize_element(&1u32)?,
+            SeCinfo4::FlavorInfo(info) => {
+                t.serialize_element(&6u32)?;
+                t.serialize_element(serde_bytes::Bytes::new(&info.oid))?;
+                t.serialize_element(&info.qop)?;
+                t.serialize_element(&(info.service as u32))?;
+            }
+        }
+        t.end()
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for SeCinfo4 {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct V;
+        impl<'de> serde::de::Visitor<'de> for V {
+            type Value = SeCinfo4;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("secinfo4")
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<SeCinfo4, A::Error> {
+                use serde::de::Error;
+                let flavor: u32 = seq.next_element()?.ok_or_else(|| A::Error::invalid_length(0, &self))?;
+                match flavor {
+                    0 => Ok(SeCinfo4::AuthNone),
+                    1 => Ok(SeCinfo4::AuthSys),
+                    6 => {
+                        let oid: serde_bytes::ByteBuf = seq.next_element()?.ok_or_else(|| A::Error::invalid_length(1, &self))?;
+                        let qop: u32 = seq.next_element()?.ok_or_else(|| A::Error::invalid_length(2, &self))?;
+                        let svc: u32 = seq.next_element()?.ok_or_else(|| A::Error::invalid_length(3, &self))?;
+                        let service = match svc {
+                            1 => RpcGssSvc::RpcGssSvcNone,
+                            2 => RpcGssSvc::RpcGssSvcIntegrity,
+                            3 => RpcGssSvc::RpcGssSvcPrivacy,
+                            n => return Err(A::Error::custom(format!("bad rpc_gss_svc_t {}", n))),
+                        };
+                        Ok(SeCinfo4::FlavorInfo(RpcSecGssInfo { oid: oid.into_vec(), qop, service }))
+                    }
+                    n => Err(A::Error::custom(format!("unknown security flavor {}", n))),
+                }
+            }
+        }
+        deserializer.deserialize_tuple(4, V)
+    }
 }
 
 type SecInfo4resok = Vec<SeCinfo4>;

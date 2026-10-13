@@ -50,7 +50,7 @@ pub fn issue_ticket(service_key: &KeytabEntry, client: &str, session_enctype: En
         key: EncryptionKey { r#type: session_enctype.number(), value: OctetString::from(session_key.clone()) },
         crealm: gs(&service_key.realm),
         cname: principal(client),
-        transited: TransitedEncoding { r#type: 1, contents: OctetString::new() },
+        transited: TransitedEncoding { r#type: 1, contents: OctetString::from_slice(&[]) },
         auth_time: kerberos_time(start),
         start_time: Some(kerberos_time(start)),
         end_time: kerberos_time(end),

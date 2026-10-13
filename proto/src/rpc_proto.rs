@@ -209,9 +209,9 @@ pub enum RejectedReply {
     AuthError(AuthStat) = 1,
 }
 
-#[derive(Debug, Clone, Deserialize, Default, Serialize)]
+///   Why authentication failed (`auth_stat`, RFC 5531 §9 and RFC 2203 §5.3.3.3)
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[repr(u32)]
-///   Why authentication failed
 pub enum AuthStat {
     UndefAuthCred = 0,
     /// bad credentials (seal broken)
@@ -219,12 +219,40 @@ pub enum AuthStat {
     AuthBadCred = 1,
     /// client must begin new session
     AuthRejectedCred = 2,
-    /// bad verifier (seal broken)    
+    /// bad verifier (seal broken)
     AuthBadverf = 3,
-    /// verifier expired or replayed  
+    /// verifier expired or replayed
     AuthRejectedverf = 4,
     /// rejected for security reasons
     AuthTooWeak = 5,
+    /// RPCSEC_GSS: no credentials for user / unknown context
+    RpcsecGssCredProblem = 13,
+    /// RPCSEC_GSS: problem with the context (expired, sequence too big)
+    RpcsecGssCtxProblem = 14,
+}
+
+/// Sent as its number (the derived form would send the variant index).
+impl serde::Serialize for AuthStat {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_u32(*self as u32)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for AuthStat {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let n = <u32 as serde::Deserialize>::deserialize(deserializer)?;
+        Ok(match n {
+            0 => AuthStat::UndefAuthCred,
+            1 => AuthStat::AuthBadCred,
+            2 => AuthStat::AuthRejectedCred,
+            3 => AuthStat::AuthBadverf,
+            4 => AuthStat::AuthRejectedverf,
+            5 => AuthStat::AuthTooWeak,
+            13 => AuthStat::RpcsecGssCredProblem,
+            14 => AuthStat::RpcsecGssCtxProblem,
+            n => return Err(<D::Error as serde::de::Error>::custom(format!("unknown auth_stat {}", n))),
+        })
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -367,6 +395,53 @@ mod tests {
             bytes,
             vec![0, 0, 0, 7, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1]
         );
+    }
+
+    #[test]
+    fn test_auth_stat_gss_wire_values() {
+        for (stat, code) in [(AuthStat::AuthTooWeak, 5u8), (AuthStat::RpcsecGssCredProblem, 13), (AuthStat::RpcsecGssCtxProblem, 14)] {
+            let reply = RpcReplyMsg {
+                xid: 1,
+                body: MsgType::Reply(ReplyBody::MsgDenied(RejectedReply::AuthError(stat))),
+            };
+            let bytes = reply.to_bytes().unwrap();
+            assert_eq!(&bytes[16..20], &[0, 0, 0, code]);
+        }
+    }
+
+    #[test]
+    fn test_gss_cred_parse_encode() {
+        let cred = RpcSecGssCred { version: 1, gss_proc: 0, seq_num: 9, service: 2, handle: vec![1, 2, 3, 4, 5] };
+        let body = cred.encode();
+        assert_eq!(&body[..20], &[0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 9, 0, 0, 0, 2, 0, 0, 0, 5]);
+        assert_eq!(body.len(), 28);
+        let back = RpcSecGssCred::parse(&body).unwrap();
+        assert_eq!((back.version, back.seq_num, back.service, back.handle), (1, 9, 2, vec![1, 2, 3, 4, 5]));
+        assert!(RpcSecGssCred::parse(&body[..22]).is_none());
+        assert!(RpcSecGssCred::parse(&[0, 0, 0, 1]).is_none());
+    }
+
+    #[test]
+    fn test_success_raw_wire_format() {
+        let reply = RpcReplyMsg {
+            xid: 2,
+            body: MsgType::Reply(ReplyBody::MsgAccepted(AcceptedReply {
+                verf: OpaqueAuth::GssVerf(vec![9, 9, 9]),
+                reply_data: AcceptBody::SuccessRaw(vec![0xa, 0xb, 0xc, 0xd]),
+            })),
+        };
+        assert_eq!(
+            reply.to_bytes().unwrap(),
+            vec![0, 0, 0, 2, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 3, 9, 9, 9, 0, 0, 0, 0, 0, 0xa, 0xb, 0xc, 0xd]
+        );
+        let bad = RpcReplyMsg {
+            xid: 2,
+            body: MsgType::Reply(ReplyBody::MsgAccepted(AcceptedReply {
+                verf: OpaqueAuth::AuthNull(vec![]),
+                reply_data: AcceptBody::SuccessRaw(vec![1, 2, 3]),
+            })),
+        };
+        assert!(bad.to_bytes().is_err());
     }
 
     #[test]

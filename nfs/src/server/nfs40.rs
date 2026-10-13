@@ -34,6 +34,27 @@ fn is_mutating(arg: &NfsArgOp) -> bool {
 /// mutating ones `is_mutating` covers, the ones that can move the
 /// current filehandle onto another export (#97), and the ones
 /// `perm::check_op` checks (#91).
+const OP_LOOKUP: u32 = 15;
+const OP_LOOKUPP: u32 = 16;
+const OP_PUTFH: u32 = 22;
+const OP_PUTPUBFH: u32 = 23;
+const OP_PUTROOTFH: u32 = 24;
+const OP_RESTOREFH: u32 = 31;
+const OP_SECINFO: u32 = 33;
+const OP_SECINFO_NO_NAME: u32 = 52;
+
+/// Ops that set the current filehandle to a (possibly) new object.
+fn moves_filehandle(opnum: u32) -> bool {
+    matches!(opnum, OP_PUTFH | OP_PUTPUBFH | OP_PUTROOTFH | OP_RESTOREFH | OP_LOOKUP | OP_LOOKUPP)
+}
+
+/// Ops allowed to run on an export the call's flavour may not use: they
+/// move the filehandle (checked after they run) or ask which flavours to
+/// use (#106).
+fn wrongsec_exempt(opnum: u32) -> bool {
+    moves_filehandle(opnum) || matches!(opnum, OP_SECINFO | OP_SECINFO_NO_NAME)
+}
+
 fn op_code(arg: &NfsArgOp) -> u32 {
     match arg {
         NfsArgOp::Opcommit(_) => 5,
@@ -455,6 +476,7 @@ impl NfsProtoImpl for NFS40Server {
 
                 let mut resarray = Vec::with_capacity(args.argarray.len());
                 let op_count = args.argarray.len();
+                let opcodes: Vec<u32> = args.argarray.iter().map(op_code).collect();
                 for (op_idx, arg) in args.argarray.into_iter().enumerate() {
                     let operation = op_name(&arg);
                     debug!(op = operation, idx = op_idx, total = op_count, "compound: dispatching op");
@@ -528,6 +550,36 @@ impl NfsProtoImpl for NFS40Server {
                                 }),
                             );
                         }
+                    }
+
+                    // Security flavour (#106): ops on an export must use one
+                    // of its `sec` flavours, else NFS4ERR_WRONGSEC. Ops that
+                    // only move the current filehandle, and SECINFO, run and
+                    // are checked afterwards (RFC 7530 §2.6.3.1).
+                    if !request.sec_allowed() && !wrongsec_exempt(op_code(&arg)) {
+                        info!(
+                            client = %request.client_addr(),
+                            op = operation,
+                            flavor = ?request.sec_flavor(),
+                            status = "Nfs4errWrongsec",
+                            export = ?request.current_export_id(),
+                            "nfs_audit: security flavour not allowed on export"
+                        );
+                        resarray.push(NfsResOp4::OpError {
+                            op: op_code(&arg),
+                            status: NfsStat4::Nfs4errWrongsec,
+                        });
+                        return (
+                            request,
+                            ReplyBody::MsgAccepted(AcceptedReply {
+                                verf: OpaqueAuth::AuthNull(Vec::<u8>::new()),
+                                reply_data: AcceptBody::Success(Compound4res {
+                                    status: NfsStat4::Nfs4errWrongsec,
+                                    tag: "".to_string(),
+                                    resarray,
+                                }),
+                            }),
+                        );
                     }
 
                     // Read-only export: refuse mutating ops with NFS4ERR_ROFS (#93).
@@ -695,6 +747,34 @@ impl NfsProtoImpl for NFS40Server {
                             status: NfsStat4::Nfs4errAccess,
                         });
                         response.status = NfsStat4::Nfs4errAccess;
+                    }
+                    // An op that put the client on an export whose `sec` does
+                    // not include the call's flavour fails with WRONGSEC,
+                    // unless a PUTFH-like op is followed by SECINFO or a
+                    // LOOKUP (which are then checked themselves), RFC 7530
+                    // §2.6.3.1.1 (#106).
+                    if response.status == NfsStat4::Nfs4Ok
+                        && moves_filehandle(opnum)
+                        && !response.request.sec_allowed()
+                    {
+                        let next = opcodes.get(op_idx + 1).copied();
+                        let deferred = matches!(opnum, OP_PUTFH | OP_PUTPUBFH | OP_PUTROOTFH | OP_RESTOREFH)
+                            && matches!(next, Some(OP_SECINFO | OP_SECINFO_NO_NAME | OP_LOOKUP | OP_LOOKUPP));
+                        if !deferred {
+                            info!(
+                                client = %response.request.client_addr(),
+                                op = operation,
+                                flavor = ?response.request.sec_flavor(),
+                                status = "Nfs4errWrongsec",
+                                export = ?response.request.current_export_id(),
+                                "nfs_audit: security flavour not allowed on export"
+                            );
+                            response.result = Some(NfsResOp4::OpError {
+                                op: opnum,
+                                status: NfsStat4::Nfs4errWrongsec,
+                            });
+                            response.status = NfsStat4::Nfs4errWrongsec;
+                        }
                     }
 
                     let res = response.result;
