@@ -58,6 +58,12 @@ RPM with `packaging/nextnfs-run-tests`), `packaging/` (RPM/DEB/systemd),
 Config keys that parse but do not do what their names say:
 `rdma_device`/`rdma_port` (warn and are ignored). See `gh issue list`.
 
+Kerberos (#106): `nextnfs-krb5` (`krb5/`) is the acceptor;
+`nfs/src/server/gss.rs` is RPCSEC_GSS (handled in `nfs/src/lib.rs`
+before NFSService when `[server] krb5_keytab` is set); per-export `sec`
+is enforced in the COMPOUND loop (WRONGSEC). GETATTR owners are still
+numeric (#114).
+
 Permissions (#91): `nfs/src/server/perm.rs` checks every op for the
 squash-mapped caller in the COMPOUND dispatcher (after the read-only
 check) and chowns new objects; `squash` defaults to `root_squash`.
@@ -171,8 +177,16 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
          the export's flavours.
       5. docs, CHANGELOG, end-to-end tests (initiator → INIT → COMPOUND
          per service), sc-build, minor bump, golden.
-      No KDC / kernel client on the build VMs — interop with a real
-      krb5 client is a follow-up once #108's test container exists.
+      Status 2026-10-14: steps 1–4 pushed (c0fac99 krb5 crate, a6c896e
+      proto, 7a27a54 server, 588e25b tests, 46e029f MIT interop test,
+      fbf0b97 docs/CHANGELOG). The build VMs DO have MIT krb5
+      (krb5kdc, kadmin.local, kinit, krb5-devel, python3-gssapi, gcc):
+      `tests/krb5-interop.sh` runs an unprivileged KDC and drives nextnfs
+      with MIT libgssapi_krb5 (dlopen, `tests/krb5-interop/`). No root,
+      so no kernel `mount -o sec=krb5*`. Next: green `sc-build` (tests,
+      clippy, interop), v0.15.0, close #106, golden; comment the config
+      keys on nextnfs-operator#18. Follow-up: #114 (owner strings as
+      name@domain for krb5 clients).
       Background: the golden is one static musl binary (rustls, no OpenSSL);
       rocketsmbd links C GSSAPI (not static-linkable), irondirectory has a
       pure-Rust acceptor + RFC 4121 wrap (`crates/ldap/src/gssapi`) on
