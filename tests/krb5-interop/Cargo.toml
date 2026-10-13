@@ -1,0 +1,14 @@
+# MIT Kerberos interop client for nextnfs's RPCSEC_GSS (#106). Not part of
+# the workspace or the golden: tests/krb5-interop.sh builds and runs it on
+# a machine with MIT krb5 (krb5kdc, kadmin.local, libgssapi_krb5.so.2).
+[package]
+name = "krb5-interop"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[dependencies]
+libloading = "0.8"
+
+[workspace]

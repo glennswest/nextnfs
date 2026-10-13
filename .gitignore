@@ -25,3 +25,8 @@ credentials/
 *.log
 tmp/
 temp/
+
+# Kerberos keytabs; the krb5 interop client is built on its own
+*.keytab
+tests/krb5-interop/target/
+tests/krb5-interop/Cargo.lock
