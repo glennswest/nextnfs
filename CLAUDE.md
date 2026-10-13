@@ -142,10 +142,11 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       Code + docs pushed (f08bfb7, 3b7b9b3). `sc-build 'cargo test
       --workspace'` got no slot in an hour twice (exit 75, dev busy); still
       to verify, then close #90 and request the golden.
-- [ ] 2026-10-13 — #111: serde-xdr (GPL-3.0) replaced by `proto/src/xdr.rs`
+- [x] 2026-10-13 — #111: serde-xdr (GPL-3.0) replaced by `proto/src/xdr.rs`
       (own serde XDR codec, same wire format, same API); dependency and its
-      lock entries removed. Next: `sc-build 'cargo test --workspace && cargo
-      clippy --workspace --all-targets'`, close #111, golden.
+      lock entries removed. `sc-build 'cargo test --workspace && cargo
+      clippy --workspace --all-targets'` on 01f038f green (584 tests, no
+      lockfile change, no clippy warnings in proto/). Closed; golden requested.
 - [x] #101 fixed with #91 (ACCESS uses the squash-mapped caller; AUTH_NONE = anon).
 - [ ] 2026-10-10 — #106 (RPCSEC_GSS/Kerberos; owner: build it, not
       urgent). Decided 2026-10-13: option A (pure-Rust RustCrypto +
