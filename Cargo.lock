@@ -1125,7 +1125,7 @@ dependencies = [
 
 [[package]]
 name = "nextnfs"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "axum",
  "clap",
@@ -1145,7 +1145,7 @@ dependencies = [
 
 [[package]]
 name = "nextnfs-krb5"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "aes",
  "chrono",
@@ -1160,7 +1160,7 @@ dependencies = [
 
 [[package]]
 name = "nextnfs-proto"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "bytes",
@@ -1175,7 +1175,7 @@ dependencies = [
 
 [[package]]
 name = "nextnfs-server"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1213,7 +1213,7 @@ dependencies = [
 
 [[package]]
 name = "nextnfs-stress"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1226,7 +1226,7 @@ dependencies = [
 
 [[package]]
 name = "nextnfstest"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "axum",

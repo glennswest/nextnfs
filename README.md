@@ -2,7 +2,7 @@
 
 High-performance, standalone **NFSv4.0/4.1 server over a real filesystem**, written in Rust. Runs as a static musl binary in a scratch/[stormd](https://github.com/glennswest/stormd) container, or as an RPM/DEB service on Fedora/RHEL/Debian. Multiple exports, a REST API + web UI for management, and NFSv4 protocol correctness verified against real Linux clients.
 
-Current version: **0.14.0**.
+Current version: **0.15.0**.
 
 ## Features
 
@@ -41,7 +41,7 @@ Plus shell integration suites in `tests/*.sh` (NFSv4 basic/edge/stress, NFSv4.1 
 
 `tests/krb5-interop.sh` checks RPCSEC_GSS against MIT Kerberos without root: it starts a throw-away `krb5kdc`, makes an `nfs/` principal per AES enctype and a keytab, runs nextnfs with a krb5/krb5i/krb5p export, and drives it with MIT's own `libgssapi_krb5` (the library `rpc.gssd` uses) through `tests/krb5-interop/`: context setup with mutual authentication, COMPOUNDs under each service with every verifier, checksum and decryption checked, DESTROY, and `NFS4ERR_WRONGSEC` for AUTH_SYS. Needs `krb5-server`, `krb5-workstation` and cargo.
 
-553 unit tests pass with `cargo test --workspace` (474 `nextnfs-server`, 71 `nextnfs-proto`, 6 `nextnfstest`, 2 in the `nextnfs` binary's config parser). `ci/ci-stress.sh` drives an end-to-end pipeline (written for the now-retired mkube runners): build RPM → `rpm -Uvh` on each target → restart service → run `nextnfs-stress` against the live mount → collect per-server logs and journals.
+621 unit tests pass with `cargo test --workspace` (510 `nextnfs-server`, 81 `nextnfs-proto`, 21 `nextnfs-krb5`, 6 `nextnfstest`, 3 in the `nextnfs` binary's config parser). `ci/ci-stress.sh` drives an end-to-end pipeline (written for the now-retired mkube runners): build RPM → `rpm -Uvh` on each target → restart service → run `nextnfs-stress` against the live mount → collect per-server logs and journals.
 
 ## Quick start
 
@@ -67,8 +67,8 @@ In the container, stormd (`stormd.toml`) starts `nextnfs serve --export /export 
 ### RPM / DEB
 
 ```bash
-sudo rpm -i nextnfs-0.14.0-1.x86_64.rpm     # Fedora/RHEL
-sudo dpkg -i nextnfs_0.14.0_amd64.deb        # Debian/Ubuntu
+sudo rpm -i nextnfs-0.15.0-1.x86_64.rpm     # Fedora/RHEL
+sudo dpkg -i nextnfs_0.15.0_amd64.deb        # Debian/Ubuntu
 ```
 
 | | RPM | DEB |
