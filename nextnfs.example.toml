@@ -7,6 +7,14 @@ state_dir = "/var/lib/nextnfs"
 # tls_cert = "/etc/nextnfs/tls/cert.pem"
 # tls_key = "/etc/nextnfs/tls/key.pem"
 
+# Kerberos (optional — RPCSEC_GSS krb5/krb5i/krb5p; exports opt in with `sec`)
+# krb5_keytab = "/etc/nextnfs/krb5.keytab"   # nfs/<host>@REALM keys
+# [[server.krb5_map]]                        # principal → identity (else /etc/passwd)
+# principal = "alice@EXAMPLE.COM"
+# uid = 1001
+# gid = 1001
+# gids = [10]
+
 # Legacy single-export (still works)
 [export]
 path = "/export"
@@ -23,6 +31,7 @@ read_only = false
 # squash = "root_squash"        # default; "all_squash", or "none" to let client root be root
 # anon_uid = 65534               # identity of squashed callers (and AUTH_NONE)
 # anon_gid = 65534
+# sec = ["sys"]                  # default; e.g. ["krb5p", "krb5i"] needs krb5_keytab
 #
 # [[exports]]
 # name = "backup"

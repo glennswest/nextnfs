@@ -4,6 +4,14 @@
 
 <!-- New unreleased changes go here -->
 
+### 2026-10-14
+- **feat:** Kerberos for NFS: RPCSEC_GSS (RFC 2203) with the Kerberos V5 mechanism, services krb5, krb5i and krb5p (#106). Context setup (RPCSEC_GSS_INIT with mutual authentication), per-call header verifiers, a 128-call sequence window (replays dropped), integrity checksums and encryption of arguments and results, DESTROY; contexts are shared by all connections and expire with the ticket
+- **feat:** new crate `nextnfs-krb5`: pure-Rust Kerberos acceptor (RustCrypto + `rasn-kerberos`, so the golden stays one static binary): aes128/256-cts-hmac-sha1-96 and aes128-cts-hmac-sha256-128 / aes256-cts-hmac-sha384-192 (checked against the RFC 3961/3962/8009 test vectors), MIT keytab reader, AP-REQ/AP-REP with an authenticator replay cache, RFC 4121 MIC and Wrap tokens
+- **feat:** `[server] krb5_keytab` and `[[server.krb5_map]]` (principal → uid/gid/groups); principals of local realms otherwise map through `/etc/passwd`/`/etc/group`, machine principals (`nfs/`, `host/`, `root/<host>`) are uid 0 (subject to `squash`), others are the export's anonymous user
+- **feat:** per-export `sec = ["sys", "krb5", "krb5i", "krb5p"]` (default `["sys"]`): a call with another flavour gets `NFS4ERR_WRONGSEC`; SECINFO and SECINFO_NO_NAME answer with the export's flavours (all exports' at the pseudo-root). A Kerberos flavour without `krb5_keytab`, or an unknown name, stops the server at startup
+- **fix:** the RPCSEC_GSS credential parser skipped the version word, reading `gss_proc` from it; SECINFO's `secinfo4` encoded the RPCSEC_GSS flavour as 2, the service as 0..2 and the OID as an array of u64 (it was never sent); `auth_stat` codes were sent as enum indexes (13/14 for RPCSEC_GSS would have gone out as 6/7). RPC opaque lengths larger than the record are refused before allocating
+- **test:** `tests/krb5-interop.sh`: MIT KDC + MIT `libgssapi_krb5` initiator against nextnfs, unprivileged
+
 ### 2026-10-13
 - **fix:** Replaced the `serde-xdr` crate (GPL-3.0, refused by the crate licence policy) with nextnfs's own serde XDR codec, `nextnfs_proto::xdr` (#111). Same wire format and entry points (`to_bytes`/`from_bytes`/`to_writer`/`from_reader`, `opaque_data::fixed_length`), so nothing on the wire changes. Differences: XDR strings may hold any UTF-8 (serde-xdr refused non-ASCII), and a forged opaque/array length no longer pre-allocates the claimed size. `serde-xdr` and its `failure`/`backtrace` dependency tree are gone from `Cargo.lock`
 
