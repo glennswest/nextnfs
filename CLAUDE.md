@@ -156,7 +156,7 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       golden-nextnfs-efc61bb35b25 (--locked musl build), release request
       glennswest/stormcos#158.
 - [x] #101 fixed with #91 (ACCESS uses the squash-mapped caller; AUTH_NONE = anon).
-- [ ] 2026-10-10 — #106 (RPCSEC_GSS/Kerberos; owner: build it, not
+- [x] 2026-10-10 — #106 (RPCSEC_GSS/Kerberos; owner: build it, not
       urgent). Decided 2026-10-13: option A (pure-Rust RustCrypto +
       rasn-kerberos in nextnfs, porting irondirectory's accept/wrap logic).
       #111 done; in progress 2026-10-13. Plan, one commit (or more) each:
@@ -183,10 +183,12 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       (krb5kdc, kadmin.local, kinit, krb5-devel, python3-gssapi, gcc):
       `tests/krb5-interop.sh` runs an unprivileged KDC and drives nextnfs
       with MIT libgssapi_krb5 (dlopen, `tests/krb5-interop/`). No root,
-      so no kernel `mount -o sec=krb5*`. Next: green `sc-build` (tests,
-      clippy, interop), v0.15.0, close #106, golden; comment the config
-      keys on nextnfs-operator#18. Follow-up: #114 (owner strings as
-      name@domain for krb5 clients).
+      so no kernel `mount -o sec=krb5*`. Done 2026-10-14: v0.15.0
+      (a168192), `cargo test --workspace --locked` 621 green, clippy 0
+      warnings, MIT interop PASS (4 enctypes × krb5/krb5i/krb5p);
+      golden-nextnfs-acf1141301b3, release request stormcos#158; #106
+      closed; config keys posted on nextnfs-operator#18. Follow-up: #114
+      (owner strings as name@domain for krb5 clients).
       Background: the golden is one static musl binary (rustls, no OpenSSL);
       rocketsmbd links C GSSAPI (not static-linkable), irondirectory has a
       pure-Rust acceptor + RFC 4121 wrap (`crates/ldap/src/gssapi`) on
