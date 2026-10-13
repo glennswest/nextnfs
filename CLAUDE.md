@@ -153,7 +153,26 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
 - [ ] 2026-10-10 — #106 (RPCSEC_GSS/Kerberos; owner: build it, not
       urgent). Decided 2026-10-13: option A (pure-Rust RustCrypto +
       rasn-kerberos in nextnfs, porting irondirectory's accept/wrap logic).
-      Queued behind #111 (`stormcentral propose --after nextnfs#111`).
+      #111 done; in progress 2026-10-13. Plan, one commit (or more) each:
+      1. new crate `krb5/` (`nextnfs-krb5`): RFC 3961/3962/8009 AES
+         enctypes (RustCrypto, RFC test vectors), MIT keytab reader, GSS
+         token framing, AP-REQ acceptor (+ AP-REP for mutual auth),
+         RFC 4121 MIC + Wrap tokens. Test initiator in its tests.
+      2. proto: rpc_gss_cred_t has a version word first (parser read
+         gss_proc from it); keep raw call header + raw args for GSS calls;
+         GSS reply verifier; raw (wrapped) success body.
+      3. server `nfs/src/server/gss.rs`: context table shared across
+         connections, INIT/DESTROY/DATA, seq window, krb5/krb5i/krb5p
+         unwrap/wrap; principal → uid/gid (config map, then /etc/passwd
+         by name, else anon); caller flavour recorded on the request.
+      4. config: `[server] krb5_keytab`, `[[server.krb5_map]]`, per-export
+         `sec = ["sys","krb5","krb5i","krb5p"]` (default ["sys"]), enforced
+         like `clients` on export switch (NFS4ERR_WRONGSEC); SECINFO lists
+         the export's flavours.
+      5. docs, CHANGELOG, end-to-end tests (initiator → INIT → COMPOUND
+         per service), sc-build, minor bump, golden.
+      No KDC / kernel client on the build VMs — interop with a real
+      krb5 client is a follow-up once #108's test container exists.
       Background: the golden is one static musl binary (rustls, no OpenSSL);
       rocketsmbd links C GSSAPI (not static-linkable), irondirectory has a
       pure-Rust acceptor + RFC 4121 wrap (`crates/ldap/src/gssapi`) on
