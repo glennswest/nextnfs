@@ -1129,6 +1129,7 @@ version = "0.14.0"
 dependencies = [
  "axum",
  "clap",
+ "nextnfs-krb5",
  "nextnfs-proto",
  "nextnfs-server",
  "reqwest",
@@ -1184,6 +1185,7 @@ dependencies = [
  "futures-core",
  "libc",
  "multi_index_map",
+ "nextnfs-krb5",
  "nextnfs-proto",
  "num-derive",
  "num-traits",
