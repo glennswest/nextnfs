@@ -1430,6 +1430,7 @@ mod tests {
             squash: SquashMode::RootSquash,
             anon_uid: 65534,
             anon_gid: 65534,
+            sec: vec![SecFlavor::Sys],
         });
         assert!(!ac.check_client("1.2.3.4:111"));
         assert!(ac.check_client("10.1.2.3:111"));
@@ -1450,6 +1451,7 @@ mod tests {
                     squash: SquashMode::RootSquash,
                     anon_uid: 65534,
                     anon_gid: 65534,
+                    sec: vec![SecFlavor::Sys, SecFlavor::Krb5p],
                 },
             )
             .await;
