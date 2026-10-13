@@ -2868,6 +2868,10 @@ mod tests {
     /// Two exports: "open" (sys) and "krb" (krb5i only).
     async fn sec_export_request(open_dir: &std::path::Path, krb_dir: &std::path::Path) -> NfsRequest<'static> {
         use crate::server::export_manager::SecFlavor;
+        // World-searchable: the test calls are the anonymous user.
+        for d in [open_dir, krb_dir] {
+            std::fs::set_permissions(d, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
         let request = create_nfs40_server(None).await;
         let em = request.export_manager();
         em.add_export("open".to_string(), open_dir.to_path_buf(), false).await.unwrap();
@@ -2942,12 +2946,12 @@ mod tests {
 
         // PUTFH + SECINFO_NO_NAME: allowed, and lists krb5i.
         let msg = make_compound(vec![
-            NfsArgOp::Opputfh(PutFh4args { object: fh.clone() }),
+            NfsArgOp::Opputfh(PutFh4args { object: fh }),
             NfsArgOp::OpsecinfoNoName(SecinfoNoName4args { sina_style: SecinfoStyle4::SecinfoStyle4CurrentFh }),
         ]);
         let (request, reply) = NFS40Server::new().compound(msg, request).await;
         let (status, resarray) = compound_result(reply);
-        assert_eq!(status, NfsStat4::Nfs4Ok);
+        assert_eq!(status, NfsStat4::Nfs4Ok, "{:?}", resarray);
         assert_eq!(resarray[1], NfsResOp4::OpsecinfoNoName(SecinfoNoName4res::Resok4(vec![krb5i_secinfo()])));
 
         // PUTFH + GETFH: WRONGSEC on the PUTFH.
@@ -2987,7 +2991,7 @@ mod tests {
         let bytes = nextnfs_proto::xdr::to_bytes(&krb5i_secinfo()).unwrap();
         let mut want = vec![0, 0, 0, 6, 0, 0, 0, 11];
         want.extend_from_slice(KRB5_MECH_OID);
-        want.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0, 0, 2]);
+        want.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0, 2]);
         assert_eq!(bytes, want);
         let back: SeCinfo4 = nextnfs_proto::xdr::from_bytes(&bytes).unwrap();
         assert_eq!(back, krb5i_secinfo());

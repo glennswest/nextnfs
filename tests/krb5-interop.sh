@@ -85,9 +85,10 @@ echo alice-password | kinit alice >/dev/null
 klist | sed -n 1,3p
 
 # nextnfs
+target=${CARGO_TARGET_DIR:-}
 if [ -z "${NEXTNFS:-}" ]; then
     (cd "$root" && cargo build -q --bin nextnfs)
-    NEXTNFS=$root/target/debug/nextnfs
+    NEXTNFS=${target:-$root/target}/debug/nextnfs
 fi
 mkdir -p "$work/plain" "$work/secure"
 for i in $(seq 1 200); do : >"$work/secure/file-with-a-fairly-long-name-$i"; done
@@ -115,7 +116,7 @@ for _ in $(seq 1 50); do
 done
 
 (cd "$root/tests/krb5-interop" && cargo build -q)
-client=$root/tests/krb5-interop/target/debug/krb5-interop
+client=${target:-$root/tests/krb5-interop/target}/debug/krb5-interop
 status=0
 for entry in "${principals[@]}"; do
     p=${entry%%:*}

@@ -263,7 +263,7 @@ mod tests {
             uid: 1000,
             gid: 1000,
             size,
-            blocks: (size + 511) / 512,
+            blocks: size.div_ceil(512),
             atime: 1700000000,
             atime_nsec: 123456,
             mtime: 1700000100,
@@ -421,7 +421,7 @@ mod tests {
     fn test_new_real_nlink() {
         let vfs = VfsPath::new(MemoryFS::new());
         let id = [14u8; 26];
-        let mut meta = make_real_meta(libc::S_IFREG as u32 | 0o644, 0, 1000);
+        let mut meta = make_real_meta(libc::S_IFREG | 0o644, 0, 1000);
         meta.nlink = 5;
         let fh = Filehandle::new_real(vfs, id, 1, 1, 0, &meta);
         assert_eq!(fh.attr_nlink, 5);
