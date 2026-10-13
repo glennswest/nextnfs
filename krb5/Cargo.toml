@@ -1,0 +1,21 @@
+[package]
+name = "nextnfs-krb5"
+description = "Kerberos V5 GSS-API acceptor for nextnfs's RPCSEC_GSS: AES enctypes, keytab, AP-REQ, RFC 4121 tokens"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# Pure-Rust crypto keeps the golden one static musl binary (#106, option A).
+aes = "0.8"
+hmac = "0.12"
+sha1 = "0.10"
+sha2 = "0.10"
+pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
+getrandom = "0.2"
+# Kerberos ASN.1 (RFC 4120) — the same crates irondirectory's acceptor uses.
+rasn = "0.28"
+rasn-kerberos = "0.28"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
