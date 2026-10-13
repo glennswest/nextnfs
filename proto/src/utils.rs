@@ -155,7 +155,7 @@ impl Serialize for OpaqueAuth {
             OpaqueAuth::AuthNull(data) => (0u32, data.clone()),
             OpaqueAuth::AuthUnix(auth) => {
                 let mut bytes = Vec::new();
-                serde_xdr::to_writer(&mut bytes, auth)
+                crate::xdr::to_writer(&mut bytes, auth)
                     .map_err(serde::ser::Error::custom)?;
                 (1u32, bytes)
             }
@@ -192,7 +192,7 @@ impl Serialize for OpaqueAuth {
 ///   };
 ///
 /// The body is a variable-length opaque containing the serialized auth
-/// credentials. serde_xdr's enum deserialization would treat this as a
+/// credentials. the derived enum deserialization would treat this as a
 /// discriminated union (reading variant fields directly), but the wire
 /// format wraps the body in an XDR opaque (u32 length + data + padding).
 /// We must read the opaque wrapper and then parse the body by flavor.
@@ -234,7 +234,7 @@ impl<'de> Deserialize<'de> for OpaqueAuth {
                         let body_bytes = body.into_vec();
                         let mut cursor = std::io::Cursor::new(&body_bytes);
                         let auth: AuthUnix =
-                            serde_xdr::from_reader(&mut cursor).map_err(|e| {
+                            crate::xdr::from_reader(&mut cursor).map_err(|e| {
                                 de::Error::custom(format!(
                                     "failed to parse AUTH_SYS body: {:?}",
                                     e
@@ -1136,11 +1136,11 @@ mod tests {
 
     #[test]
     fn test_nfsstat4_serialize() {
-        let ok_bytes = serde_xdr::to_bytes(&NfsStat4::Nfs4Ok).unwrap();
+        let ok_bytes = crate::xdr::to_bytes(&NfsStat4::Nfs4Ok).unwrap();
         let val = u32::from_be_bytes(ok_bytes[..4].try_into().unwrap());
         assert_eq!(val, 0);
 
-        let stale_bytes = serde_xdr::to_bytes(&NfsStat4::Nfs4errStale).unwrap();
+        let stale_bytes = crate::xdr::to_bytes(&NfsStat4::Nfs4errStale).unwrap();
         let val = u32::from_be_bytes(stale_bytes[..4].try_into().unwrap());
         assert_eq!(val, 70);
     }
@@ -1183,7 +1183,7 @@ mod tests {
     #[test]
     fn test_opaque_auth_null_serialize_roundtrip() {
         let auth = OpaqueAuth::AuthNull(vec![]);
-        let bytes = serde_xdr::to_bytes(&auth).unwrap();
+        let bytes = crate::xdr::to_bytes(&auth).unwrap();
         // flavor=0 (4 bytes) + body length=0 (4 bytes) = 8 bytes
         assert_eq!(bytes.len(), 8);
     }
@@ -1197,7 +1197,7 @@ mod tests {
             gid: 1000,
             gids: vec![1000, 100],
         });
-        let bytes = serde_xdr::to_bytes(&auth).unwrap();
+        let bytes = crate::xdr::to_bytes(&auth).unwrap();
         // Should serialize without panic
         assert!(!bytes.is_empty());
     }

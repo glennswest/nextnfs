@@ -4,6 +4,9 @@
 
 <!-- New unreleased changes go here -->
 
+### 2026-10-13
+- **fix:** Replaced the `serde-xdr` crate (GPL-3.0, refused by the crate licence policy) with nextnfs's own serde XDR codec, `nextnfs_proto::xdr` (#111). Same wire format and entry points (`to_bytes`/`from_bytes`/`to_writer`/`from_reader`, `opaque_data::fixed_length`), so nothing on the wire changes. Differences: XDR strings may hold any UTF-8 (serde-xdr refused non-ASCII), and a forged opaque/array length no longer pre-allocates the claimed size. `serde-xdr` and its `failure`/`backtrace` dependency tree are gone from `Cargo.lock`
+
 ## [v0.14.0] — 2026-10-10
 
 ### Breaking

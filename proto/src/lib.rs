@@ -1,9 +1,10 @@
 pub mod nfs4_proto;
 pub mod rpc_proto;
 pub mod utils;
+pub mod xdr;
 
 use bytes::{Buf, BytesMut};
-use serde_xdr::{from_reader, to_writer};
+use xdr::{from_reader, to_writer};
 use std::io::Cursor;
 use tokio_util::codec::{Decoder, Encoder};
 // use tracing::trace;
@@ -132,8 +133,8 @@ impl Encoder<Box<RpcReplyMsg>> for XDRProtoCodec {
 /// Parse an RPC call message from raw bytes.
 ///
 /// Manually parses the RPC header (RFC 5531) including opaque_auth
-/// credentials and verifier, then uses serde_xdr only for the NFSv4
-/// COMPOUND args. This avoids mismatches between serde_xdr's enum
+/// credentials and verifier, then uses the serde XDR codec only for the NFSv4
+/// COMPOUND args. This avoids mismatches between the derived enum
 /// deserialization and the RFC 5531 opaque_auth wire format.
 pub fn from_bytes(buffer: Vec<u8>) -> Result<RpcCallMsg, anyhow::Error> {
     use rpc_proto::{AuthUnix, CallBody, MsgType, OpaqueAuth};
@@ -178,7 +179,7 @@ pub fn from_bytes(buffer: Vec<u8>) -> Result<RpcCallMsg, anyhow::Error> {
         match flavor {
             0 => Ok(OpaqueAuth::AuthNull(body)),
             1 => {
-                // AUTH_SYS: parse body as authsys_parms via serde_xdr
+                // AUTH_SYS: parse body as authsys_parms via crate::xdr
                 let mut body_cursor = Cursor::new(body);
                 let auth: AuthUnix = from_reader(&mut body_cursor)?;
                 Ok(OpaqueAuth::AuthUnix(auth))
@@ -237,7 +238,7 @@ pub fn from_bytes(buffer: Vec<u8>) -> Result<RpcCallMsg, anyhow::Error> {
     let args = if proc_num == 0 || prog != 100003 {
         None
     } else {
-        // Remaining bytes are the COMPOUND args — deserialize via serde_xdr
+        // Remaining bytes are the COMPOUND args — deserialize via crate::xdr
         let pos = cursor.position() as usize;
         let remaining = &buffer[pos..];
         let mut args_cursor = Cursor::new(remaining.to_vec());

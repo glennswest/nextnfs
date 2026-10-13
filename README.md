@@ -168,7 +168,7 @@ The API has no authentication — bind `api_listen` to a trusted address.
 
 Five-crate Rust workspace:
 
-- **`nextnfs-proto`** (`proto/`) — XDR codec, RPC and NFSv4 protocol types
+- **`nextnfs-proto`** (`proto/`) — XDR codec (its own serde XDR encoder, `proto/src/xdr.rs`), RPC and NFSv4 protocol types
 - **`nextnfs-server`** (`nfs/`) — the NFSv4.0/4.1 server library: `ExportManager` and `FileManager` actors, compound operation handling, locking, v4.1 sessions, pseudo-fs root, TLS, state recovery
 - **`nextnfs`** (`.`) — CLI binary (clap subcommands), REST API (axum), Web UI
 - **`nextnfstest`** (`nfstest/`) — NFS v3/v4.0/4.1/4.2 protocol test suite

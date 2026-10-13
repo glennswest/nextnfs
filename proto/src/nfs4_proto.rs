@@ -1,5 +1,4 @@
 extern crate serde_bytes;
-extern crate serde_xdr;
 use super::utils::write_argarray;
 
 use num_derive::{FromPrimitive, ToPrimitive};
@@ -162,7 +161,7 @@ type Pathname4 = Vec<Component4>;
 
 /// Custom serde module for NFS4 utf8string fields.
 /// RFC 7531 defines `typedef opaque utf8string<>` — UTF-8 strings should be
-/// serialized as XDR opaque bytes, not XDR strings. serde_xdr v0.6 rejects
+/// serialized as XDR opaque bytes, not XDR strings. serde_xdr v0.6 (since replaced by `crate::xdr`, #111) rejected
 /// non-ASCII characters in XDR strings, causing serialization failures for
 /// filenames like `filé_ñame_日本語`. This module serializes via
 /// `serialize_bytes()` which uses the identical wire format but skips the
@@ -493,7 +492,7 @@ pub struct CbClient4 {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Stateid4 {
     pub seqid: u32,
-    #[serde(with = "serde_xdr::opaque_data::fixed_length")]
+    #[serde(with = "crate::xdr::opaque_data::fixed_length")]
     pub other: [u8; NFS4_OTHER_SIZE],
 }
 
@@ -502,7 +501,7 @@ pub struct Stateid4 {
  */
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct NfsClientId4 {
-    #[serde(with = "serde_xdr::opaque_data::fixed_length")]
+    #[serde(with = "crate::xdr::opaque_data::fixed_length")]
     pub verifier: [u8; NFS4_VERIFIER_SIZE],
     #[serde(with = "utf8_opaque")]
     pub id: String,
@@ -576,7 +575,7 @@ pub struct Commit4args {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Commit4resok {
-    #[serde(with = "serde_xdr::opaque_data::fixed_length")]
+    #[serde(with = "crate::xdr::opaque_data::fixed_length")]
     pub writeverf: [u8; 8],
 }
 
@@ -968,7 +967,7 @@ pub enum CreateHow4 {
     // GUARDED4
     GUARDED4(Fattr4) = 1,
     // EXCLUSIVE4
-    #[serde(with = "serde_xdr::opaque_data::fixed_length")]
+    #[serde(with = "crate::xdr::opaque_data::fixed_length")]
     EXCLUSIVE4([u8; 8]) = 2,
 }
 
@@ -1258,7 +1257,7 @@ pub enum Read4res {
 pub struct Readdir4args {
     /* CURRENT_FH: directory */
     pub cookie: NfsCookie4,
-    #[serde(with = "serde_xdr::opaque_data::fixed_length")]
+    #[serde(with = "crate::xdr::opaque_data::fixed_length")]
     pub cookieverf: [u8; 8],
     pub dircount: Count4,
     pub maxcount: Count4,
@@ -1283,7 +1282,7 @@ pub struct DirList4 {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ReadDir4resok {
-    #[serde(with = "serde_xdr::opaque_data::fixed_length")]
+    #[serde(with = "crate::xdr::opaque_data::fixed_length")]
     pub cookieverf: [u8; 8],
     pub reply: DirList4,
 }
@@ -1445,7 +1444,7 @@ pub struct SetClientId4args {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SetClientId4resok {
     pub clientid: Clientid4,
-    #[serde(with = "serde_xdr::opaque_data::fixed_length")]
+    #[serde(with = "crate::xdr::opaque_data::fixed_length")]
     pub setclientid_confirm: [u8; 8],
 }
 
@@ -1459,7 +1458,7 @@ pub enum SetClientId4res {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SetClientIdConfirm4args {
     pub clientid: Clientid4,
-    #[serde(with = "serde_xdr::opaque_data::fixed_length")]
+    #[serde(with = "crate::xdr::opaque_data::fixed_length")]
     pub setclientid_confirm: [u8; 8],
 }
 
@@ -1501,7 +1500,7 @@ pub struct Write4args {
 pub struct Write4resok {
     pub count: Count4,
     pub committed: StableHow4,
-    #[serde(with = "serde_xdr::opaque_data::fixed_length")]
+    #[serde(with = "crate::xdr::opaque_data::fixed_length")]
     pub writeverf: [u8; 8],
 }
 
@@ -1528,7 +1527,7 @@ pub struct ReleaseLockowner4res {
 /// Client owner for EXCHANGE_ID.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ClientOwner4 {
-    #[serde(with = "serde_xdr::opaque_data::fixed_length")]
+    #[serde(with = "crate::xdr::opaque_data::fixed_length")]
     pub co_verifier: [u8; NFS4_VERIFIER_SIZE],
     #[serde(with = "serde_bytes")]
     pub co_ownerid: Vec<u8>,
@@ -1622,7 +1621,7 @@ pub enum ChannelDirFromServer4 {
 /* BIND_CONN_TO_SESSION (op 41) */
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct BindConnToSession4args {
-    #[serde(with = "serde_xdr::opaque_data::fixed_length")]
+    #[serde(with = "crate::xdr::opaque_data::fixed_length")]
     pub bctsa_sessid: [u8; 16],
     pub bctsa_dir: ChannelDirFromClient4,
     pub bctsa_use_conn_in_rdma_mode: bool,
@@ -1630,7 +1629,7 @@ pub struct BindConnToSession4args {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct BindConnToSession4resok {
-    #[serde(with = "serde_xdr::opaque_data::fixed_length")]
+    #[serde(with = "crate::xdr::opaque_data::fixed_length")]
     pub bctsr_sessid: [u8; 16],
     pub bctsr_dir: ChannelDirFromServer4,
     pub bctsr_use_conn_in_rdma_mode: bool,
@@ -1681,7 +1680,7 @@ pub struct CreateSession4args {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CreateSession4resok {
-    #[serde(with = "serde_xdr::opaque_data::fixed_length")]
+    #[serde(with = "crate::xdr::opaque_data::fixed_length")]
     pub csr_sessionid: [u8; 16],
     pub csr_sequenceid: u32,
     pub csr_flags: u32,
@@ -1697,7 +1696,7 @@ pub enum CreateSession4res {
 /* DESTROY_SESSION (op 44) */
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct DestroySession4args {
-    #[serde(with = "serde_xdr::opaque_data::fixed_length")]
+    #[serde(with = "crate::xdr::opaque_data::fixed_length")]
     pub dsa_sessionid: [u8; 16],
 }
 
@@ -1720,7 +1719,7 @@ pub struct FreeStateid4res {
 /* SEQUENCE (op 53) */
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Sequence4args {
-    #[serde(with = "serde_xdr::opaque_data::fixed_length")]
+    #[serde(with = "crate::xdr::opaque_data::fixed_length")]
     pub sa_sessionid: [u8; 16],
     pub sa_sequenceid: u32,
     pub sa_slotid: u32,
@@ -1730,7 +1729,7 @@ pub struct Sequence4args {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Sequence4resok {
-    #[serde(with = "serde_xdr::opaque_data::fixed_length")]
+    #[serde(with = "crate::xdr::opaque_data::fixed_length")]
     pub sr_sessionid: [u8; 16],
     pub sr_sequenceid: u32,
     pub sr_slotid: u32,
@@ -1810,7 +1809,7 @@ pub type DeviceId4 = [u8; 16];
 /* GETDEVICEINFO (op 47) */
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct GetDeviceInfo4args {
-    #[serde(with = "serde_xdr::opaque_data::fixed_length")]
+    #[serde(with = "crate::xdr::opaque_data::fixed_length")]
     pub gdia_device_id: DeviceId4,
     pub gdia_layout_type: LayoutType4,
     pub gdia_maxcount: u32,
@@ -1833,7 +1832,7 @@ pub struct GetDeviceList4args {
     pub gdla_layout_type: LayoutType4,
     pub gdla_maxdevices: u32,
     pub gdla_cookie: u64,
-    #[serde(with = "serde_xdr::opaque_data::fixed_length")]
+    #[serde(with = "crate::xdr::opaque_data::fixed_length")]
     pub gdla_cookieverf: [u8; 8],
 }
 
@@ -1846,7 +1845,7 @@ pub enum GetDeviceList4res {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct GetDeviceList4resok {
     pub gdlr_cookie: u64,
-    #[serde(with = "serde_xdr::opaque_data::fixed_length")]
+    #[serde(with = "crate::xdr::opaque_data::fixed_length")]
     pub gdlr_cookieverf: [u8; 8],
     pub gdlr_eof: bool,
 }
@@ -1952,7 +1951,7 @@ pub struct WriteResponse4 {
     pub wr_callback_id: Vec<Stateid4>,
     pub wr_count: u64,
     pub wr_committed: StableHow4,
-    #[serde(with = "serde_xdr::opaque_data::fixed_length")]
+    #[serde(with = "crate::xdr::opaque_data::fixed_length")]
     pub wr_writeverf: [u8; 8],
 }
 
@@ -2371,7 +2370,7 @@ pub struct CbCompound4res {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_xdr::{from_bytes, to_bytes};
+    use crate::xdr::{from_bytes, to_bytes};
 
     #[test]
     fn test_stateid4_roundtrip() {
@@ -2615,7 +2614,7 @@ mod tests {
         }
     }
 
-    /// Verify CREATE NF4LNK compound round-trip through serde_xdr.
+    /// Verify CREATE NF4LNK compound round-trip through the XDR codec.
     #[test]
     fn test_compound_create_symlink_roundtrip() {
         let compound = Compound4args {
@@ -2657,7 +2656,7 @@ mod tests {
         }
     }
 
-    /// Verify SETCLIENTID round-trip through serde_xdr.
+    /// Verify SETCLIENTID round-trip through the XDR codec.
     #[test]
     fn test_setclientid_args_roundtrip() {
         let args = SetClientId4args {

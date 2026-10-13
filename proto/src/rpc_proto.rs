@@ -1,7 +1,6 @@
 extern crate serde;
 extern crate serde_bytes;
 extern crate serde_derive;
-extern crate serde_xdr;
 
 use serde_derive::{Deserialize, Serialize};
 
@@ -189,8 +188,8 @@ mod tests {
             gid: 1000,
             gids: vec![1000, 100, 10],
         };
-        let bytes = serde_xdr::to_bytes(&auth).unwrap();
-        let decoded: AuthUnix = serde_xdr::from_bytes(&bytes).unwrap();
+        let bytes = crate::xdr::to_bytes(&auth).unwrap();
+        let decoded: AuthUnix = crate::xdr::from_bytes(&bytes).unwrap();
         assert_eq!(decoded.stamp, 12345);
         assert_eq!(decoded.machinename, "testhost");
         assert_eq!(decoded.uid, 1000);
@@ -329,8 +328,8 @@ mod tests {
             service: 3,  // rpc_gss_svc_privacy
             handle: vec![1, 2, 3, 4, 5, 6, 7, 8],
         });
-        let bytes = serde_xdr::to_bytes(&auth).unwrap();
-        let decoded: OpaqueAuth = serde_xdr::from_bytes(&bytes).unwrap();
+        let bytes = crate::xdr::to_bytes(&auth).unwrap();
+        let decoded: OpaqueAuth = crate::xdr::from_bytes(&bytes).unwrap();
         match decoded {
             OpaqueAuth::AuthGss(cred) => {
                 assert_eq!(cred.gss_proc, 0);
