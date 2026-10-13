@@ -55,27 +55,67 @@ fn wrongsec_exempt(opnum: u32) -> bool {
     moves_filehandle(opnum) || matches!(opnum, OP_SECINFO | OP_SECINFO_NO_NAME)
 }
 
+/// The operation number (RFC 7530 / RFC 5661) of `arg`.
 fn op_code(arg: &NfsArgOp) -> u32 {
     match arg {
+        NfsArgOp::OpUndef0 => 0,
+        NfsArgOp::OpUndef1 => 1,
+        NfsArgOp::OpUndef2 => 2,
+        NfsArgOp::OpAccess(_) => 3,
+        NfsArgOp::Opclose(_) => 4,
         NfsArgOp::Opcommit(_) => 5,
         NfsArgOp::Opcreate(_) => 6,
+        NfsArgOp::Opdelegpurge(_) => 7,
+        NfsArgOp::Opdelegreturn(_) => 8,
+        NfsArgOp::Opgetattr(_) => 9,
+        NfsArgOp::Opgetfh(_) => 10,
         NfsArgOp::Oplink(_) => 11,
+        NfsArgOp::Oplock(_) => 12,
+        NfsArgOp::Oplockt(_) => 13,
+        NfsArgOp::Oplocku(_) => 14,
         NfsArgOp::Oplookup(_) => 15,
         NfsArgOp::Oplookupp(_) => 16,
+        NfsArgOp::Opnverify(_) => 17,
         NfsArgOp::Opopen(_) => 18,
+        NfsArgOp::Opopenattr(_) => 19,
+        NfsArgOp::OpopenConfirm(_) => 20,
+        NfsArgOp::OpopenDowngrade(_) => 21,
         NfsArgOp::Opputfh(_) => 22,
         NfsArgOp::Opputpubfh(_) => 23,
         NfsArgOp::Opputrootfh(_) => 24,
         NfsArgOp::Opread(_) => 25,
         NfsArgOp::Opreaddir(_) => 26,
+        NfsArgOp::Opreadlink(_) => 27,
         NfsArgOp::Opremove(_) => 28,
         NfsArgOp::Oprename(_) => 29,
+        NfsArgOp::Oprenew(_) => 30,
         NfsArgOp::Oprestorefh(_) => 31,
+        NfsArgOp::Opsavefh(_) => 32,
+        NfsArgOp::OpSecinfo(_) => 33,
         NfsArgOp::Opsetattr(_) => 34,
+        NfsArgOp::Opsetclientid(_) => 35,
+        NfsArgOp::OpsetclientidConfirm(_) => 36,
+        NfsArgOp::Opverify(_) => 37,
         NfsArgOp::Opwrite(_) => 38,
+        NfsArgOp::OpreleaseLockOwner(_) => 39,
+        NfsArgOp::OpbindConnToSession(_) => 41,
+        NfsArgOp::OpexchangeId(_) => 42,
+        NfsArgOp::OpcreateSession(_) => 43,
+        NfsArgOp::OpdestroySession(_) => 44,
+        NfsArgOp::OpfreeStateid(_) => 45,
+        NfsArgOp::OpgetdeviceInfo(_) => 47,
+        NfsArgOp::OpgetdeviceList(_) => 48,
+        NfsArgOp::OplayoutCommit(_) => 49,
+        NfsArgOp::OplayoutGet(_) => 50,
+        NfsArgOp::OplayoutReturn(_) => 51,
+        NfsArgOp::OpsecinfoNoName(_) => 52,
+        NfsArgOp::Opsequence(_) => 53,
+        NfsArgOp::OptestStateid(_) => 55,
+        NfsArgOp::OpdestroyClientid(_) => 57,
+        NfsArgOp::OpreclaimComplete(_) => 58,
         NfsArgOp::Opallocate(_) => 59,
         NfsArgOp::Opcopy(_) => 60,
-        _ => 0,
+        NfsArgOp::Opseek(_) => 69,
     }
 }
 
@@ -450,6 +490,8 @@ impl NfsProtoImpl for NFS40Server {
         mut request: NfsRequest<'a>,
     ) -> (NfsRequest<'a>, ReplyBody) {
         let mut last_status = NfsStat4::Nfs4Ok;
+        // Every COMPOUND reply echoes the request's tag (RFC 7530 §16.2.3).
+        let reply_tag = msg.args.as_ref().map(|a| a.tag.clone()).unwrap_or_default();
         let res = match msg.args {
             Some(args) => {
                 // Reject NFSv4.2+ (only v4.0 and v4.1 supported)
@@ -508,7 +550,7 @@ impl NfsProtoImpl for NFS40Server {
                                 verf: OpaqueAuth::AuthNull(Vec::<u8>::new()),
                                 reply_data: AcceptBody::Success(Compound4res {
                                     status: NfsStat4::Nfs4errDelay,
-                                    tag: "".to_string(),
+                                    tag: reply_tag.clone(),
                                     resarray,
                                 }),
                             }),
@@ -544,7 +586,7 @@ impl NfsProtoImpl for NFS40Server {
                                     verf: OpaqueAuth::AuthNull(Vec::<u8>::new()),
                                     reply_data: AcceptBody::Success(Compound4res {
                                         status: NfsStat4::Nfs4errGrace,
-                                        tag: "".to_string(),
+                                        tag: reply_tag.clone(),
                                         resarray,
                                     }),
                                 }),
@@ -575,7 +617,7 @@ impl NfsProtoImpl for NFS40Server {
                                 verf: OpaqueAuth::AuthNull(Vec::<u8>::new()),
                                 reply_data: AcceptBody::Success(Compound4res {
                                     status: NfsStat4::Nfs4errWrongsec,
-                                    tag: "".to_string(),
+                                    tag: reply_tag.clone(),
                                     resarray,
                                 }),
                             }),
@@ -602,7 +644,7 @@ impl NfsProtoImpl for NFS40Server {
                                 verf: OpaqueAuth::AuthNull(Vec::<u8>::new()),
                                 reply_data: AcceptBody::Success(Compound4res {
                                     status: NfsStat4::Nfs4errRofs,
-                                    tag: "".to_string(),
+                                    tag: reply_tag.clone(),
                                     resarray,
                                 }),
                             }),
@@ -632,7 +674,7 @@ impl NfsProtoImpl for NFS40Server {
                                 verf: OpaqueAuth::AuthNull(Vec::<u8>::new()),
                                 reply_data: AcceptBody::Success(Compound4res {
                                     status,
-                                    tag: "".to_string(),
+                                    tag: reply_tag.clone(),
                                     resarray,
                                 }),
                             }),
@@ -815,7 +857,7 @@ impl NfsProtoImpl for NFS40Server {
                                     verf: OpaqueAuth::AuthNull(Vec::<u8>::new()),
                                     reply_data: AcceptBody::Success(Compound4res {
                                         status: last_status,
-                                        tag: "".to_string(),
+                                        tag: reply_tag.clone(),
                                         resarray,
                                     }),
                                 }),
@@ -835,7 +877,7 @@ impl NfsProtoImpl for NFS40Server {
                 verf: OpaqueAuth::AuthNull(Vec::<u8>::new()),
                 reply_data: AcceptBody::Success(Compound4res {
                     status: last_status,
-                    tag: "".to_string(),
+                    tag: reply_tag.clone(),
                     resarray: res,
                 }),
             }),
