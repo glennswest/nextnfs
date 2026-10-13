@@ -76,6 +76,8 @@ for e in $enctypes; do
     p="nfs/server$n.nextnfs.test"
     kadmin.local -r "$realm" -q "addprinc -randkey -e $e:normal $p" >/dev/null
     kadmin.local -r "$realm" -q "ktadd -k $work/nfs.keytab -e $e:normal $p" >/dev/null
+    # Session key (hence the context's per-message key) of the same type.
+    kadmin.local -r "$realm" -q "set_string $p session_enctypes $e" >/dev/null
     principals+=("$p@$realm:$e")
 done
 krb5kdc -n -r "$realm" &
@@ -97,6 +99,11 @@ cat >"$work/nextnfs.toml" <<EOF
 listen = "127.0.0.1:$nfs_port"
 api_listen = "127.0.0.1:$api_port"
 krb5_keytab = "$work/nfs.keytab"
+
+[[server.krb5_map]]
+principal = "alice@$realm"
+uid = $(id -u)
+gid = $(id -g)
 
 [[exports]]
 name = "plain"
@@ -122,12 +129,12 @@ for entry in "${principals[@]}"; do
     p=${entry%%:*}
     e=${entry#*:}
     echo "== $e ($p)"
-    if ! "$client" "127.0.0.1:$nfs_port" "$p" secure; then
+    if ! timeout 60 "$client" "127.0.0.1:$nfs_port" "$p" secure; then
         status=1
     fi
 done
 if [ $status -ne 0 ]; then
-    echo "---- nextnfs log"; tail -50 "$work/nextnfs.log"
+    echo "---- nextnfs log"; grep -v "nfs_audit client=" "$work/nextnfs.log" | tail -30
     echo "---- kdc log"; tail -20 "$work/kdc.log"
     exit 1
 fi
