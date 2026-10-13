@@ -118,6 +118,7 @@ impl<'de> Deserialize<'de> for CallBody {
                         cred,
                         verf,
                         args: None,
+                        gss: None,
                     })
                 } else {
                     // Procedure 1: COMPOUND - Compound Operations
@@ -132,6 +133,7 @@ impl<'de> Deserialize<'de> for CallBody {
                         cred,
                         verf,
                         args: Some(args),
+                        gss: None,
                     })
                 }
             }
@@ -161,19 +163,8 @@ impl Serialize for OpaqueAuth {
             }
             OpaqueAuth::AuthShort => (2u32, Vec::new()),
             OpaqueAuth::AuthDes => (3u32, Vec::new()),
-            OpaqueAuth::AuthGss(gss) => {
-                // RPCSEC_GSS credential body: gss_proc(4) + seq_num(4) + service(4) + handle(opaque)
-                let mut bytes = Vec::new();
-                bytes.extend_from_slice(&gss.gss_proc.to_be_bytes());
-                bytes.extend_from_slice(&gss.seq_num.to_be_bytes());
-                bytes.extend_from_slice(&gss.service.to_be_bytes());
-                // handle as XDR opaque: length + data + padding
-                bytes.extend_from_slice(&(gss.handle.len() as u32).to_be_bytes());
-                bytes.extend_from_slice(&gss.handle);
-                let pad = (4 - (gss.handle.len() % 4)) % 4;
-                bytes.extend_from_slice(&vec![0u8; pad]);
-                (6u32, bytes)
-            }
+            OpaqueAuth::AuthGss(gss) => (6u32, gss.encode()),
+            OpaqueAuth::GssVerf(token) => (6u32, token.clone()),
         };
 
         let mut seq = serializer.serialize_struct("OpaqueAuth", 2)?;
@@ -243,55 +234,13 @@ impl<'de> Deserialize<'de> for OpaqueAuth {
                         Ok(OpaqueAuth::AuthUnix(auth))
                     }
                     6 => {
-                        // RPCSEC_GSS — parse credential body
-                        let body_bytes = body.into_vec();
-                        if body_bytes.len() >= 12 {
-                            let mut cursor = std::io::Cursor::new(&body_bytes);
-                            use std::io::Read;
-                            let gss_proc = {
-                                let mut buf = [0u8; 4];
-                                cursor.read_exact(&mut buf).map_err(|e| {
-                                    de::Error::custom(format!("GSS read error: {}", e))
-                                })?;
-                                u32::from_be_bytes(buf)
-                            };
-                            let seq_num = {
-                                let mut buf = [0u8; 4];
-                                cursor.read_exact(&mut buf).map_err(|e| {
-                                    de::Error::custom(format!("GSS read error: {}", e))
-                                })?;
-                                u32::from_be_bytes(buf)
-                            };
-                            let service = {
-                                let mut buf = [0u8; 4];
-                                cursor.read_exact(&mut buf).map_err(|e| {
-                                    de::Error::custom(format!("GSS read error: {}", e))
-                                })?;
-                                u32::from_be_bytes(buf)
-                            };
-                            // Read handle as XDR opaque
-                            let handle_len = {
-                                let mut buf = [0u8; 4];
-                                if cursor.read_exact(&mut buf).is_ok() {
-                                    u32::from_be_bytes(buf) as usize
-                                } else {
-                                    0
-                                }
-                            };
-                            let mut handle = vec![0u8; handle_len];
-                            let _ = cursor.read_exact(&mut handle);
-                            Ok(OpaqueAuth::AuthGss(
-                                crate::rpc_proto::RpcSecGssCred {
-                                    gss_proc,
-                                    seq_num,
-                                    service,
-                                    handle,
-                                },
-                            ))
-                        } else {
-                            debug!("RPCSEC_GSS body too short ({}), treating as null", body_bytes.len());
-                            Ok(OpaqueAuth::AuthNull(body_bytes))
-                        }
+                        // RPCSEC_GSS: a credential if it parses as one,
+                        // otherwise a verifier (MIC token).
+                        let body = body.into_vec();
+                        Ok(match crate::rpc_proto::RpcSecGssCred::parse(&body) {
+                            Some(cred) => OpaqueAuth::AuthGss(cred),
+                            None => OpaqueAuth::GssVerf(body),
+                        })
                     }
                     _ => {
                         // Unsupported auth flavor — store as raw bytes in AuthNull

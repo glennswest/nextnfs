@@ -804,6 +804,7 @@ mod tests {
             proc: 1,
             cred,
             verf: OpaqueAuth::AuthNull(vec![]),
+            gss: None,
             args: Some(Compound4args {
                 tag: "test".to_string(),
                 minor_version: 0,
@@ -987,6 +988,7 @@ mod tests {
             proc: 0,
             cred: OpaqueAuth::AuthNull(vec![]),
             verf: OpaqueAuth::AuthNull(vec![]),
+            gss: None,
             args: None,
         };
         let (_request, reply) = server.null(call, request).await;
@@ -1064,6 +1066,7 @@ mod tests {
             proc: 1,
             cred: OpaqueAuth::AuthNull(vec![]),
             verf: OpaqueAuth::AuthNull(vec![]),
+            gss: None,
             args: Some(Compound4args {
                 tag: "test".to_string(),
                 minor_version: 2, // v4.2 — should be rejected (only 0 and 1 supported)
@@ -1094,6 +1097,7 @@ mod tests {
             proc: 1,
             cred: OpaqueAuth::AuthNull(vec![]),
             verf: OpaqueAuth::AuthNull(vec![]),
+            gss: None,
             args: Some(Compound4args {
                 tag: "test".to_string(),
                 minor_version: 1, // v4.1 — should be accepted

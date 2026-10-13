@@ -162,6 +162,7 @@ mod tests {
                 proc,
                 cred: OpaqueAuth::AuthNull(vec![]),
                 verf: OpaqueAuth::AuthNull(vec![]),
+                gss: None,
                 args: Some(Compound4args {
                     tag: "test".to_string(),
                     minor_version: 0,
@@ -217,6 +218,7 @@ mod tests {
             let mut msg = make_rpc_call(proc);
             if let MsgType::Call(ref mut call) = msg.body {
                 call.cred = OpaqueAuth::AuthGss(RpcSecGssCred {
+                    version: 1,
                     gss_proc,
                     seq_num: 0,
                     service: 1,
@@ -284,6 +286,7 @@ mod tests {
                 proc: 1,
                 cred: OpaqueAuth::AuthNull(vec![]),
                 verf: OpaqueAuth::AuthNull(vec![]),
+                gss: None,
                 args: None,
             }),
         };
@@ -311,6 +314,7 @@ mod tests {
                 proc: 1,
                 cred: OpaqueAuth::AuthNull(vec![]),
                 verf: OpaqueAuth::AuthNull(vec![]),
+                gss: None,
                 args: None,
             }),
         };

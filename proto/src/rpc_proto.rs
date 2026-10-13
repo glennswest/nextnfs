@@ -19,9 +19,22 @@ pub struct AuthUnix {
     pub gids: Vec<u32>,
 }
 
-/// RPCSEC_GSS credential (RFC 2203 §5.2.2).
+/// RPCSEC_GSS procedures (RFC 2203 §5).
+pub const RPCSEC_GSS_DATA: u32 = 0;
+pub const RPCSEC_GSS_INIT: u32 = 1;
+pub const RPCSEC_GSS_CONTINUE_INIT: u32 = 2;
+pub const RPCSEC_GSS_DESTROY: u32 = 3;
+/// RPCSEC_GSS services.
+pub const RPC_GSS_SVC_NONE: u32 = 1;
+pub const RPC_GSS_SVC_INTEGRITY: u32 = 2;
+pub const RPC_GSS_SVC_PRIVACY: u32 = 3;
+
+/// RPCSEC_GSS credential (RFC 2203 §5): `rpc_gss_cred_t`, a union on
+/// `version` (only 1 is defined) of `rpc_gss_cred_vers_1_t`.
 #[derive(Clone, Debug)]
 pub struct RpcSecGssCred {
+    /// RPCSEC_GSS version, 1.
+    pub version: u32,
     /// GSS procedure: RPCSEC_GSS_DATA(0), INIT(1), CONTINUE_INIT(2), DESTROY(3).
     pub gss_proc: u32,
     /// Sequence number for data integrity.
@@ -30,6 +43,37 @@ pub struct RpcSecGssCred {
     pub service: u32,
     /// Context handle (opaque, server-assigned).
     pub handle: Vec<u8>,
+}
+
+impl RpcSecGssCred {
+    /// Parses the credential body; `None` if it is malformed.
+    pub fn parse(body: &[u8]) -> Option<Self> {
+        let word = |i: usize| body.get(i..i + 4).map(|b| u32::from_be_bytes(b.try_into().expect("4")));
+        let (version, gss_proc, seq_num, service, len) = (word(0)?, word(4)?, word(8)?, word(12)?, word(16)? as usize);
+        let handle = body.get(20..20usize.checked_add(len)?)?.to_vec();
+        Some(RpcSecGssCred { version, gss_proc, seq_num, service, handle })
+    }
+
+    /// The credential body as sent on the wire.
+    pub fn encode(&self) -> Vec<u8> {
+        let mut b = Vec::with_capacity(20 + self.handle.len() + 3);
+        for w in [self.version, self.gss_proc, self.seq_num, self.service, self.handle.len() as u32] {
+            b.extend_from_slice(&w.to_be_bytes());
+        }
+        b.extend_from_slice(&self.handle);
+        b.resize(b.len() + (4 - self.handle.len() % 4) % 4, 0);
+        b
+    }
+}
+
+/// The raw parts of an RPCSEC_GSS call the server needs before it can
+/// decode the arguments: the header the verifier signs (RFC 2203 §5.3.1:
+/// from the XID through the credential) and the argument bytes, which
+/// are wrapped for the integrity and privacy services.
+#[derive(Clone, Debug, Default)]
+pub struct GssCallData {
+    pub header: Vec<u8>,
+    pub args: Vec<u8>,
 }
 
 /// RPC authentication credentials (RFC 5531 §8.2).
@@ -43,6 +87,8 @@ pub enum OpaqueAuth {
     AuthDes = 3,
     /// RPCSEC_GSS (RFC 2203) — flavor 6.
     AuthGss(RpcSecGssCred) = 6,
+    /// An RPCSEC_GSS verifier (flavor 6 on the wire): the GSS MIC token.
+    GssVerf(Vec<u8>) = 0x106,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -54,6 +100,10 @@ pub struct CallBody {
     pub cred: OpaqueAuth,
     pub verf: OpaqueAuth,
     pub args: Option<Compound4args>,
+    /// Set for RPCSEC_GSS calls; `args` is then decoded by the server
+    /// after the credential and verifier are checked.
+    #[serde(skip)]
+    pub gss: Option<GssCallData>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -93,7 +143,7 @@ pub enum ReplyBody {
     MsgDenied(RejectedReply) = 1,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[repr(u32)]
 pub enum AcceptBody {
     Success(Compound4res) = 0,
@@ -103,6 +153,53 @@ pub enum AcceptBody {
     ProcUnavail = 3,
     /// procedure can't decode params
     GarbageArgs = 4,
+    /// SUCCESS with results already encoded (RPCSEC_GSS INIT results, or
+    /// results wrapped for the integrity/privacy services). The bytes
+    /// are XDR, so a multiple of 4 long.
+    #[serde(skip_deserializing)]
+    SuccessRaw(Vec<u8>) = 0x100,
+}
+
+/// `accept_stat` and its arm. Hand-written so `SuccessRaw` goes out as
+/// SUCCESS followed by its bytes as they are.
+impl serde::Serialize for AcceptBody {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::{Error, SerializeTuple};
+
+        struct Words<'a>(&'a [u8]);
+        impl serde::Serialize for Words<'_> {
+            fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+                if self.0.len() % 4 != 0 {
+                    return Err(S::Error::custom("raw RPC results are not 4-byte aligned"));
+                }
+                let mut t = serializer.serialize_tuple(self.0.len() / 4)?;
+                for w in self.0.chunks(4) {
+                    t.serialize_element(&u32::from_be_bytes(w.try_into().expect("4")))?;
+                }
+                t.end()
+            }
+        }
+
+        let mut t = serializer.serialize_tuple(2)?;
+        match self {
+            AcceptBody::Success(res) => {
+                t.serialize_element(&0u32)?;
+                t.serialize_element(res)?;
+            }
+            AcceptBody::SuccessRaw(bytes) => {
+                t.serialize_element(&0u32)?;
+                t.serialize_element(&Words(bytes))?;
+            }
+            AcceptBody::ProgUnavail => t.serialize_element(&1u32)?,
+            AcceptBody::ProgMismatch(m) => {
+                t.serialize_element(&2u32)?;
+                t.serialize_element(m)?;
+            }
+            AcceptBody::ProcUnavail => t.serialize_element(&3u32)?,
+            AcceptBody::GarbageArgs => t.serialize_element(&4u32)?,
+        }
+        t.end()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -288,6 +385,7 @@ mod tests {
             cred: OpaqueAuth::AuthNull(vec![]),
             verf: OpaqueAuth::AuthNull(vec![]),
             args: None,
+            gss: None,
         };
         assert_eq!(cb.rpcvers, 2);
         assert_eq!(cb.prog, 100003);
@@ -298,6 +396,7 @@ mod tests {
     #[test]
     fn test_rpcsec_gss_cred_fields() {
         let cred = RpcSecGssCred {
+            version: 1,
             gss_proc: 0,  // RPCSEC_GSS_DATA
             seq_num: 42,
             service: 1,   // rpc_gss_svc_none
@@ -312,6 +411,7 @@ mod tests {
     #[test]
     fn test_auth_gss_variant() {
         let auth = OpaqueAuth::AuthGss(RpcSecGssCred {
+            version: 1,
             gss_proc: 1,  // RPCSEC_GSS_INIT
             seq_num: 0,
             service: 2,   // rpc_gss_svc_integrity
@@ -323,6 +423,7 @@ mod tests {
     #[test]
     fn test_auth_gss_roundtrip() {
         let auth = OpaqueAuth::AuthGss(RpcSecGssCred {
+            version: 1,
             gss_proc: 0,
             seq_num: 99,
             service: 3,  // rpc_gss_svc_privacy

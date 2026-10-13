@@ -156,6 +156,11 @@ pub fn from_bytes(buffer: Vec<u8>) -> Result<RpcCallMsg, anyhow::Error> {
             c.read_exact(&mut buf)?;
             u32::from_be_bytes(buf) as usize
         };
+        // A forged length must not allocate more than the record holds.
+        let left = c.get_ref().len().saturating_sub(c.position() as usize);
+        if len > left {
+            anyhow::bail!("opaque length {} exceeds the {} bytes left in the record", len, left);
+        }
         let mut data = vec![0u8; len];
         c.read_exact(&mut data)?;
         // XDR pads to 4-byte boundary
@@ -167,8 +172,9 @@ pub fn from_bytes(buffer: Vec<u8>) -> Result<RpcCallMsg, anyhow::Error> {
         Ok(data)
     };
 
-    // Helper: parse opaque_auth (RFC 5531 §8.2)
-    let read_opaque_auth = |c: &mut Cursor<&Vec<u8>>| -> anyhow::Result<OpaqueAuth> {
+    // Helper: parse opaque_auth (RFC 5531 §8.2). `is_cred` tells a
+    // RPCSEC_GSS credential (parsed) from its verifier (a MIC token).
+    let read_opaque_auth = |c: &mut Cursor<&Vec<u8>>, is_cred: bool| -> anyhow::Result<OpaqueAuth> {
         let flavor = {
             let mut buf = [0u8; 4];
             c.read_exact(&mut buf)?;
@@ -184,37 +190,10 @@ pub fn from_bytes(buffer: Vec<u8>) -> Result<RpcCallMsg, anyhow::Error> {
                 let auth: AuthUnix = from_reader(&mut body_cursor)?;
                 Ok(OpaqueAuth::AuthUnix(auth))
             }
-            6 => {
-                // RPCSEC_GSS (RFC 2203 §5.2.2): parse credential body
-                if body.len() >= 12 {
-                    let mut pos = 0usize;
-                    let gss_proc = u32::from_be_bytes(body[pos..pos + 4].try_into().unwrap());
-                    pos += 4;
-                    let seq_num = u32::from_be_bytes(body[pos..pos + 4].try_into().unwrap());
-                    pos += 4;
-                    let service = u32::from_be_bytes(body[pos..pos + 4].try_into().unwrap());
-                    pos += 4;
-                    let handle = if pos + 4 <= body.len() {
-                        let handle_len = u32::from_be_bytes(body[pos..pos + 4].try_into().unwrap()) as usize;
-                        pos += 4;
-                        if pos + handle_len <= body.len() {
-                            body[pos..pos + handle_len].to_vec()
-                        } else {
-                            Vec::new()
-                        }
-                    } else {
-                        Vec::new()
-                    };
-                    Ok(OpaqueAuth::AuthGss(rpc_proto::RpcSecGssCred {
-                        gss_proc,
-                        seq_num,
-                        service,
-                        handle,
-                    }))
-                } else {
-                    Ok(OpaqueAuth::AuthNull(Vec::new()))
-                }
-            }
+            6 if is_cred => rpc_proto::RpcSecGssCred::parse(&body)
+                .map(OpaqueAuth::AuthGss)
+                .ok_or_else(|| anyhow::anyhow!("malformed RPCSEC_GSS credential")),
+            6 => Ok(OpaqueAuth::GssVerf(body)),
             _ => Ok(OpaqueAuth::AuthNull(body)), // unsupported → treat as opaque
         }
     };
@@ -230,8 +209,31 @@ pub fn from_bytes(buffer: Vec<u8>) -> Result<RpcCallMsg, anyhow::Error> {
     let prog = read_u32(&mut cursor)?;
     let vers = read_u32(&mut cursor)?;
     let proc_num = read_u32(&mut cursor)?;
-    let cred = read_opaque_auth(&mut cursor)?;
-    let verf = read_opaque_auth(&mut cursor)?;
+    let cred = read_opaque_auth(&mut cursor, true)?;
+    let header_end = cursor.position() as usize;
+    let verf = read_opaque_auth(&mut cursor, false)?;
+
+    // RPCSEC_GSS: the server checks the verifier against the header and
+    // unwraps the arguments before decoding them (RFC 2203 §5.3).
+    if matches!(cred, OpaqueAuth::AuthGss(_)) {
+        let args_start = cursor.position() as usize;
+        return Ok(RpcCallMsg {
+            xid,
+            body: MsgType::Call(CallBody {
+                rpcvers,
+                prog,
+                vers,
+                proc: proc_num,
+                cred,
+                verf,
+                args: None,
+                gss: Some(rpc_proto::GssCallData {
+                    header: buffer[..header_end].to_vec(),
+                    args: buffer[args_start..].to_vec(),
+                }),
+            }),
+        });
+    }
 
     // Parse COMPOUND args only for NFS program (100003) non-NULL procedures.
     // Other programs (e.g. nfslocalio 400122) have different arg formats.
@@ -277,8 +279,20 @@ pub fn from_bytes(buffer: Vec<u8>) -> Result<RpcCallMsg, anyhow::Error> {
             cred,
             verf,
             args,
+            gss: None,
         }),
     })
+}
+
+/// Decodes NFSv4 COMPOUND arguments (used for RPCSEC_GSS calls once
+/// their arguments are verified and unwrapped).
+pub fn decode_compound_args(bytes: &[u8]) -> Result<nfs4_proto::Compound4args, xdr::Error> {
+    xdr::from_bytes(bytes)
+}
+
+/// Encodes NFSv4 COMPOUND results (to wrap them for RPCSEC_GSS).
+pub fn encode_compound_res(res: &nfs4_proto::Compound4res) -> Result<Vec<u8>, xdr::Error> {
+    xdr::to_bytes(res)
 }
 
 pub fn to_bytes(message: &RpcReplyMsg) -> Result<Vec<u8>, anyhow::Error> {

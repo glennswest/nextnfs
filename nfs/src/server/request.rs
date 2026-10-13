@@ -495,6 +495,7 @@ mod tests {
         use nextnfs_proto::rpc_proto::RpcSecGssCred;
         let mut request = create_nfs40_server(None).await;
         request.set_auth_cred(OpaqueAuth::AuthGss(RpcSecGssCred {
+            version: 1,
             gss_proc: 0,
             seq_num: 1,
             service: 1,
