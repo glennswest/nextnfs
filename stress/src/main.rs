@@ -173,10 +173,7 @@ async fn phase_readdir(target: &Path, expected: usize) -> PhaseStats {
             }
             stats.ops = n;
             if (n as usize) != expected {
-                let e = std::io::Error::new(
-                    ErrorKind::Other,
-                    format!("readdir count mismatch: got {n}, want {expected}"),
-                );
+                let e = std::io::Error::other(format!("readdir count mismatch: got {n}, want {expected}"));
                 stats.record_err(&e);
             }
         }

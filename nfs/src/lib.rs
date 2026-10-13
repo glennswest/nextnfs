@@ -284,7 +284,7 @@ async fn handle_connection<T>(
                         }
                         server::gss::GssCall::Drop => continue,
                         server::gss::GssCall::Proceed(m, info) => {
-                            msg = m;
+                            msg = *m;
                             gss_reply = Some(info);
                         }
                     }

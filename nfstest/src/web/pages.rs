@@ -58,11 +58,7 @@ pub async fn dashboard(State(state): State<Arc<AppState>>) -> Html<String> {
             run_id = run.run_id,
             completed = run.completed,
             total = run.total_tests,
-            pct = if run.total_tests > 0 {
-                run.completed * 100 / run.total_tests
-            } else {
-                0
-            },
+            pct = (run.completed * 100).checked_div(run.total_tests).unwrap_or(0),
         )
     } else {
         String::new()
@@ -282,18 +278,14 @@ pub async fn results_list(State(state): State<Arc<AppState>>) -> Html<String> {
     }
 
     // Sort newest first
-    runs.sort_by(|a, b| b.started_at.cmp(&a.started_at));
+    runs.sort_by_key(|r| std::cmp::Reverse(r.started_at));
 
     let rows = if runs.is_empty() {
         r#"<tr><td colspan="7" class="empty">No test runs yet. <a href="run">Run your first test</a>.</td></tr>"#.to_string()
     } else {
         runs.iter()
             .map(|r| {
-                let pass_rate = if r.summary.total > 0 {
-                    r.summary.passed * 100 / r.summary.total
-                } else {
-                    0
-                };
+                let pass_rate = (r.summary.passed * 100).checked_div(r.summary.total).unwrap_or(0);
                 let date = r.started_at.format("%Y-%m-%d %H:%M");
                 format!(
                     r#"<tr onclick="location.href='results/{run_id}'" style="cursor:pointer">

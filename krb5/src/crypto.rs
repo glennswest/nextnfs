@@ -523,7 +523,9 @@ mod tests {
         let base128 = hex("3705d96080c17728a0e800eab6e0d23c");
         let base256 = hex("6d404d37faf79f9df0d33568d320669800eb4836472ea8a026d16b7182460c52");
         let pt21 = hex("000102030405060708090a0b0c0d0e0f1011121314");
-        let cases: [(Enctype, &[u8], &[u8], &str, &str); 8] = [
+        // (enctype, base key, plaintext, confounder, ciphertext)
+        type Case<'a> = (Enctype, &'a [u8], &'a [u8], &'a str, &'a str);
+        let cases: [Case; 8] = [
             (Enctype::Aes128CtsHmacSha256_128, &base128, &[], "7e5895eaf2672435bad817f545a37148",
              "ef85fb890bb8472f4dab20394dca781dad877eda39d50c870c0d5a0a8e48c718"),
             (Enctype::Aes128CtsHmacSha256_128, &base128, &pt21[..6], "7bca285e2fd4130fb55b1a5c83bc5b24",

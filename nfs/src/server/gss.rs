@@ -183,7 +183,7 @@ pub enum GssCall {
     Drop,
     /// Run the call (its credential now the mapped identity), then pass
     /// the reply through [`GssServer::wrap_reply`].
-    Proceed(RpcCallMsg, GssReply),
+    Proceed(Box<RpcCallMsg>, GssReply),
 }
 
 /// How to protect the reply of a DATA call.
@@ -465,7 +465,7 @@ impl GssServer {
         };
         let proc = call.proc;
         GssCall::Proceed(
-            RpcCallMsg { xid, body: MsgType::Call(call) },
+            Box::new(RpcCallMsg { xid, body: MsgType::Call(call) }),
             GssReply { ctx, seq: cred.seq_num, service: cred.service, proc, flavor },
         )
     }
