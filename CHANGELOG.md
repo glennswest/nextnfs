@@ -2,7 +2,8 @@
 
 ## [Unreleased]
 
-<!-- New unreleased changes go here -->
+### 2026-11-07
+- **docs:** README architecture lists all six workspace crates (adds `nextnfs-krb5`); CLAUDE.md layout adds the krb5 crate and `tests/krb5-interop`, and the #90 work-plan item is closed (shipped in v0.14.0)
 
 ## [v0.15.0] — 2026-10-14
 

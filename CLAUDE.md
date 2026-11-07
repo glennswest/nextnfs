@@ -19,12 +19,13 @@ package time (`packaging/build-*.sh`, `ci-rpm.sh`); do not hard-code it there.
 | Crate | Dir | What |
 |---|---|---|
 | `nextnfs-proto` | `proto/` | XDR codec, RPC + NFSv4 types |
+| `nextnfs-krb5` | `krb5/` | pure-Rust Kerberos V5 acceptor: AES enctypes, MIT keytab, AP-REQ/AP-REP, RFC 4121 MIC/Wrap |
 | `nextnfs-server` | `nfs/` | server library: `ExportManager`, `FileManager` actors, COMPOUND dispatch, locking, sessions, TLS, state recovery |
 | `nextnfs` | `.` | binary: CLI (`src/main.rs`, `src/cli.rs`), TOML config (`src/config.rs`), REST API (`src/api.rs`), web UI (`src/web.rs`) |
 | `nextnfstest` | `nfstest/` | wire-level NFS protocol test suite |
 | `nextnfs-stress` | `stress/` | POSIX stress harness against a live mount |
 
-Other: `tests/*.sh` (shell integration suites, shipped as the `nextnfs-tests`
+Other: `tests/*.sh` (shell integration suites; `tests/krb5-interop.sh` + `tests/krb5-interop/` drive an unprivileged MIT KDC and libgssapi_krb5 against the server; shipped as the `nextnfs-tests`
 RPM with `packaging/nextnfs-run-tests`), `packaging/` (RPM/DEB/systemd),
 `Containerfile*` + `stormd.toml` (stormd container), `ci/` (pipeline scripts),
 `doc/` (deploy guide), `enhancements/` (design proposals).
@@ -141,7 +142,7 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       #91 and #101 closed; golden-nextnfs-1e46268c0918 (9a97461), release
       request glennswest/stormcos#158. #90 is verified by the same
       build (its code is in 229b1a8).
-- [ ] 2026-10-06 — #90: `max_bytes_per_sec` enforced in the COMPOUND
+- [x] 2026-10-06 — #90 (shipped in v0.14.0, code in 229b1a8, whose build was green): `max_bytes_per_sec` enforced in the COMPOUND
       loop — READ (requested count) and WRITE (data length) charge the
       export's byte bucket, NFS4ERR_DELAY when over; an op bigger than the
       bucket is let through once it is full (bucket goes into debt).
@@ -197,3 +198,4 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       iron-crypto/FIPS; (C) shared crate, pluggable crypto. Either way it
       goes after #111 (serde-xdr replacement): krb5i/krb5p wrap RPC bodies
       in that codec. Operator keytab side: irondirectory-operator#11.
+- [x] 2026-11-07 — docs refresh from code since 2026-10-11 (#106 Kerberos, #111 xdr codec): README crate list (six crates, `nextnfs-krb5`), this file's layout. Config keys/defaults, `sec`, test counts already matched the code. Open gaps stay as issues #105, #108, #113, #114, #116.
