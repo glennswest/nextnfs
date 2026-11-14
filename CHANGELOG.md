@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### 2026-11-14
+- **docs:** refresh pass from code: no commits since 2026-11-07, so README, deploy guide and CLAUDE.md already match the code; no new gaps (open issues #105, #108, #109, #110, #112, #113, #114, #116 still describe them)
+
 ### 2026-11-07
 - **docs:** README architecture lists all six workspace crates (adds `nextnfs-krb5`); CLAUDE.md layout adds the krb5 crate and `tests/krb5-interop`, and the #90 work-plan item is closed (shipped in v0.14.0)
 

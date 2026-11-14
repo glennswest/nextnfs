@@ -199,3 +199,4 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       goes after #111 (serde-xdr replacement): krb5i/krb5p wrap RPC bodies
       in that codec. Operator keytab side: irondirectory-operator#11.
 - [x] 2026-11-07 — docs refresh from code since 2026-10-11 (#106 Kerberos, #111 xdr codec): README crate list (six crates, `nextnfs-krb5`), this file's layout. Config keys/defaults, `sec`, test counts already matched the code. Open gaps stay as issues #105, #108, #113, #114, #116.
+- [x] 2026-11-14 — docs refresh pass: no code commits since 2026-11-07; docs verified unchanged-correct, no new issues.
