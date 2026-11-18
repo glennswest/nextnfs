@@ -205,4 +205,6 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       CLAIM_DELEGATE_CUR → BAD_STATEID, CLAIM_DELEGATE_PREV → NOTSUPP (no
       delegations are granted); nextnfstest stub tests removed (W42-*,
       W41-020 → server gap #118), unknown test IDs say so. Breaking →
-      0.16.0. Proof grep clean outside tests/.
+      0.16.0 (c0d47e2, tag v0.16.0). Proof grep clean outside tests/; sc-build
+      test+clippy on c0d47e2 green (604 tests, 0 warnings); image build
+      4c97f0a463f6 requested; #117 closed.
