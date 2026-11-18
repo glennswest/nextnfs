@@ -57,7 +57,6 @@ pub fn write_markdown_report(result: &RunResult) -> anyhow::Result<()> {
         crate::harness::NfsVersion::V3,
         crate::harness::NfsVersion::V4_0,
         crate::harness::NfsVersion::V4_1,
-        crate::harness::NfsVersion::V4_2,
     ] {
         let version_results: Vec<_> = result.results.iter().filter(|r| r.version == *version).collect();
         if version_results.is_empty() {

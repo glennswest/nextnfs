@@ -13,19 +13,16 @@ pub fn parse_version_filter(s: &str) -> Vec<NfsVersion> {
             NfsVersion::V3,
             NfsVersion::V4_0,
             NfsVersion::V4_1,
-            NfsVersion::V4_2,
         ],
         "3" | "v3" | "nfs3" => vec![NfsVersion::V3],
         "4.0" | "v4.0" | "nfs4.0" | "4" | "v4" => vec![NfsVersion::V4_0],
         "4.1" | "v4.1" | "nfs4.1" => vec![NfsVersion::V4_1],
-        "4.2" | "v4.2" | "nfs4.2" => vec![NfsVersion::V4_2],
         _ => {
             eprintln!("Unknown version filter: {s}, using all");
             vec![
                 NfsVersion::V3,
                 NfsVersion::V4_0,
                 NfsVersion::V4_1,
-                NfsVersion::V4_2,
             ]
         }
     }

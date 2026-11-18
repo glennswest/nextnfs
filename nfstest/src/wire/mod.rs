@@ -11,7 +11,6 @@ pub fn registry() -> Vec<TestDef> {
     tests.extend(nfs3::tests());
     tests.extend(nfs4::v40_tests());
     tests.extend(nfs4::v41_tests());
-    tests.extend(nfs4::v42_tests());
     tests
 }
 
@@ -24,9 +23,7 @@ pub async fn execute(test_id: &str, client: &rpc::RpcClient) -> anyhow::Result<(
         nfs4::execute_v40(test_id, client).await
     } else if test_id.starts_with("W41-") {
         nfs4::execute_v41(test_id, client).await
-    } else if test_id.starts_with("W42-") {
-        nfs4::execute_v42(test_id, client).await
     } else {
-        anyhow::bail!("SKIP: Test {} not yet implemented", test_id)
+        anyhow::bail!("unknown test ID {}", test_id)
     }
 }

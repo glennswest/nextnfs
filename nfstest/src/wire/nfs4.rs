@@ -437,88 +437,6 @@ pub fn v41_tests() -> Vec<TestDef> {
             layer: TestLayer::Wire,
             tags: vec!["ci", "v41"],
         },
-        TestDef {
-            id: "W41-020",
-            description: "Duplicate request returns cached reply (exactly-once)",
-            version: NfsVersion::V4_1,
-            layer: TestLayer::Wire,
-            tags: vec!["ci", "v41"],
-        },
-    ]
-}
-
-pub fn v42_tests() -> Vec<TestDef> {
-    vec![
-        TestDef {
-            id: "W42-001",
-            description: "ALLOCATE reserves space in file",
-            version: NfsVersion::V4_2,
-            layer: TestLayer::Wire,
-            tags: vec!["ci", "v42"],
-        },
-        TestDef {
-            id: "W42-003",
-            description: "DEALLOCATE punches hole in file",
-            version: NfsVersion::V4_2,
-            layer: TestLayer::Wire,
-            tags: vec!["ci", "v42"],
-        },
-        TestDef {
-            id: "W42-010",
-            description: "COPY performs server-side intra-server copy",
-            version: NfsVersion::V4_2,
-            layer: TestLayer::Wire,
-            tags: vec!["ci", "v42"],
-        },
-        TestDef {
-            id: "W42-020",
-            description: "SEEK finds next DATA region in sparse file",
-            version: NfsVersion::V4_2,
-            layer: TestLayer::Wire,
-            tags: vec!["ci", "v42"],
-        },
-        TestDef {
-            id: "W42-023",
-            description: "READ_PLUS returns data and hole segments",
-            version: NfsVersion::V4_2,
-            layer: TestLayer::Wire,
-            tags: vec!["ci", "v42"],
-        },
-        TestDef {
-            id: "W42-030",
-            description: "CLONE performs CoW clone of file region",
-            version: NfsVersion::V4_2,
-            layer: TestLayer::Wire,
-            tags: vec!["ci", "v42"],
-        },
-        TestDef {
-            id: "W42-040",
-            description: "SETXATTR creates extended attribute",
-            version: NfsVersion::V4_2,
-            layer: TestLayer::Wire,
-            tags: vec!["ci", "v42"],
-        },
-        TestDef {
-            id: "W42-042",
-            description: "GETXATTR retrieves extended attribute",
-            version: NfsVersion::V4_2,
-            layer: TestLayer::Wire,
-            tags: vec!["ci", "v42"],
-        },
-        TestDef {
-            id: "W42-044",
-            description: "LISTXATTRS lists all extended attributes",
-            version: NfsVersion::V4_2,
-            layer: TestLayer::Wire,
-            tags: vec!["ci", "v42"],
-        },
-        TestDef {
-            id: "W42-046",
-            description: "REMOVEXATTR deletes extended attribute",
-            version: NfsVersion::V4_2,
-            layer: TestLayer::Wire,
-            tags: vec!["ci", "v42"],
-        },
     ]
 }
 
@@ -539,7 +457,7 @@ pub async fn execute_v40(test_id: &str, client: &RpcClient) -> anyhow::Result<()
         "W40-065" => test_readdir_v4(client).await,
         "W40-070" => test_getattr_mandatory(client).await,
         "W40-080" => test_secinfo(client).await,
-        _ => anyhow::bail!("SKIP: Test {} not yet implemented", test_id),
+        _ => anyhow::bail!("unknown test ID {}", test_id),
     }
 }
 
@@ -550,24 +468,7 @@ pub async fn execute_v41(test_id: &str, client: &RpcClient) -> anyhow::Result<()
         "W41-004" => test_destroy_session(client).await,
         "W41-007" => test_sequence(client).await,
         "W41-010" => test_reclaim_complete(client).await,
-        "W41-020" => test_exactly_once(client).await,
-        _ => anyhow::bail!("SKIP: Test {} not yet implemented", test_id),
-    }
-}
-
-pub async fn execute_v42(test_id: &str, client: &RpcClient) -> anyhow::Result<()> {
-    match test_id {
-        "W42-001" => test_allocate(client).await,
-        "W42-003" => test_deallocate(client).await,
-        "W42-010" => test_copy(client).await,
-        "W42-020" => test_seek(client).await,
-        "W42-023" => test_read_plus(client).await,
-        "W42-030" => test_clone(client).await,
-        "W42-040" => test_setxattr(client).await,
-        "W42-042" => test_getxattr(client).await,
-        "W42-044" => test_listxattrs(client).await,
-        "W42-046" => test_removexattr(client).await,
-        _ => anyhow::bail!("SKIP: Test {} not yet implemented", test_id),
+        _ => anyhow::bail!("unknown test ID {}", test_id),
     }
 }
 
@@ -1144,54 +1045,4 @@ async fn test_reclaim_complete(client: &RpcClient) -> anyhow::Result<()> {
     }
 
     Ok(())
-}
-
-async fn test_exactly_once(client: &RpcClient) -> anyhow::Result<()> {
-    // This requires sending the same slot+sequence twice and verifying cached reply
-    // For now, mark as skip since it requires connection-level control
-    anyhow::bail!("SKIP: Exactly-once semantics test requires connection-level replay control")
-}
-
-// ─── NFSv4.2 Test Implementations ───────────────────────────────────
-// NFSv4.2 ops require an active v4.1 session. These tests set up a session first.
-
-async fn test_allocate(client: &RpcClient) -> anyhow::Result<()> {
-    // ALLOCATE requires an open stateid — mark as skip for now
-    anyhow::bail!("SKIP: ALLOCATE test requires OPEN stateid (needs OPEN implementation)")
-}
-
-async fn test_deallocate(client: &RpcClient) -> anyhow::Result<()> {
-    anyhow::bail!("SKIP: DEALLOCATE test requires OPEN stateid (needs OPEN implementation)")
-}
-
-async fn test_copy(client: &RpcClient) -> anyhow::Result<()> {
-    anyhow::bail!("SKIP: COPY test requires OPEN stateids for source and destination")
-}
-
-async fn test_seek(client: &RpcClient) -> anyhow::Result<()> {
-    anyhow::bail!("SKIP: SEEK test requires OPEN stateid")
-}
-
-async fn test_read_plus(client: &RpcClient) -> anyhow::Result<()> {
-    anyhow::bail!("SKIP: READ_PLUS test requires OPEN stateid")
-}
-
-async fn test_clone(client: &RpcClient) -> anyhow::Result<()> {
-    anyhow::bail!("SKIP: CLONE test requires OPEN stateids for source and destination")
-}
-
-async fn test_setxattr(client: &RpcClient) -> anyhow::Result<()> {
-    anyhow::bail!("SKIP: SETXATTR test requires OPEN stateid")
-}
-
-async fn test_getxattr(client: &RpcClient) -> anyhow::Result<()> {
-    anyhow::bail!("SKIP: GETXATTR test requires OPEN stateid")
-}
-
-async fn test_listxattrs(client: &RpcClient) -> anyhow::Result<()> {
-    anyhow::bail!("SKIP: LISTXATTRS test requires OPEN stateid")
-}
-
-async fn test_removexattr(client: &RpcClient) -> anyhow::Result<()> {
-    anyhow::bail!("SKIP: REMOVEXATTR test requires OPEN stateid")
 }

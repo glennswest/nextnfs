@@ -31,7 +31,7 @@ enum Commands {
         #[arg(short, long, default_value = "/")]
         export: String,
 
-        /// NFS version filter: 3, 4.0, 4.1, 4.2, or "all"
+        /// NFS version filter: 3, 4.0, 4.1, or "all"
         #[arg(short = 'V', long, default_value = "all")]
         version: String,
 

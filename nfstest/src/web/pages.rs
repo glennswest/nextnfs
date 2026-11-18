@@ -85,7 +85,7 @@ pub async fn dashboard(State(state): State<Arc<AppState>>) -> Html<String> {
     let body = format!(
         r#"<div class="container">
   <h1>NFS Protocol Test Suite</h1>
-  <p class="text-muted mb-16">Wire-level NFS protocol conformance testing (v3, v4.0, v4.1, v4.2)</p>
+  <p class="text-muted mb-16">Wire-level NFS protocol conformance testing (v3, v4.0, v4.1)</p>
   {status_html}
   <div class="cards">
     <a href="run" class="card">
@@ -174,7 +174,6 @@ pub async fn run_form(State(state): State<Arc<AppState>>) -> Html<String> {
           <option value="3">NFSv3</option>
           <option value="4.0">NFSv4.0</option>
           <option value="4.1">NFSv4.1</option>
-          <option value="4.2">NFSv4.2</option>
         </select>
       </div>
       <div class="form-group">

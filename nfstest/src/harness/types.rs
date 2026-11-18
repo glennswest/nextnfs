@@ -11,8 +11,6 @@ pub enum NfsVersion {
     V4_0,
     #[serde(rename = "4.1")]
     V4_1,
-    #[serde(rename = "4.2")]
-    V4_2,
 }
 
 impl std::fmt::Display for NfsVersion {
@@ -21,7 +19,6 @@ impl std::fmt::Display for NfsVersion {
             NfsVersion::V3 => write!(f, "NFSv3"),
             NfsVersion::V4_0 => write!(f, "NFSv4.0"),
             NfsVersion::V4_1 => write!(f, "NFSv4.1"),
-            NfsVersion::V4_2 => write!(f, "NFSv4.2"),
         }
     }
 }

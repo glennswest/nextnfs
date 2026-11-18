@@ -270,7 +270,7 @@ pub async fn execute(test_id: &str, client: &RpcClient) -> anyhow::Result<()> {
         "W3-060" => test_pathconf(client).await,
         "W3-061" => test_mount(client).await,
         "W3-065" => test_mount_export(client).await,
-        _ => anyhow::bail!("SKIP: Test {} not yet implemented", test_id),
+        _ => anyhow::bail!("unknown test ID {}", test_id),
     }
 }
 
