@@ -208,3 +208,11 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       0.16.0 (c0d47e2, tag v0.16.0). Proof grep clean outside tests/; sc-build
       test+clippy on c0d47e2 green (604 tests, 0 warnings); image build
       4c97f0a463f6 requested; #117 closed.
+- [ ] 2026-11-18 — #118 (P2): NFSv4.1 SEQUENCE exactly-once semantics.
+      Plan: per-slot state in `nfs41.rs` (last seqid, in-use flag, cached
+      `Compound4res`); SEQUENCE: seqid == last+1 → claim slot and execute;
+      == last → replay cached reply (or NFS4ERR_RETRY_UNCACHED_REP on the
+      next op when it was not cached); slot busy → NFS4ERR_DELAY; else
+      NFS4ERR_SEQ_MISORDERED. COMPOUND stores the reply when `sa_cachethis`
+      (or SEQUENCE-only) and it fits `ca_maxresponsesize_cached` (capped at
+      64 KiB); a dropped request frees its slot. nextnfstest W41-020 back.
