@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### 2026-11-18
+- **BREAKING:** `[server] rdma_device` / `rdma_port` removed (#117). There is no NFS-over-RDMA transport (that is #110); the keys only logged a warning. A config that still sets them loads as before, and they are ignored like any other unknown key
+- **fix:** OPEN with `CLAIM_DELEGATE_CUR` answers `NFS4ERR_BAD_STATEID` (nextnfs never grants a delegation, so no delegation stateid is valid); it answered `NFS4ERR_NOTSUPP`. `CLAIM_DELEGATE_PREV` stays `NFS4ERR_NOTSUPP`, the RFC 7530 answer of a server without delegation reclaim (#117)
+- **refactor:** unused modules `nfs/src/server/rdma.rs` (RPC-over-RDMA header framing with no transport) and `nfs/src/server/nfs42.rs` (v4.2 opcode constants) removed (#117)
+- **BREAKING:** `nextnfstest` no longer lists tests that could only SKIP: the NFSv4.2 group (W42-*, the server rejects minor version 2) and W41-020 (exactly-once; the server keeps no SEQUENCE reply cache, #118). The `4.2` version filter is gone; an unknown test ID is reported as such instead of "SKIP: not yet implemented" (#117)
+
 ### 2026-11-14
 - **docs:** refresh pass from code: no commits since 2026-11-07, so README, deploy guide and CLAUDE.md already match the code; no new gaps (open issues #105, #108, #109, #110, #112, #113, #114, #116 still describe them)
 
@@ -43,7 +49,7 @@
 - `max_bytes_per_sec` is enforced (#90): READ (requested count) and WRITE (data length) are charged against the export's byte bucket, and an op over the limit gets `NFS4ERR_DELAY`. Before, only `max_ops_per_sec` was checked. An op larger than the whole bucket passes once it is full and leaves it in debt, so it is slowed rather than refused forever. The op and byte buckets are charged together, so a refusal takes from neither
 - A QoS refusal (`NFS4ERR_DELAY`) now includes the refused op's result in `resarray`, as for other refusals; it was missing
 - Changing an export's QoS limits (config at startup or `PUT /api/v1/qos/{name}`) starts the new limit with a full bucket; the bucket of a previously unlimited export started empty and refused the first second of traffic
-- `[server] rdma_device` / `rdma_port` now log a warning at startup that NFS-over-RDMA is not implemented and the keys are ignored (TCP only). Before, nextnfs logged "RDMA transport configured (RFC 8166/8267)" and "RDMA listen port configured" while nothing listened on RDMA (#92)
+- `[server] rdma_device` / `rdma_port` now log a warning at startup that there is no NFS-over-RDMA transport and the keys are ignored (TCP only). Before, nextnfs logged "RDMA transport configured (RFC 8166/8267)" and "RDMA listen port configured" while nothing listened on RDMA (#92)
 - `nextnfs.spec` `%changelog` weekday corrected (2026-04-02 is a Thursday); rpmbuild warned "bogus date" (#95)
 - `make rpm-x86|rpm-arm64` work again (#95): `packaging/build-rpm.sh` stages `nextnfs-stress` (the spec's `Source3`, which rpmbuild failed on) and looks for the binaries under `$CARGO_TARGET_DIR` when it is set
 - `build-deb.sh` builds with `dpkg-deb --root-owner-group`: a DEB built by a non-root user recorded that user as owner of every file, so `dpkg -i` installed `/export`, `/var/lib/nextnfs` and the binaries owned by the build user's uid (#96)
@@ -430,9 +436,9 @@
 - SETCLIENTID, SETCLIENTID_CONFIRM, and RENEW integration tests restored
 
 ### Fixed
-- Fattr4 attribute deserialization — implement all 12 common attribute types (was todo!() panics); fix XDR offset arithmetic (was using loop index instead of byte widths)
+- Fattr4 attribute deserialization — implement all 12 common attribute types (they panicked); fix XDR offset arithmetic (was using loop index instead of byte widths)
 - RPC dispatch returns ProcUnavail/GarbageArgs per RFC 5531 instead of panicking on invalid procedure/message
-- REMOVE operation returned Nfs4errStale on success instead of Nfs4Ok; error path was todo!()
+- REMOVE operation returned Nfs4errStale on success instead of Nfs4Ok; error path panicked
 - Filemanager actor channel sends no longer panic if actor dies — return NfsStat4::Nfs4errServerfault
 - Parent filehandle lookup in create_file/remove_file no longer panics on missing parent
 - SETATTR size truncation no longer panics on I/O errors

@@ -56,8 +56,8 @@ RPM with `packaging/nextnfs-run-tests`), `packaging/` (RPM/DEB/systemd),
 
 ## Known gaps (tracked as issues)
 
-Config keys that parse but do not do what their names say:
-`rdma_device`/`rdma_port` (warn and are ignored). See `gh issue list`.
+None of the config keys is a stub: `rdma_device`/`rdma_port` were removed
+(#117); NFS-over-RDMA is #110. See `gh issue list`.
 
 Kerberos (#106): `nextnfs-krb5` (`krb5/`) is the acceptor;
 `nfs/src/server/gss.rs` is RPCSEC_GSS (handled in `nfs/src/lib.rs`
@@ -116,8 +116,8 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       Verified on dev (8aeffa6): musl build, `build-rpm.sh x86_64`,
       `rpm -qlpv` lists both binaries, `/export`, `/var/lib/nextnfs`
       (root:root); extracted binaries run.
-- [x] 2026-10-06 — #92: `rdma_device`/`rdma_port` warn at startup that
-      NFS-over-RDMA is not implemented and the keys are ignored (instead of
+- [x] 2026-10-06 — #92: `rdma_device`/`rdma_port` warned at startup that
+      there is no NFS-over-RDMA transport and the keys are ignored (instead of
       logging "RDMA transport configured"); docs say the same. A real
       verbs transport would be a new feature, not this fix.
       `sc-build 'cargo test --workspace'` on ff30e99 green (553 tests;
@@ -200,3 +200,9 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       in that codec. Operator keytab side: irondirectory-operator#11.
 - [x] 2026-11-07 — docs refresh from code since 2026-10-11 (#106 Kerberos, #111 xdr codec): README crate list (six crates, `nextnfs-krb5`), this file's layout. Config keys/defaults, `sec`, test counts already matched the code. Open gaps stay as issues #105, #108, #113, #114, #116.
 - [x] 2026-11-14 — docs refresh pass: no code commits since 2026-11-07; docs verified unchanged-correct, no new issues.
+- [x] 2026-11-18 — #117 (P-1, no stubs): `rdma_device`/`rdma_port` removed
+      (RDMA is #110); unused `rdma.rs`/`nfs42.rs` modules deleted; OPEN
+      CLAIM_DELEGATE_CUR → BAD_STATEID, CLAIM_DELEGATE_PREV → NOTSUPP (no
+      delegations are granted); nextnfstest stub tests removed (W42-*,
+      W41-020 → server gap #118), unknown test IDs say so. Breaking →
+      0.16.0. Proof grep clean outside tests/.

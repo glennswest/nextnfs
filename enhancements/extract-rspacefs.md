@@ -63,7 +63,7 @@ Keep the `vfs::FileSystem` trait as the abstraction boundary — it's already wh
 
 4. **Update nextnfs** — drop the overlay/verity references entirely:
    - Remove `mod overlay;` and `mod verity;` from `nfs/src/server/mod.rs`
-   - Remove overlay-backed export type from `export_manager.rs` (or leave a stub returning "unsupported export type" so config compat doesn't crash).
+   - Remove overlay-backed export type from `export_manager.rs`; a config that names it is refused at startup with an error naming the type.
    - Update `CHANGELOG.md` — note the removal.
    - Update `packaging/nextnfs.spec` — drop any overlay/verity-specific references.
    - Update `enhancements/fedora-rhel-integration.md` if it references overlay.

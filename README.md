@@ -34,7 +34,7 @@ nextnfs is tested against the real Linux kernel NFS client, and much of its matu
 
 Two companion workspace crates:
 
-- **`nextnfstest`** — comprehensive NFS protocol test suite (v3, v4.0, v4.1, v4.2), wire-level, with an HTML report and web view
+- **`nextnfstest`** — comprehensive NFS protocol test suite (v3, v4.0, v4.1), wire-level, with an HTML report and web view
 - **`nextnfs-stress`** — POSIX-path stress harness aimed at a live NFS mount: 1000 files across nine phases (create, readdir, stat, read+verify, rename rotation, post-rename stat, unlink-while-open silly-rename trigger, parallel workers, bulk delete), reporting per-phase ops/s and errno breakdowns
 
 Plus shell integration suites in `tests/*.sh` (NFSv4 basic/edge/stress, NFSv4.1 sessions, integrity, performance), packaged as the `nextnfs-tests` RPM and run with `nextnfs-run-tests <server> [suite...]`.
@@ -123,7 +123,6 @@ TOML, loaded with `--config FILE` (see `nextnfs.example.toml`). Every key is opt
 | `tls_cert`, `tls_key` | unset | PEM cert and key; when **both** are set the NFS port speaks RPC-over-TLS only |
 | `krb5_keytab` | unset | MIT keytab with the server's `nfs/<host>@REALM` keys (AES enctypes). Set: RPCSEC_GSS (krb5, krb5i, krb5p) is served; the server exits at startup if the file cannot be read or holds no AES key. Unset: RPCSEC_GSS is refused, and an export whose `sec` names a Kerberos flavour stops the server at startup |
 | `[[server.krb5_map]]` | none | `principal = "alice@REALM"`, `uid`, `gid`, `gids = [...]`: the identity that principal's calls run as. Checked before `/etc/passwd` |
-| `rdma_device`, `rdma_port` | unset | **Not implemented** — accepted so a config that sets them still loads, but no RDMA listener is started; nextnfs logs a warning at startup that they are ignored and serves TCP only ([#92](https://github.com/glennswest/nextnfs/issues/92)) |
 
 **`[[exports]]`** (repeatable)
 
@@ -177,7 +176,7 @@ Six-crate Rust workspace:
 - **`nextnfs-krb5`** (`krb5/`) — pure-Rust Kerberos V5 acceptor (AES enctypes, MIT keytab reader, AP-REQ/AP-REP, RFC 4121 tokens) used by the server's RPCSEC_GSS (`nfs/src/server/gss.rs`)
 - **`nextnfs-server`** (`nfs/`) — the NFSv4.0/4.1 server library: `ExportManager` and `FileManager` actors, compound operation handling, locking, v4.1 sessions, pseudo-fs root, TLS, state recovery
 - **`nextnfs`** (`.`) — CLI binary (clap subcommands), REST API (axum), Web UI
-- **`nextnfstest`** (`nfstest/`) — NFS v3/v4.0/4.1/4.2 protocol test suite
+- **`nextnfstest`** (`nfstest/`) — NFS v3/v4.0/4.1 protocol test suite
 - **`nextnfs-stress`** (`stress/`) — live-mount POSIX stress harness
 
 `ExportManager` owns multiple exports, each with its own `FileManagerHandle`; the NFSv4 pseudo-fs root presents exports as top-level directories. Single-export mode routes `PUTROOTFH` straight to the export root.
