@@ -2,17 +2,21 @@
 
 ## [Unreleased]
 
-### 2026-11-18
-- **BREAKING:** `[server] rdma_device` / `rdma_port` removed (#117). There is no NFS-over-RDMA transport (that is #110); the keys only logged a warning. A config that still sets them loads as before, and they are ignored like any other unknown key
-- **fix:** OPEN with `CLAIM_DELEGATE_CUR` answers `NFS4ERR_BAD_STATEID` (nextnfs never grants a delegation, so no delegation stateid is valid); it answered `NFS4ERR_NOTSUPP`. `CLAIM_DELEGATE_PREV` stays `NFS4ERR_NOTSUPP`, the RFC 7530 answer of a server without delegation reclaim (#117)
-- **refactor:** unused modules `nfs/src/server/rdma.rs` (RPC-over-RDMA header framing with no transport) and `nfs/src/server/nfs42.rs` (v4.2 opcode constants) removed (#117)
-- **BREAKING:** `nextnfstest` no longer lists tests that could only SKIP: the NFSv4.2 group (W42-*, the server rejects minor version 2) and W41-020 (exactly-once; the server keeps no SEQUENCE reply cache, #118). The `4.2` version filter is gone; an unknown test ID is reported as such instead of "SKIP: not yet implemented" (#117)
+## [v0.16.0] — 2026-11-18
 
-### 2026-11-14
-- **docs:** refresh pass from code: no commits since 2026-11-07, so README, deploy guide and CLAUDE.md already match the code; no new gaps (open issues #105, #108, #109, #110, #112, #113, #114, #116 still describe them)
+### Breaking
+- `[server] rdma_device` / `rdma_port` removed (#117). There is no NFS-over-RDMA transport (that is #110); the keys only logged a warning. A config that still sets them loads as before, and they are ignored like any other unknown key
+- `nextnfstest` no longer lists tests that could only SKIP: the NFSv4.2 group (W42-*, the server rejects minor version 2) and W41-020 (exactly-once; the server keeps no SEQUENCE reply cache, #118). The `4.2` version filter is gone; an unknown test ID is reported as such instead of "SKIP: not yet implemented" (#117)
 
-### 2026-11-07
-- **docs:** README architecture lists all six workspace crates (adds `nextnfs-krb5`); CLAUDE.md layout adds the krb5 crate and `tests/krb5-interop`, and the #90 work-plan item is closed (shipped in v0.14.0)
+### Fixed
+- OPEN with `CLAIM_DELEGATE_CUR` answers `NFS4ERR_BAD_STATEID` (nextnfs never grants a delegation, so no delegation stateid is valid); it answered `NFS4ERR_NOTSUPP`. `CLAIM_DELEGATE_PREV` stays `NFS4ERR_NOTSUPP`, the RFC 7530 answer of a server without delegation reclaim (#117)
+
+### Changed
+- unused modules `nfs/src/server/rdma.rs` (RPC-over-RDMA header framing with no transport) and `nfs/src/server/nfs42.rs` (v4.2 opcode constants) removed (#117)
+
+### Documentation
+- refresh pass from code: no commits since 2026-11-07, so README, deploy guide and CLAUDE.md already match the code; no new gaps (open issues #105, #108, #109, #110, #112, #113, #114, #116 still describe them)
+- README architecture lists all six workspace crates (adds `nextnfs-krb5`); CLAUDE.md layout adds the krb5 crate and `tests/krb5-interop`, and the #90 work-plan item is closed (shipped in v0.14.0)
 
 ## [v0.15.0] — 2026-10-14
 
