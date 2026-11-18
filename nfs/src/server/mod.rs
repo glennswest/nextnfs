@@ -4,8 +4,6 @@ pub mod filemanager;
 pub mod gss;
 pub mod nfs40;
 pub mod nfs41;
-pub mod nfs42;
-pub mod rdma;
 pub mod operation;
 pub mod perm;
 pub mod request;

@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use nextnfs_server::export_manager::{AccessConfig, ExportManagerHandle, QosConfig, SecFlavor, SquashMode};
 use nextnfs_server::NFSServer;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
 mod api;
@@ -179,9 +179,6 @@ async fn run_server(
     let (exports, listen, api_listen, state_dir, tls_cert, tls_key, krb5) = if let Some(config_path) = config_path {
         match config::Config::load(&config_path) {
             Ok(cfg) => {
-                if let Some(msg) = cfg.server.rdma_unsupported_warning() {
-                    warn!("{}", msg);
-                }
                 let resolved = cfg.resolved_exports();
                 let listen = if listen_addr != "0.0.0.0:2049" {
                     listen_addr

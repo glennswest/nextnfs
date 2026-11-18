@@ -348,15 +348,32 @@ impl NfsOperation for Open4args {
 
         let file = match &self.claim {
             OpenClaim4::ClaimNull(file) => file,
-            // Delegation claim types — not yet supported (requires callback channel)
-            _ => {
-                error!("Unsupported OpenClaim4 {:?}", self.claim);
+            // nextnfs never grants a delegation (see `open_for_reading`), so
+            // no delegation stateid a client presents can be one we issued:
+            // CLAIM_DELEGATE_CUR is answered NFS4ERR_BAD_STATEID
+            // (RFC 7530 §16.16.5, §9.1.4.3).
+            OpenClaim4::ClaimDelegateCur(_) => {
+                debug!("CLAIM_DELEGATE_CUR: no delegation was granted, bad stateid");
+                return NfsOpResponse {
+                    request,
+                    result: None,
+                    status: NfsStat4::Nfs4errBadStateid,
+                };
+            }
+            // CLAIM_DELEGATE_PREV reclaims a delegation across a client
+            // reboot; a server that does not support delegation reclaim
+            // answers NFS4ERR_NOTSUPP (RFC 7530 §16.16.5). With no
+            // delegations ever granted there is nothing to reclaim.
+            OpenClaim4::ClaimDelegatePrev(_) => {
+                debug!("CLAIM_DELEGATE_PREV: no delegations to reclaim");
                 return NfsOpResponse {
                     request,
                     result: None,
                     status: NfsStat4::Nfs4errNotsupp,
                 };
             }
+            // Handled above, before the directory check.
+            OpenClaim4::ClaimPrevious(_) => unreachable!("CLAIM_PREVIOUS handled earlier"),
         };
 
         // If the component is of zero length, NFS4ERR_INVAL will be returned.
@@ -389,7 +406,7 @@ mod tests {
     use super::*;
     use crate::server::operation::NfsOperation;
     use crate::test_utils::*;
-    use nextnfs_proto::nfs4_proto::{Fattr4, OpenOwner4};
+    use nextnfs_proto::nfs4_proto::{Fattr4, OpenClaimDelegateCur4, OpenOwner4};
 
     fn make_open_args(file: &str, how: OpenFlag4) -> Open4args {
         Open4args {
@@ -490,7 +507,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_open_unsupported_claim_type() {
+    async fn test_open_claim_delegate_prev_notsupp() {
         let request = create_nfs40_server_with_root_fh(None).await;
         let args = Open4args {
             seqid: 1,
@@ -501,11 +518,32 @@ mod tests {
                 owner: b"test".to_vec(),
             },
             openhow: OpenFlag4::Open4Nocreate,
-            // CLAIM_DELEGATE_PREV is unsupported (requires callback channel)
+            // No delegations are ever granted, so none can be reclaimed.
             claim: OpenClaim4::ClaimDelegatePrev("delegfile".to_string()),
         };
         let response = args.execute(request).await;
         assert_eq!(response.status, NfsStat4::Nfs4errNotsupp);
+    }
+
+    #[tokio::test]
+    async fn test_open_claim_delegate_cur_bad_stateid() {
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let args = Open4args {
+            seqid: 1,
+            share_access: 1,
+            share_deny: 0,
+            owner: OpenOwner4 {
+                clientid: 1,
+                owner: b"test".to_vec(),
+            },
+            openhow: OpenFlag4::Open4Nocreate,
+            claim: OpenClaim4::ClaimDelegateCur(OpenClaimDelegateCur4 {
+                delegate_stateid: Stateid4 { seqid: 1, other: [7; 12] },
+                file: "delegfile".to_string(),
+            }),
+        };
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4errBadStateid);
     }
 
     #[tokio::test]

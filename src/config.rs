@@ -29,14 +29,6 @@ pub struct ServerConfig {
     /// TLS private key file path (PEM) for RPC-over-TLS (RFC 9289)
     #[serde(default)]
     pub tls_key: Option<String>,
-    /// RDMA device name for NFS-over-RDMA (RFC 8166/8267), e.g. "mlx5_0".
-    /// Not implemented: accepted so existing configs load, but no RDMA
-    /// transport is started; setting it logs a warning (#92).
-    #[serde(default)]
-    pub rdma_device: Option<String>,
-    /// RDMA listen port (RFC 8267 uses 20049). Not implemented, see `rdma_device`.
-    #[serde(default)]
-    pub rdma_port: Option<u16>,
     /// Kerberos keytab (MIT format) holding the server's `nfs/<host>@REALM`
     /// keys. Set: RPCSEC_GSS (krb5, krb5i, krb5p) is served; unset: it is
     /// refused (#106).
@@ -121,32 +113,9 @@ impl Default for ServerConfig {
             state_dir: None,
             tls_cert: None,
             tls_key: None,
-            rdma_device: None,
-            rdma_port: None,
             krb5_keytab: None,
             krb5_map: Vec::new(),
         }
-    }
-}
-
-impl ServerConfig {
-    /// The warning to log when `rdma_device` or `rdma_port` is set: there is
-    /// no NFS-over-RDMA transport, so the keys are ignored (#92).
-    pub fn rdma_unsupported_warning(&self) -> Option<String> {
-        if self.rdma_device.is_none() && self.rdma_port.is_none() {
-            return None;
-        }
-        let mut set = Vec::new();
-        if let Some(ref d) = self.rdma_device {
-            set.push(format!("rdma_device = {:?}", d));
-        }
-        if let Some(p) = self.rdma_port {
-            set.push(format!("rdma_port = {}", p));
-        }
-        Some(format!(
-            "{} ignored: NFS-over-RDMA is not implemented, serving TCP only",
-            set.join(", ")
-        ))
     }
 }
 
@@ -233,24 +202,5 @@ path = "/srv/plain"
         assert!(cfg.exports[1].sec.is_empty());
         let cfg: Config = toml::from_str("[server]\n").unwrap();
         assert!(cfg.server.krb5_keytab.is_none() && cfg.server.krb5_map.is_empty());
-    }
-
-    #[test]
-    fn rdma_keys_unset_no_warning() {
-        let cfg: Config = toml::from_str("[server]\nlisten = \"0.0.0.0:2049\"\n").unwrap();
-        assert_eq!(cfg.server.rdma_unsupported_warning(), None);
-    }
-
-    #[test]
-    fn rdma_keys_set_warn_ignored() {
-        let cfg: Config =
-            toml::from_str("[server]\nrdma_device = \"mlx5_0\"\nrdma_port = 20049\n").unwrap();
-        let msg = cfg.server.rdma_unsupported_warning().unwrap();
-        assert!(msg.contains("rdma_device = \"mlx5_0\""), "{msg}");
-        assert!(msg.contains("rdma_port = 20049"), "{msg}");
-        assert!(msg.contains("not implemented"), "{msg}");
-
-        let cfg: Config = toml::from_str("[server]\nrdma_port = 20049\n").unwrap();
-        assert!(cfg.server.rdma_unsupported_warning().is_some());
     }
 }
