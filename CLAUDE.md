@@ -208,7 +208,7 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       0.16.0 (c0d47e2, tag v0.16.0). Proof grep clean outside tests/; sc-build
       test+clippy on c0d47e2 green (604 tests, 0 warnings); image build
       4c97f0a463f6 requested; #117 closed.
-- [ ] 2026-11-18 — #118 (P2): NFSv4.1 SEQUENCE exactly-once semantics.
+- [x] 2026-11-18 — #118 (P2): NFSv4.1 SEQUENCE exactly-once semantics.
       Plan: per-slot state in `nfs41.rs` (last seqid, in-use flag, cached
       `Compound4res`); SEQUENCE: seqid == last+1 → claim slot and execute;
       == last → replay cached reply (or NFS4ERR_RETRY_UNCACHED_REP on the
@@ -221,4 +221,5 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       encoded by variant position; every v4.1 op from 41 up was the wrong
       op; LOCK READ_LT read as WRITE_LT), fixed in c9749c8. `sc-build`
       on c9749c8: 612 tests, clippy 0 warnings, live `nextnfstest -V 4.1
-      -l wire` 6/6 incl. W41-020. Next: v0.16.1, close #118/#121, image.
+      -l wire` 6/6 incl. W41-020. Released v0.16.1 (afc3f87, --locked
+      build green); #118, #121 closed; image build d1a36bc38821 requested.
