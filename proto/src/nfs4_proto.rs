@@ -5,6 +5,34 @@ use num_derive::{FromPrimitive, ToPrimitive};
 
 use serde_derive::{Deserialize, Serialize};
 
+/// Serde for a fieldless XDR enum by its discriminant (the `= N`). serde's
+/// derive encodes an enum by its variant's *position*, which is only right
+/// when the discriminants run 0, 1, 2, …; these start at 1 (#121).
+macro_rules! xdr_discriminant_enum {
+    ($t:ident { $($v:ident = $n:expr),+ $(,)? }) => {
+        impl serde::Serialize for $t {
+            fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+                let n: u32 = match self {
+                    $($t::$v => $n,)+
+                };
+                s.serialize_u32(n)
+            }
+        }
+        impl<'de> serde::Deserialize<'de> for $t {
+            fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+                let n = <u32 as serde::Deserialize>::deserialize(d)?;
+                $(if n == $n {
+                    return Ok($t::$v);
+                })+
+                Err(serde::de::Error::custom(format!(
+                    "invalid {} value {n}",
+                    stringify!($t)
+                )))
+            }
+        }
+    };
+}
+
 /*
  * This code was derived from RFC 7531.
  * Yet, it has been modified to fit the needs of Serde and Bold.
@@ -525,7 +553,7 @@ pub struct LockOwner4 {
     pub owner: Vec<u8>,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 
 pub enum NfsLockType4 {
     ReadLt = 1,
@@ -533,6 +561,7 @@ pub enum NfsLockType4 {
     ReadwLt = 3,  /* blocking read */
     WritewLt = 4, /* blocking write */
 }
+xdr_discriminant_enum!(NfsLockType4 { ReadLt = 1, WriteLt = 2, ReadwLt = 3, WritewLt = 4 });
 
 pub const ACCESS4_READ: u32 = 0x00000001;
 pub const ACCESS4_LOOKUP: u32 = 0x00000002;
@@ -992,12 +1021,13 @@ pub enum OpenFlag4 {
 }
 
 /* Next definitions used for OPEN delegation */
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 
 pub enum LimitBy4 {
     NfsLimitSize = 1,
     NfsLimitBlocks = 2, /* others as needed */
 }
+xdr_discriminant_enum!(LimitBy4 { NfsLimitSize = 1, NfsLimitBlocks = 2 });
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct NfsModifiedLimit4 {
@@ -1659,22 +1689,24 @@ pub enum CallbackSecParms4 {
 }
 
 /// Channel direction from client (BIND_CONN_TO_SESSION).
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 #[repr(u32)]
 pub enum ChannelDirFromClient4 {
     Fore = 1,
     Back = 2,
     ForeOrBoth = 3,
 }
+xdr_discriminant_enum!(ChannelDirFromClient4 { Fore = 1, Back = 2, ForeOrBoth = 3 });
 
 /// Channel direction from server (BIND_CONN_TO_SESSION response).
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 #[repr(u32)]
 pub enum ChannelDirFromServer4 {
     Fore = 1,
     Back = 2,
     Both = 3,
 }
+xdr_discriminant_enum!(ChannelDirFromServer4 { Fore = 1, Back = 2, Both = 3 });
 
 /*
  * NFSv4.1 operations (RFC 5661)
@@ -1848,7 +1880,7 @@ pub struct ReclaimComplete4res {
  */
 
 /// Layout type identifier.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u32)]
 pub enum LayoutType4 {
     LayoutNfsv4Files = 1,
@@ -1856,14 +1888,16 @@ pub enum LayoutType4 {
     LayoutBlockVolume = 3,
     LayoutFlexFiles = 4,
 }
+xdr_discriminant_enum!(LayoutType4 { LayoutNfsv4Files = 1, LayoutOsd2Objects = 2, LayoutBlockVolume = 3, LayoutFlexFiles = 4 });
 
 /// Layout I/O mode.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u32)]
 pub enum LayoutIomode4 {
     LayoutiomodeRead = 1,
     LayoutiomodeRw = 2,
 }
+xdr_discriminant_enum!(LayoutIomode4 { LayoutiomodeRead = 1, LayoutiomodeRw = 2 });
 
 /// Device ID (16 bytes per RFC 5661 §3.3.14).
 pub type DeviceId4 = [u8; 16];
@@ -1960,13 +1994,14 @@ pub struct LayoutCommit4resok {
 }
 
 /* LAYOUTRETURN (op 51) */
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u32)]
 pub enum LayoutReturnType4 {
     LayoutreturnFile = 1,
     LayoutreturnFsid = 2,
     LayoutreturnAll = 3,
 }
+xdr_discriminant_enum!(LayoutReturnType4 { LayoutreturnFile = 1, LayoutreturnFsid = 2, LayoutreturnAll = 3 });
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct LayoutReturn4args {
@@ -2003,6 +2038,8 @@ pub enum DataContent4 {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[repr(u32)]
 pub enum Netloc4 {
+    /// No netloc4 type 0; keeps `Name`/`Url` at their wire numbers (#121).
+    Undef0 = 0,
     Name(String) = 1,
     Url(String) = 2,
 }
@@ -2230,11 +2267,16 @@ pub enum NfsArgOp {
     Opwrite(Write4args) = 38,
     OpreleaseLockOwner(ReleaseLockowner4args) = 39,
     // NFSv4.1 operations (RFC 5661)
+    /// BACKCHANNEL_CTL: not supported. Opcodes with no implementation here still
+    /// need a variant so every later variant's position is its opcode
+    /// (serde encodes the position, #121). Their arguments are not decoded.
+    OpbackchannelCtl = 40,
     OpbindConnToSession(BindConnToSession4args) = 41,
     OpexchangeId(ExchangeId4args) = 42,
     OpcreateSession(CreateSession4args) = 43,
     OpdestroySession(DestroySession4args) = 44,
     OpfreeStateid(FreeStateid4args) = 45,
+    OpgetDirDelegation = 46,
     // pNFS operations (RFC 5661 §12)
     OpgetdeviceInfo(GetDeviceInfo4args) = 47,
     OpgetdeviceList(GetDeviceList4args) = 48,
@@ -2243,12 +2285,23 @@ pub enum NfsArgOp {
     OplayoutReturn(LayoutReturn4args) = 51,
     OpsecinfoNoName(SecinfoNoName4args) = 52,
     Opsequence(Sequence4args) = 53,
+    OpsetSsv = 54,
     OptestStateid(TestStateid4args) = 55,
+    OpwantDelegation = 56,
     OpdestroyClientid(DestroyClientId4args) = 57,
     OpreclaimComplete(ReclaimComplete4args) = 58,
     // NFSv4.2 operations (RFC 7862)
     Opallocate(Allocate4args) = 59,
     Opcopy(Copy4args) = 60,
+    // NFSv4.2 opcodes without an implementation (positions only, #121)
+    OpcopyNotify = 61,
+    Opdeallocate = 62,
+    OpioAdvise = 63,
+    OplayoutError = 64,
+    OplayoutStats = 65,
+    OpoffloadCancel = 66,
+    OpoffloadStatus = 67,
+    OpreadPlus = 68,
     Opseek(Seek4args) = 69,
 }
 
@@ -2299,11 +2352,16 @@ pub enum NfsResOp4 {
     Opwrite(Write4res) = 38,
     OpreleaseLockOwner(ReleaseLockowner4res) = 39,
     // NFSv4.1 operations (RFC 5661)
+    /// BACKCHANNEL_CTL: not supported. Opcodes with no implementation here still
+    /// need a variant so every later variant's position is its opcode
+    /// (serde encodes the position, #121). Their arguments are not decoded.
+    OpbackchannelCtl = 40,
     OpbindConnToSession(BindConnToSession4res) = 41,
     OpexchangeId(ExchangeId4res) = 42,
     OpcreateSession(CreateSession4res) = 43,
     OpdestroySession(DestroySession4res) = 44,
     OpfreeStateid(FreeStateid4res) = 45,
+    OpgetDirDelegation = 46,
     // pNFS operations (RFC 5661 §12)
     OpgetdeviceInfo(GetDeviceInfo4res) = 47,
     OpgetdeviceList(GetDeviceList4res) = 48,
@@ -2312,12 +2370,23 @@ pub enum NfsResOp4 {
     OplayoutReturn(LayoutReturn4res) = 51,
     OpsecinfoNoName(SecinfoNoName4res) = 52,
     Opsequence(Sequence4res) = 53,
+    OpsetSsv = 54,
     OptestStateid(TestStateid4res) = 55,
+    OpwantDelegation = 56,
     OpdestroyClientid(DestroyClientId4res) = 57,
     OpreclaimComplete(ReclaimComplete4res) = 58,
     // NFSv4.2 operations (RFC 7862)
     Opallocate(Allocate4res) = 59,
     Opcopy(Copy4res) = 60,
+    // NFSv4.2 opcodes without an implementation (positions only, #121)
+    OpcopyNotify = 61,
+    Opdeallocate = 62,
+    OpioAdvise = 63,
+    OplayoutError = 64,
+    OplayoutStats = 65,
+    OpoffloadCancel = 66,
+    OpoffloadStatus = 67,
+    OpreadPlus = 68,
     Opseek(Seek4res) = 69,
     /// A failed operation whose result is only its status (RFC 7530 §16:
     /// `nfs_resop4` for an error is the opcode followed by the status). Most
@@ -2391,12 +2460,13 @@ pub struct CBIllegal4res {
 /*
  * Various definitions for CB_COMPOUND
  */
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum NfsCbOpNum4 {
     OpCbGetattr = 3,
     OpCbRecall = 4,
     OpCbillegal = 10044,
 }
+xdr_discriminant_enum!(NfsCbOpNum4 { OpCbGetattr = 3, OpCbRecall = 4, OpCbillegal = 10044 });
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 
@@ -2433,6 +2503,66 @@ pub struct CbCompound4res {
 mod tests {
     use super::*;
     use crate::xdr::{from_bytes, to_bytes};
+
+    fn be(words: &[u32]) -> Vec<u8> {
+        words.iter().flat_map(|w| w.to_be_bytes()).collect()
+    }
+
+    /// Every op decodes from, and encodes to, its RFC opcode — not its
+    /// position in the enum (#121: wire 42 decoded as CREATE_SESSION,
+    /// wire 53 as DESTROY_CLIENTID).
+    #[test]
+    fn test_ops_use_their_opcode_on_the_wire() {
+        // EXCHANGE_ID with an empty owner, SP4_NONE, no impl id
+        let mut b = be(&[42]);
+        b.extend([1, 2, 3, 4, 5, 6, 7, 8]);
+        b.extend(be(&[0, 0, 0, 0]));
+        assert!(matches!(from_bytes::<_, NfsArgOp>(&b).unwrap(), NfsArgOp::OpexchangeId(_)));
+
+        let mut b = be(&[53]);
+        b.extend([7u8; 16]);
+        b.extend(be(&[1, 0, 0, 1]));
+        match from_bytes::<_, NfsArgOp>(&b).unwrap() {
+            NfsArgOp::Opsequence(a) => {
+                assert_eq!((a.sa_sequenceid, a.sa_slotid, a.sa_cachethis), (1, 0, true))
+            }
+            other => panic!("wire 53 decoded as {other:?}"),
+        }
+        assert!(matches!(from_bytes::<_, NfsArgOp>(be(&[57, 0, 9])).unwrap(), NfsArgOp::OpdestroyClientid(_)));
+        assert!(matches!(from_bytes::<_, NfsArgOp>(be(&[58, 1])).unwrap(), NfsArgOp::OpreclaimComplete(_)));
+        assert!(matches!(from_bytes::<_, NfsArgOp>(be(&[40])).unwrap(), NfsArgOp::OpbackchannelCtl));
+        assert!(matches!(from_bytes::<_, NfsArgOp>(be(&[68])).unwrap(), NfsArgOp::OpreadPlus));
+        assert!(matches!(from_bytes::<_, NfsArgOp>(be(&[69, 0, 0, 0, 0, 0, 0, 0])).unwrap(), NfsArgOp::Opseek(_)));
+
+        let res = NfsResOp4::Opsequence(Sequence4res::Resok4(Sequence4resok {
+            sr_sessionid: [0; 16],
+            sr_sequenceid: 1,
+            sr_slotid: 0,
+            sr_highest_slotid: 0,
+            sr_target_highest_slotid: 0,
+            sr_status_flags: 0,
+        }));
+        assert_eq!(to_bytes(&res).unwrap()[..4], 53u32.to_be_bytes());
+        let res = NfsResOp4::OpdestroyClientid(DestroyClientId4res { dcr_status: NfsStat4::Nfs4Ok });
+        assert_eq!(to_bytes(&res).unwrap(), be(&[57, 0]));
+    }
+
+    /// Fieldless enums whose values start at 1 use those values (#121:
+    /// READ_LT (1) decoded as WRITE_LT, WRITEW_LT (4) did not decode).
+    #[test]
+    fn test_enums_use_their_discriminant_on_the_wire() {
+        assert_eq!(from_bytes::<_, NfsLockType4>(be(&[1])).unwrap(), NfsLockType4::ReadLt);
+        assert_eq!(from_bytes::<_, NfsLockType4>(be(&[4])).unwrap(), NfsLockType4::WritewLt);
+        assert!(from_bytes::<_, NfsLockType4>(be(&[0])).is_err());
+        assert_eq!(to_bytes(&NfsLockType4::WriteLt).unwrap(), be(&[2]));
+        assert_eq!(from_bytes::<_, ChannelDirFromClient4>(be(&[3])).unwrap(), ChannelDirFromClient4::ForeOrBoth);
+        assert_eq!(to_bytes(&ChannelDirFromServer4::Both).unwrap(), be(&[3]));
+        assert_eq!(from_bytes::<_, LayoutType4>(be(&[1])).unwrap(), LayoutType4::LayoutNfsv4Files);
+        assert_eq!(to_bytes(&LayoutIomode4::LayoutiomodeRw).unwrap(), be(&[2]));
+        assert_eq!(from_bytes::<_, LayoutReturnType4>(be(&[3])).unwrap(), LayoutReturnType4::LayoutreturnAll);
+        assert_eq!(to_bytes(&NfsCbOpNum4::OpCbillegal).unwrap(), be(&[10044]));
+        assert_eq!(to_bytes(&LimitBy4::NfsLimitBlocks).unwrap(), be(&[2]));
+    }
 
     #[test]
     fn test_stateid4_roundtrip() {

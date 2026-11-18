@@ -116,6 +116,18 @@ fn op_code(arg: &NfsArgOp) -> u32 {
         NfsArgOp::Opallocate(_) => 59,
         NfsArgOp::Opcopy(_) => 60,
         NfsArgOp::Opseek(_) => 69,
+        NfsArgOp::OpbackchannelCtl => 40,
+        NfsArgOp::OpgetDirDelegation => 46,
+        NfsArgOp::OpsetSsv => 54,
+        NfsArgOp::OpwantDelegation => 56,
+        NfsArgOp::OpcopyNotify => 61,
+        NfsArgOp::Opdeallocate => 62,
+        NfsArgOp::OpioAdvise => 63,
+        NfsArgOp::OplayoutError => 64,
+        NfsArgOp::OplayoutStats => 65,
+        NfsArgOp::OpoffloadCancel => 66,
+        NfsArgOp::OpoffloadStatus => 67,
+        NfsArgOp::OpreadPlus => 68,
     }
 }
 
@@ -178,6 +190,18 @@ fn op_name(arg: &NfsArgOp) -> &'static str {
         NfsArgOp::Opallocate(_) => "ALLOCATE",
         NfsArgOp::Opcopy(_) => "COPY",
         NfsArgOp::Opseek(_) => "SEEK",
+        NfsArgOp::OpbackchannelCtl => "BACKCHANNEL_CTL",
+        NfsArgOp::OpgetDirDelegation => "GET_DIR_DELEGATION",
+        NfsArgOp::OpsetSsv => "SET_SSV",
+        NfsArgOp::OpwantDelegation => "WANT_DELEGATION",
+        NfsArgOp::OpcopyNotify => "COPY_NOTIFY",
+        NfsArgOp::Opdeallocate => "DEALLOCATE",
+        NfsArgOp::OpioAdvise => "IO_ADVISE",
+        NfsArgOp::OplayoutError => "LAYOUTERROR",
+        NfsArgOp::OplayoutStats => "LAYOUTSTATS",
+        NfsArgOp::OpoffloadCancel => "OFFLOAD_CANCEL",
+        NfsArgOp::OpoffloadStatus => "OFFLOAD_STATUS",
+        NfsArgOp::OpreadPlus => "READ_PLUS",
     }
 }
 
@@ -797,6 +821,18 @@ impl NFS40Server {
                         NfsArgOp::Opallocate(args) => args.execute(request).await,
                         NfsArgOp::Opcopy(args) => args.execute(request).await,
                         NfsArgOp::Opseek(args) => args.execute(request).await,
+
+                        // Opcodes nextnfs does not implement (their arguments
+                        // are not decoded): NFS4ERR_NOTSUPP with the op's
+                        // result, so the client sees which op failed (#121).
+                        NfsArgOp::OpbackchannelCtl | NfsArgOp::OpgetDirDelegation | NfsArgOp::OpsetSsv | NfsArgOp::OpwantDelegation | NfsArgOp::OpcopyNotify | NfsArgOp::Opdeallocate | NfsArgOp::OpioAdvise | NfsArgOp::OplayoutError | NfsArgOp::OplayoutStats | NfsArgOp::OpoffloadCancel | NfsArgOp::OpoffloadStatus | NfsArgOp::OpreadPlus => NfsOpResponse {
+                            request,
+                            result: Some(NfsResOp4::OpError {
+                                op: opnum,
+                                status: NfsStat4::Nfs4errNotsupp,
+                            }),
+                            status: NfsStat4::Nfs4errNotsupp,
+                        },
                     };
                     // A new file, directory or symlink belongs to the caller.
                     if creates && response.status == NfsStat4::Nfs4Ok {
