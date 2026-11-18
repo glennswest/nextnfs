@@ -437,6 +437,13 @@ pub fn v41_tests() -> Vec<TestDef> {
             layer: TestLayer::Wire,
             tags: vec!["ci", "v41"],
         },
+        TestDef {
+            id: "W41-020",
+            description: "Duplicate request returns cached reply (exactly-once)",
+            version: NfsVersion::V4_1,
+            layer: TestLayer::Wire,
+            tags: vec!["ci", "v41"],
+        },
     ]
 }
 
@@ -468,6 +475,7 @@ pub async fn execute_v41(test_id: &str, client: &RpcClient) -> anyhow::Result<()
         "W41-004" => test_destroy_session(client).await,
         "W41-007" => test_sequence(client).await,
         "W41-010" => test_reclaim_complete(client).await,
+        "W41-020" => test_exactly_once(client).await,
         _ => anyhow::bail!("unknown test ID {}", test_id),
     }
 }
@@ -885,13 +893,23 @@ fn op_create_session(clientid: u64, sequenceid: u32) -> Vec<u8> {
 }
 
 fn op_sequence(sessionid: &[u8; 16], sequenceid: u32, slotid: u32, highest_slotid: u32) -> Vec<u8> {
+    op_sequence_cache(sessionid, sequenceid, slotid, highest_slotid, false)
+}
+
+fn op_sequence_cache(
+    sessionid: &[u8; 16],
+    sequenceid: u32,
+    slotid: u32,
+    highest_slotid: u32,
+    cachethis: bool,
+) -> Vec<u8> {
     let mut enc = XdrEncoder::new();
     enc.put_u32(OP_SEQUENCE);
     enc.put_opaque_fixed(sessionid);
     enc.put_u32(sequenceid);
     enc.put_u32(slotid);
     enc.put_u32(highest_slotid);
-    enc.put_bool(false); // sa_cachethis
+    enc.put_bool(cachethis); // sa_cachethis
     enc.finish().to_vec()
 }
 
@@ -1022,6 +1040,47 @@ async fn test_sequence(client: &RpcClient) -> anyhow::Result<()> {
         anyhow::bail!("SEQUENCE + PUTROOTFH + GETFH failed: status {}", status);
     }
 
+    Ok(())
+}
+
+/// W41-020: a retransmitted request (same slot and seqid, sa_cachethis set)
+/// gets the cached reply byte for byte; a seqid that is neither the next nor
+/// a retry gets NFS4ERR_SEQ_MISORDERED (RFC 8881 §2.10.6).
+async fn test_exactly_once(client: &RpcClient) -> anyhow::Result<()> {
+    const NFS4ERR_SEQ_MISORDERED: u32 = 10063;
+    let (_, sessionid, seq) = setup_v41_session(client).await?;
+    let ops = [
+        op_sequence_cache(&sessionid, seq, 0, 0, true),
+        op_putrootfh(),
+        op_getfh(),
+    ];
+
+    let first = compound(client, "eos", 1, &ops).await?;
+    let (status, _, _) = parse_compound_reply(&first)?;
+    if status != NFS4_OK {
+        anyhow::bail!("SEQUENCE + PUTROOTFH + GETFH failed: status {}", status);
+    }
+
+    let retry = compound(client, "eos", 1, &ops).await?;
+    if retry != first {
+        anyhow::bail!(
+            "retry on the same slot/seqid got a different reply ({} vs {} bytes)",
+            retry.len(),
+            first.len()
+        );
+    }
+
+    let skipped = compound(
+        client,
+        "eos-skip",
+        1,
+        &[op_sequence_cache(&sessionid, seq.wrapping_add(5), 0, 0, true)],
+    )
+    .await?;
+    let (status, _, _) = parse_compound_reply(&skipped)?;
+    if status != NFS4ERR_SEQ_MISORDERED {
+        anyhow::bail!("seqid +5 on slot 0: expected NFS4ERR_SEQ_MISORDERED, got {}", status);
+    }
     Ok(())
 }
 

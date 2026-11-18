@@ -11,7 +11,7 @@ use super::{
     export_manager::{AccessControl, ExportManagerHandle, ExportStats, QuotaManager, RateLimiter},
     filemanager::{FileManagerHandle, Filehandle},
     nfs40::op_pseudo,
-    nfs41::SessionManager,
+    nfs41::{SequenceReplay, SessionManager, SlotClaim},
 };
 
 #[derive(Debug)]
@@ -50,6 +50,10 @@ pub struct NfsRequest<'a> {
     // Session context set by SEQUENCE handler
     pub session_id: Option<[u8; 16]>,
     pub sequence_slotid: Option<u32>,
+    // Slot claimed by this COMPOUND's SEQUENCE; the reply is stored in it (#118)
+    pub slot_claim: Option<SlotClaim>,
+    // Set by SEQUENCE when the COMPOUND is a retry of the slot's last request
+    pub sequence_replay: Option<SequenceReplay>,
     // RPC auth credentials from the calling client
     auth_cred: Option<OpaqueAuth>,
     // Security flavour of the call (AUTH_SYS/AUTH_NONE = sys, or krb5*)
@@ -91,6 +95,8 @@ impl<'a> NfsRequest<'a> {
             session_manager,
             session_id: None,
             sequence_slotid: None,
+            slot_claim: None,
+            sequence_replay: None,
             auth_cred: None,
             sec_flavor: super::export_manager::SecFlavor::Sys,
         }

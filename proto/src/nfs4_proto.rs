@@ -125,6 +125,11 @@ pub enum NfsStat4 {
     Nfs4errRecallconflict = 10061,    /* layout recall conflict   */
     Nfs4errUnknownLayouttype = 10062, /* unknown layout type      */
     Nfs4errSeqMisordered = 10063,     /* sequence op misordered   */
+    Nfs4errSequencePos = 10064,       /* SEQUENCE not first op    */
+    Nfs4errReqTooBig = 10065,         /* request too big          */
+    Nfs4errRepTooBig = 10066,         /* reply too big            */
+    Nfs4errRepTooBigToCache = 10067,  /* rep. not all cached      */
+    Nfs4errRetryUncachedRep = 10068,  /* retry & rep. uncached    */
     Nfs4errOpNotInSession = 10071,    /* op requires session      */
     Nfs4errSeqFalseRetry = 10076,     /* false retry on slot      */
 }

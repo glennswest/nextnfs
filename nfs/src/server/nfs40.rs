@@ -235,7 +235,7 @@ mod op_copy;
 mod op_seek;
 
 use super::NfsProtoImpl;
-use super::nfs41::SessionManager;
+use super::nfs41::{SequenceReplay, SessionManager};
 use tracing::{debug, error};
 
 #[derive(Debug, Clone)]
@@ -485,6 +485,38 @@ impl NfsProtoImpl for NFS40Server {
     }
 
     async fn compound<'a>(
+        &self,
+        msg: CallBody,
+        request: NfsRequest<'a>,
+    ) -> (NfsRequest<'a>, ReplyBody) {
+        let solo_sequence = msg.args.as_ref().is_some_and(|a| {
+            a.argarray.len() == 1 && matches!(a.argarray[0], NfsArgOp::Opsequence(_))
+        });
+        let (mut request, reply) = self.compound_ops(msg, request).await;
+        // The slot this COMPOUND's SEQUENCE claimed keeps its reply for a
+        // retry (RFC 8881 §2.10.6, #118), whatever the COMPOUND's status.
+        // (A claim with no COMPOUND reply to keep frees the slot on drop.)
+        if let (
+            Some(claim),
+            ReplyBody::MsgAccepted(AcceptedReply {
+                reply_data: AcceptBody::Success(res),
+                ..
+            }),
+        ) = (request.slot_claim.take(), &reply)
+        {
+            claim.finish(res, solo_sequence).await;
+        }
+        (request, reply)
+    }
+
+    fn minor_version(&self) -> u32 {
+        1
+    }
+}
+
+impl NFS40Server {
+    /// Runs a COMPOUND's ops (see [`NfsProtoImpl::compound`]).
+    async fn compound_ops<'a>(
         &self,
         msg: CallBody,
         mut request: NfsRequest<'a>,
@@ -819,6 +851,42 @@ impl NfsProtoImpl for NFS40Server {
                         }
                     }
 
+                    // A retried NFSv4.1 request (same slot and seqid) is not
+                    // executed again (#118): send the cached reply, or fail
+                    // the next op with NFS4ERR_RETRY_UNCACHED_REP.
+                    if let Some(replay) = response.request.sequence_replay.take() {
+                        let reply = match replay {
+                            SequenceReplay::Cached(cached) => (*cached).clone(),
+                            SequenceReplay::Uncached => {
+                                resarray.extend(response.result);
+                                let status = match opcodes.get(op_idx + 1) {
+                                    Some(&op) => {
+                                        resarray.push(NfsResOp4::OpError {
+                                            op,
+                                            status: NfsStat4::Nfs4errRetryUncachedRep,
+                                        });
+                                        NfsStat4::Nfs4errRetryUncachedRep
+                                    }
+                                    None => NfsStat4::Nfs4Ok,
+                                };
+                                Compound4res { status, tag: reply_tag.clone(), resarray }
+                            }
+                        };
+                        info!(
+                            client = %response.request.client_addr(),
+                            op = operation,
+                            status = ?reply.status,
+                            "nfs_audit: SEQUENCE retry answered from the slot's reply cache"
+                        );
+                        return (
+                            response.request,
+                            ReplyBody::MsgAccepted(AcceptedReply {
+                                verf: OpaqueAuth::AuthNull(Vec::<u8>::new()),
+                                reply_data: AcceptBody::Success(reply),
+                            }),
+                        );
+                    }
+
                     let res = response.result;
                     last_status = response.status.clone();
 
@@ -882,10 +950,6 @@ impl NfsProtoImpl for NFS40Server {
                 }),
             }),
         )
-    }
-
-    fn minor_version(&self) -> u32 {
-        1
     }
 }
 
@@ -1025,6 +1089,113 @@ mod tests {
             },
             _ => panic!("Expected MsgAccepted"),
         }
+    }
+
+    /// NFSv4.1 COMPOUND: SEQUENCE on `slot`/`seq`, then `ops`.
+    fn v41_compound(tag: &str, sid: [u8; 16], seq: u32, cache: bool, ops: Vec<NfsArgOp>) -> CallBody {
+        let mut argarray = vec![NfsArgOp::Opsequence(Sequence4args {
+            sa_sessionid: sid,
+            sa_sequenceid: seq,
+            sa_slotid: 0,
+            sa_highest_slotid: 0,
+            sa_cachethis: cache,
+        })];
+        argarray.extend(ops);
+        let mut msg = make_compound(argarray);
+        let args = msg.args.as_mut().unwrap();
+        args.minor_version = 1;
+        args.tag = tag.to_string();
+        msg
+    }
+
+    fn remove_f() -> NfsArgOp {
+        NfsArgOp::Opremove(Remove4args { target: "f".to_string() })
+    }
+
+    /// Writable export with its root as the current filehandle, a file `f`,
+    /// and an NFSv4.1 session.
+    async fn v41_request(dir: &std::path::Path) -> (NfsRequest<'static>, [u8; 16]) {
+        std::fs::write(dir.join("f"), b"x").unwrap();
+        let mut request = request_on_export(false, dir).await;
+        let root = request.file_manager().get_root_filehandle().await.unwrap();
+        request.set_filehandle(root);
+        let session = request.session_manager().unwrap().create_session(1, 4).await;
+        (request, session.id)
+    }
+
+    fn compound_res(reply: ReplyBody) -> Compound4res {
+        match reply {
+            ReplyBody::MsgAccepted(AcceptedReply { reply_data: AcceptBody::Success(res), .. }) => res,
+            _ => panic!("Expected a COMPOUND reply"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sequence_retry_replays_cached_reply() {
+        let dir = tempfile::tempdir().unwrap();
+        let (request, sid) = v41_request(dir.path()).await;
+        let server = NFS40Server::new();
+
+        let (request, reply) = server
+            .compound(v41_compound("first", sid, 1, true, vec![remove_f()]), request)
+            .await;
+        let first = compound_res(reply);
+        assert_eq!(first.status, NfsStat4::Nfs4Ok);
+        assert!(!dir.path().join("f").exists());
+
+        // Same slot + seqid: answered from the cache (the original tag, and
+        // the REMOVE is not run again — it would now be NOENT).
+        std::fs::write(dir.path().join("f"), b"again").unwrap();
+        let (request, reply) = server
+            .compound(v41_compound("retry", sid, 1, true, vec![remove_f()]), request)
+            .await;
+        assert_eq!(compound_res(reply), first);
+        assert!(dir.path().join("f").exists(), "retry must not execute REMOVE again");
+
+        // Next seqid runs normally.
+        let (request, reply) = server
+            .compound(v41_compound("next", sid, 2, true, vec![remove_f()]), request)
+            .await;
+        assert_eq!(compound_res(reply).status, NfsStat4::Nfs4Ok);
+        assert!(!dir.path().join("f").exists());
+
+        // A seqid that is neither next nor a retry is misordered.
+        let (_request, reply) = server
+            .compound(v41_compound("skip", sid, 9, true, vec![remove_f()]), request)
+            .await;
+        assert_eq!(compound_res(reply).status, NfsStat4::Nfs4errSeqMisordered);
+    }
+
+    #[tokio::test]
+    async fn test_sequence_retry_uncached() {
+        let dir = tempfile::tempdir().unwrap();
+        let (request, sid) = v41_request(dir.path()).await;
+        let server = NFS40Server::new();
+
+        let (request, reply) = server
+            .compound(v41_compound("first", sid, 1, false, vec![remove_f()]), request)
+            .await;
+        assert_eq!(compound_res(reply).status, NfsStat4::Nfs4Ok);
+
+        std::fs::write(dir.path().join("f"), b"again").unwrap();
+        let (request, reply) = server
+            .compound(v41_compound("retry", sid, 1, false, vec![remove_f()]), request)
+            .await;
+        let res = compound_res(reply);
+        assert_eq!(res.status, NfsStat4::Nfs4errRetryUncachedRep);
+        assert_eq!(res.resarray.len(), 2);
+        assert!(matches!(res.resarray[0], NfsResOp4::Opsequence(Sequence4res::Resok4(_))));
+        assert_eq!(
+            res.resarray[1],
+            NfsResOp4::OpError { op: 28, status: NfsStat4::Nfs4errRetryUncachedRep }
+        );
+        assert!(dir.path().join("f").exists(), "retry must not execute REMOVE again");
+
+        // A SEQUENCE-only COMPOUND is cached even without sa_cachethis.
+        let (request, reply) = server.compound(v41_compound("solo", sid, 2, false, vec![]), request).await;
+        let solo = compound_res(reply);
+        let (_request, reply) = server.compound(v41_compound("again", sid, 2, false, vec![]), request).await;
+        assert_eq!(compound_res(reply), solo);
     }
 
     #[tokio::test]

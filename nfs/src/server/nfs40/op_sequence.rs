@@ -1,7 +1,12 @@
 use async_trait::async_trait;
 use tracing::{debug, error, warn};
 
-use crate::server::{operation::NfsOperation, request::NfsRequest, response::NfsOpResponse};
+use crate::server::{
+    nfs41::{SequenceReplay, SlotCheck},
+    operation::NfsOperation,
+    request::NfsRequest,
+    response::NfsOpResponse,
+};
 use nextnfs_proto::nfs4_proto::{NfsResOp4, NfsStat4, Sequence4args, Sequence4res, Sequence4resok};
 
 #[async_trait]
@@ -38,25 +43,55 @@ impl NfsOperation for Sequence4args {
             }
         };
 
-        // Validate slot ID
-        if self.sa_slotid as usize >= session.slots.len() {
-            warn!(
-                "SEQUENCE: slot {} out of range (max {})",
+        // Slot and sequence id (RFC 8881 §2.10.6.1, #118): a new request
+        // claims the slot, a retry of the last one is answered from the
+        // reply cache, anything else is refused.
+        let error = |request, status| NfsOpResponse { request, result: None, status };
+        match sm
+            .begin_slot(
+                &self.sa_sessionid,
                 self.sa_slotid,
-                session.slots.len() - 1
-            );
-            return NfsOpResponse {
-                request,
-                result: None,
-                status: NfsStat4::Nfs4errBadSlot,
-            };
+                self.sa_sequenceid,
+                self.sa_cachethis,
+            )
+            .await
+        {
+            SlotCheck::New(claim) => request.slot_claim = Some(claim),
+            SlotCheck::Replay(reply) => {
+                debug!("SEQUENCE: retry on slot {}, replaying cached reply", self.sa_slotid);
+                request.sequence_replay = Some(SequenceReplay::Cached(reply));
+            }
+            SlotCheck::ReplayUncached => {
+                debug!("SEQUENCE: retry on slot {}, reply was not cached", self.sa_slotid);
+                request.sequence_replay = Some(SequenceReplay::Uncached);
+            }
+            SlotCheck::InUse => {
+                debug!("SEQUENCE: slot {} still busy with seq {}", self.sa_slotid, self.sa_sequenceid);
+                return error(request, NfsStat4::Nfs4errDelay);
+            }
+            SlotCheck::Misordered => {
+                warn!(
+                    "SEQUENCE: slot {} seq {} misordered",
+                    self.sa_slotid, self.sa_sequenceid
+                );
+                return error(request, NfsStat4::Nfs4errSeqMisordered);
+            }
+            SlotCheck::BadSession => return error(request, NfsStat4::Nfs4errBadSession),
+            SlotCheck::BadSlot => {
+                warn!(
+                    "SEQUENCE: slot {} out of range (max {})",
+                    self.sa_slotid,
+                    session.slots.len().saturating_sub(1)
+                );
+                return error(request, NfsStat4::Nfs4errBadSlot);
+            }
         }
 
         // Store session context in request for subsequent operations
         request.session_id = Some(self.sa_sessionid);
         request.sequence_slotid = Some(self.sa_slotid);
 
-        let highest_slot = (session.slots.len() - 1) as u32;
+        let highest_slot = session.slots.len().saturating_sub(1) as u32;
 
         NfsOpResponse {
             request,

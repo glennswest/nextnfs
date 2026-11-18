@@ -1,7 +1,12 @@
 use async_trait::async_trait;
 use tracing::{debug, error};
 
-use crate::server::{operation::NfsOperation, request::NfsRequest, response::NfsOpResponse};
+use crate::server::{
+    nfs41::{ChannelAttrs, MAX_CACHED_REPLY_SIZE},
+    operation::NfsOperation,
+    request::NfsRequest,
+    response::NfsOpResponse,
+};
 use nextnfs_proto::nfs4_proto::{
     ChannelAttrs4, CreateSession4args, CreateSession4res, CreateSession4resok, NfsResOp4,
     NfsStat4,
@@ -28,10 +33,11 @@ impl NfsOperation for CreateSession4args {
         };
 
         // Use the client-requested max_requests as slot count (capped at 64)
-        let max_slots = self.csa_fore_chan_attrs.ca_maxrequests.min(64);
-        let session = sm.create_session(self.csa_clientid, max_slots).await;
+        // (at least one slot: a session with none could not run SEQUENCE)
+        let max_slots = self.csa_fore_chan_attrs.ca_maxrequests.clamp(1, 64);
 
-        // Negotiate channel attributes — server may lower client's requests
+        // Negotiate channel attributes — server may lower client's requests.
+        // The reply cache keeps at most MAX_CACHED_REPLY_SIZE per slot (#118).
         let fore_chan = ChannelAttrs4 {
             ca_headerpadsize: 0,
             ca_maxrequestsize: self.csa_fore_chan_attrs.ca_maxrequestsize.min(1_048_576),
@@ -39,11 +45,21 @@ impl NfsOperation for CreateSession4args {
             ca_maxresponsesize_cached: self
                 .csa_fore_chan_attrs
                 .ca_maxresponsesize_cached
-                .min(1_048_576),
+                .min(MAX_CACHED_REPLY_SIZE),
             ca_maxoperations: self.csa_fore_chan_attrs.ca_maxoperations.min(64),
             ca_maxrequests: max_slots,
             ca_rdma_ird: vec![],
         };
+        let attrs = ChannelAttrs {
+            max_request_size: fore_chan.ca_maxrequestsize,
+            max_response_size: fore_chan.ca_maxresponsesize,
+            max_response_size_cached: fore_chan.ca_maxresponsesize_cached,
+            max_ops: fore_chan.ca_maxoperations,
+            max_requests: max_slots,
+        };
+        let session = sm
+            .create_session_with(self.csa_clientid, max_slots, attrs)
+            .await;
 
         // Back channel — minimal support (no callbacks yet)
         let back_chan = ChannelAttrs4 {
