@@ -216,3 +216,5 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       NFS4ERR_SEQ_MISORDERED. COMPOUND stores the reply when `sa_cachethis`
       (or SEQUENCE-only) and it fits `ca_maxresponsesize_cached` (capped at
       64 KiB); a dropped request frees its slot. nextnfstest W41-020 back.
+      Code pushed 9fedec0; CHANGELOG/README done. Next: sc-build (tests,
+      clippy, live nextnfstest -V 4.1 wire run), close #118, image.
