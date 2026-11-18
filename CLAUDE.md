@@ -5,7 +5,7 @@ live in `../CLAUDE.md`; this file is the project context and work plan.
 
 ## Version
 
-**0.16.0** (tag `v0.16.0`). Version locations — all must match:
+**0.16.1** (tag `v0.16.1`). Version locations — all must match:
 
 - `Cargo.toml` → `[workspace.package] version` (every crate inherits it)
 - `build.sh` → `VERSION=`

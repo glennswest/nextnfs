@@ -2,11 +2,17 @@
 
 ## [Unreleased]
 
-### 2026-11-18
-- **fix:** XDR enums are encoded by their RFC value, not their position in the Rust enum (#121). `NfsArgOp`/`NfsResOp4` had no variant for opcode 40, so every NFSv4.1 op from 41 up was decoded and answered as the wrong op (EXCHANGE_ID as CREATE_SESSION, SEQUENCE as DESTROY_CLIENTID): no NFSv4.1 COMPOUND worked on the wire. Opcodes 40, 46, 54, 56 and 61–68 now decode and are answered `NFS4ERR_NOTSUPP` with the op's result (their arguments are not decoded). NFSv4.0 LOCK/LOCKT with READ_LT decoded as WRITE_LT (and WRITEW_LT did not decode); the channel-direction, layout-type/iomode/return-type and netloc enums had the same off-by-one
-- **fix:** NFSv4.1 exactly-once semantics (#118, RFC 8881 §2.10.6). SEQUENCE checks `sa_sequenceid` against the slot: the next seqid runs the COMPOUND; a retry of the last request (same slot and seqid) is answered from the slot's reply cache instead of being executed again, so a retransmitted CREATE/REMOVE/RENAME/OPEN is not applied twice; a retry whose reply was not cached gets `NFS4ERR_RETRY_UNCACHED_REP` on the op after SEQUENCE; a retry of a request still running gets `NFS4ERR_DELAY`; any other seqid gets `NFS4ERR_SEQ_MISORDERED`. A reply is cached when `sa_cachethis` is set or the COMPOUND is SEQUENCE alone, and its XDR encoding fits `ca_maxresponsesize_cached`
-- **change:** CREATE_SESSION grants at most 64 KiB `ca_maxresponsesize_cached` (was up to 1 MiB) and at least one slot (a `ca_maxrequests` of 0 made a session with no slots)
-- **feat:** `nextnfstest` W41-020 is back: sends the same SEQUENCE slot/seqid twice with `sa_cachethis` and expects a byte-identical reply, then a skipped seqid and expects `NFS4ERR_SEQ_MISORDERED`
+## [v0.16.1] — 2026-11-18
+
+### Fixed
+- XDR enums are encoded by their RFC value, not their position in the Rust enum (#121). `NfsArgOp`/`NfsResOp4` had no variant for opcode 40, so every NFSv4.1 op from 41 up was decoded and answered as the wrong op (EXCHANGE_ID as CREATE_SESSION, SEQUENCE as DESTROY_CLIENTID): no NFSv4.1 COMPOUND worked on the wire. Opcodes 40, 46, 54, 56 and 61–68 now decode and are answered `NFS4ERR_NOTSUPP` with the op's result (their arguments are not decoded). NFSv4.0 LOCK/LOCKT with READ_LT decoded as WRITE_LT (and WRITEW_LT did not decode); the channel-direction, layout-type/iomode/return-type and netloc enums had the same off-by-one
+- NFSv4.1 exactly-once semantics (#118, RFC 8881 §2.10.6). SEQUENCE checks `sa_sequenceid` against the slot: the next seqid runs the COMPOUND; a retry of the last request (same slot and seqid) is answered from the slot's reply cache instead of being executed again, so a retransmitted CREATE/REMOVE/RENAME/OPEN is not applied twice; a retry whose reply was not cached gets `NFS4ERR_RETRY_UNCACHED_REP` on the op after SEQUENCE; a retry of a request still running gets `NFS4ERR_DELAY`; any other seqid gets `NFS4ERR_SEQ_MISORDERED`. A reply is cached when `sa_cachethis` is set or the COMPOUND is SEQUENCE alone, and its XDR encoding fits `ca_maxresponsesize_cached`
+
+### Changed
+- CREATE_SESSION grants at most 64 KiB `ca_maxresponsesize_cached` (was up to 1 MiB) and at least one slot (a `ca_maxrequests` of 0 made a session with no slots)
+
+### Added
+- `nextnfstest` W41-020 is back: sends the same SEQUENCE slot/seqid twice with `sa_cachethis` and expects a byte-identical reply, then a skipped seqid and expects `NFS4ERR_SEQ_MISORDERED`
 
 ## [v0.16.0] — 2026-11-18
 
