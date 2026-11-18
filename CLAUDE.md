@@ -216,5 +216,9 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       NFS4ERR_SEQ_MISORDERED. COMPOUND stores the reply when `sa_cachethis`
       (or SEQUENCE-only) and it fits `ca_maxresponsesize_cached` (capped at
       64 KiB); a dropped request frees its slot. nextnfstest W41-020 back.
-      Code pushed 9fedec0; CHANGELOG/README done. Next: sc-build (tests,
-      clippy, live nextnfstest -V 4.1 wire run), close #118, image.
+      Code pushed 9fedec0; CHANGELOG/README done. The live nextnfstest
+      -V 4.1 run then failed every test with GARBAGE_ARGS: #121 (enums
+      encoded by variant position; every v4.1 op from 41 up was the wrong
+      op; LOCK READ_LT read as WRITE_LT), fixed in c9749c8. `sc-build`
+      on c9749c8: 612 tests, clippy 0 warnings, live `nextnfstest -V 4.1
+      -l wire` 6/6 incl. W41-020. Next: v0.16.1, close #118/#121, image.
