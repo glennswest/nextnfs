@@ -241,7 +241,7 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       before the op, so a directory swapped for a symlink in between is a
       narrow race; descriptor-relative opens (openat2 RESOLVE_BENEATH)
       would close it. The majors of the same review follow as P1.
-- [ ] 2026-11-20 — #123 (P1): close the symlink-swap race left by #122.
+- [x] 2026-11-20 — #123 (P1): close the symlink-swap race left by #122.
       Plan: `nfs/src/server/beneath.rs` — `ExportRoot` holds an O_PATH fd on
       the export root; every path is opened with `openat2(RESOLVE_BENEATH |
       RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS)` from it (Linux >= 5.6;
@@ -257,9 +257,11 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       Status 2026-11-20 (paused for P0 #125): code, tests, docs, CHANGELOG
       pushed (5741704 … 9b2a9a5). 2c124c7 failed to compile (borrow of a
       temporary `file_manager()`, non-Copy StableHow4), fixed in 9b2a9a5.
-      Next: `sc-build 'cargo test --workspace --locked && cargo clippy
-      --workspace --all-targets --locked'` on 9b2a9a5 green, then v0.18.0
-      (breaking: Linux >= 5.6), close #123, request the image.
+      Done: the race test caught a vfs O_APPEND fallback on NotFound
+      (#126, fixed fded1fc). `sc-build 'cargo test --workspace --locked &&
+      cargo clippy --workspace --all-targets --locked -- -D warnings'` on
+      fded1fc green (642 tests, 0 warnings). Shipped in v0.18.0 (aefebc4)
+      with #125; image build c035a3fc7a81 requested; #123 closed.
 - [x] 2026-11-20 — #125 (P0, review finding ea1e5db68528 on 8a66330, before
       #122's token): the rest of the finding's fix. API listens on
       127.0.0.1:8080 by default (`config::DEFAULT_API_LISTEN`; the container,
