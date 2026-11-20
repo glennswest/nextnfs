@@ -5,7 +5,7 @@ live in `../CLAUDE.md`; this file is the project context and work plan.
 
 ## Version
 
-**0.17.0** (tag `v0.17.0`). Version locations — all must match:
+**0.18.0** (tag `v0.18.0`). Version locations — all must match:
 
 - `Cargo.toml` → `[workspace.package] version` (every crate inherits it)
 - `build.sh` → `VERSION=`
@@ -260,7 +260,7 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       Next: `sc-build 'cargo test --workspace --locked && cargo clippy
       --workspace --all-targets --locked'` on 9b2a9a5 green, then v0.18.0
       (breaking: Linux >= 5.6), close #123, request the image.
-- [ ] 2026-11-20 — #125 (P0, review finding ea1e5db68528 on 8a66330, before
+- [x] 2026-11-20 — #125 (P0, review finding ea1e5db68528 on 8a66330, before
       #122's token): the rest of the finding's fix. API listens on
       127.0.0.1:8080 by default (`config::DEFAULT_API_LISTEN`; the container,
       golden registry config and nfsop all set 0.0.0.0:8080 explicitly);
@@ -271,3 +271,8 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       NotFound — appended inside, never outside. Fixed: vfs fallbacks
       (WRITE, RENAME, SETATTR size) only for `FileManagerHandle::new`
       (MemoryFS tests, `vfs_only`); real-export NotFound WRITE → STALE.
+      `sc-build 'cargo test --workspace --locked && cargo clippy --workspace
+      --all-targets --locked -- -D warnings'` on fded1fc green (642 tests,
+      0 warnings; #126 closed by it). Released v0.18.0 (carries #123's code
+      too); #125 closed; image requested. #123 itself: its code is verified
+      by the same build — close it when it is handed back.
