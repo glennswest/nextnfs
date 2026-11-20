@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### 2026-11-20
+- **fix:** The symlink-swap race left by #122 is closed (#123). The #122 checks look at the path before the op, and the op then worked on the path again, so a directory replaced by a symlink in between (by a second client or a local user) could carry one WRITE, SETATTR, LINK, RENAME, CREATE or READ to a file outside the export. Every op now resolves its path from a directory fd held on the export root with `openat2(RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS)` and works on the returned fd (`pwrite`, `ftruncate`, `fchownat`/`fchmodat2` on an `O_PATH` fd) or with `*at` calls on a confined parent fd (`unlinkat`, `renameat`, `linkat`, `symlinkat`, `readlinkat`, `mkdirat`, `utimensat` with `AT_SYMLINK_NOFOLLOW`): a symlink on the way fails the op (`ELOOP`) at the moment it runs. New `nextnfs-server` module `beneath` (`ExportRoot`, and `BeneathFS`, the `vfs` filesystem that replaces `AltrootFS` over `PhysicalFS`); the permission checks stat the same way. SETATTR size now truncates (`ftruncate`) instead of rewriting the file's first bytes, so a shrink takes effect
+- **BREAKING:** an export needs Linux >= 5.6 (`openat2`); on an older kernel adding the export fails with an error naming it
+
 ## [v0.17.0] — 2026-11-20
 
 ### Breaking
