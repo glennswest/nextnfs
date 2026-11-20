@@ -24,13 +24,15 @@
 //! written through the open that created it). Root (uid 0 *after* squash)
 //! passes everything. An object that cannot be stat()ed is not checked here:
 //! the op itself then fails with its own error.
+//!
+//! Paths here are export paths ("/a/b"), stat()ed beneath the export root's
+//! fd (`ExportRoot`, #123), never through a symlink.
 
-use std::os::unix::ffi::OsStrExt;
-use std::path::{Path, PathBuf};
 
 use nextnfs_proto::nfs4_proto::{FileAttrValue, NfsArgOp, NfsStat4, OpenClaim4, OpenFlag4};
 use nextnfs_proto::rpc_proto::OpaqueAuth;
 
+use super::beneath::ExportRoot;
 use super::export_manager::AccessControl;
 use super::filemanager::{FileManagerHandle, Filehandle, RealMeta};
 use super::nfs40::op_pseudo;
@@ -124,23 +126,29 @@ impl Caller {
     }
 }
 
-fn stat(path: &Path) -> Option<RealMeta> {
-    RealMeta::from_path(&path.to_path_buf())
+fn stat(root: &ExportRoot, path: &str) -> Option<RealMeta> {
+    root.symlink_metadata(path).ok().map(|m| RealMeta::from_metadata(&m))
 }
 
-fn child(fm: &FileManagerHandle, dir: &Filehandle, name: &str) -> PathBuf {
-    fm.real_path(&dir.path).join(name)
+/// `name` in the directory at export path `dir`.
+fn join(dir: &str, name: &str) -> String {
+    format!("{}/{}", dir.trim_end_matches('/'), name)
+}
+
+/// The parent of export path `path` ("/" for the root and its children).
+fn parent(path: &str) -> &str {
+    match path.trim_end_matches('/').rfind('/') {
+        Some(0) | None => "/",
+        Some(i) => &path[..i],
+    }
 }
 
 /// Directory an op on `fh` works in: `fh` itself, or its parent when `fh`
 /// is not a directory (CREATE does the same).
-fn dir_path(fm: &FileManagerHandle, fh: &Filehandle) -> PathBuf {
-    let real = fm.real_path(&fh.path);
-    match stat(&real) {
-        Some(m) if m.mode & libc::S_IFMT != libc::S_IFDIR => {
-            real.parent().map(Path::to_path_buf).unwrap_or(real)
-        }
-        _ => real,
+fn dir_path<'a>(root: &ExportRoot, fh: &'a Filehandle) -> &'a str {
+    match stat(root, &fh.path) {
+        Some(m) if m.mode & libc::S_IFMT != libc::S_IFDIR => parent(&fh.path),
+        _ => &fh.path,
     }
 }
 
@@ -150,8 +158,8 @@ fn need(ok: bool, status: NfsStat4) -> Result<(), NfsStat4> {
 
 /// `want` on the directory at `dir`. Skipped when it cannot be stat()ed or
 /// is not a directory: the op then fails with its own error (NOTDIR, ...).
-fn need_dir(caller: &Caller, dir: &Path, want: u32) -> Result<(), NfsStat4> {
-    match stat(dir) {
+fn need_dir(caller: &Caller, root: &ExportRoot, dir: &str, want: u32) -> Result<(), NfsStat4> {
+    match stat(root, dir) {
         Some(m) if m.mode & libc::S_IFMT == libc::S_IFDIR => {
             need(caller.may(&m, want), NfsStat4::Nfs4errAccess)
         }
@@ -161,22 +169,22 @@ fn need_dir(caller: &Caller, dir: &Path, want: u32) -> Result<(), NfsStat4> {
 
 /// Removing or renaming `name` out of `dir`: w+x on `dir`, and in a sticky
 /// directory only the owner of the directory or of the entry may do it.
-fn need_unlink(caller: &Caller, dir: &Path, name: &str) -> Result<(), NfsStat4> {
-    let Some(dmeta) = stat(dir) else { return Ok(()) };
+fn need_unlink(caller: &Caller, root: &ExportRoot, dir: &str, name: &str) -> Result<(), NfsStat4> {
+    let Some(dmeta) = stat(root, dir) else { return Ok(()) };
     if dmeta.mode & libc::S_IFMT != libc::S_IFDIR {
         return Ok(());
     }
     need(caller.may(&dmeta, MAY_WRITE | MAY_EXEC), NfsStat4::Nfs4errAccess)?;
     if dmeta.mode & libc::S_ISVTX != 0 && !caller.is_owner(&dmeta) {
-        if let Some(entry) = stat(&dir.join(name)) {
+        if let Some(entry) = stat(root, &join(dir, name)) {
             need(caller.is_owner(&entry), NfsStat4::Nfs4errPerm)?;
         }
     }
     Ok(())
 }
 
-fn need_file(caller: &Caller, path: &Path, want: u32) -> Result<(), NfsStat4> {
-    match stat(path) {
+fn need_file(caller: &Caller, root: &ExportRoot, path: &str, want: u32) -> Result<(), NfsStat4> {
+    match stat(root, path) {
         Some(m) => need(caller.may_file(&m, want), NfsStat4::Nfs4errAccess),
         None => Ok(()),
     }
@@ -195,10 +203,11 @@ fn share_want(share_access: u32) -> u32 {
 
 fn check_setattr(
     caller: &Caller,
-    path: &Path,
+    root: &ExportRoot,
+    path: &str,
     attrs: &[FileAttrValue],
 ) -> Result<(), NfsStat4> {
-    let Some(meta) = stat(path) else { return Ok(()) };
+    let Some(meta) = stat(root, path) else { return Ok(()) };
     for attr in attrs {
         match attr {
             FileAttrValue::Size(_) => {
@@ -232,28 +241,25 @@ fn check_setattr(
     Ok(())
 }
 
-fn is_symlink(path: &Path) -> bool {
-    std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink())
+fn is_symlink(root: &ExportRoot, path: &str) -> bool {
+    stat(root, path).is_some_and(|m| m.mode & libc::S_IFMT == libc::S_IFLNK)
 }
 
-/// Whether reaching `path` from the export `root` passes through a symlink
-/// (or a `.`/`..` component): every component before the last must be a real
-/// directory, or the path can lead out of the export (#122). A component
-/// that does not exist is not a symlink; the op then fails on its own.
-fn escapes_root(root: &Path, path: &Path) -> bool {
-    let Ok(rel) = path.strip_prefix(root) else { return true };
-    let comps: Vec<_> = rel.components().collect();
-    let mut cur = root.to_path_buf();
-    for c in comps.iter().take(comps.len().saturating_sub(1)) {
-        match c {
-            std::path::Component::Normal(n) => cur.push(n),
-            _ => return true,
-        }
-        if is_symlink(&cur) {
-            return true;
-        }
+/// Whether reaching export path `path` passes through a symlink (or a
+/// `.`/`..` component): every component before the last must be a real
+/// directory, or the path can lead out of the export (#122). The lookup is
+/// openat2 beneath the root, which fails ELOOP on a symlink on the way and
+/// EXDEV on a way out. A component that does not exist is not a symlink;
+/// the op then fails on its own (and, being resolved the same way, cannot
+/// leave the export either, #123).
+fn escapes_root(root: &ExportRoot, path: &str) -> bool {
+    if path.split('/').any(|c| c == "." || c == "..") {
+        return true;
     }
-    matches!(comps.last(), Some(c) if !matches!(c, std::path::Component::Normal(_)))
+    match root.symlink_metadata(path) {
+        Ok(_) => false,
+        Err(e) => matches!(e.raw_os_error(), Some(libc::ELOOP) | Some(libc::EXDEV)),
+    }
 }
 
 /// A component name a client may give (RFC 7530 §12.7): not empty
@@ -289,11 +295,11 @@ pub fn check_confined(arg: &NfsArgOp, request: &NfsRequest<'_>) -> Result<(), Nf
     }
     let Some(fm) = request.file_manager_opt() else { return Ok(()) };
     let Some(fh) = request.current_filehandle() else { return Ok(()) };
-    let root = fm.export_root();
-    let current = fm.real_path(&fh.path);
+    let root = fm.beneath();
+    let current = fh.path.as_str();
     let saved = match arg {
         NfsArgOp::Oprename(_) | NfsArgOp::Oplink(_) | NfsArgOp::Opcopy(_) => {
-            request.saved_filehandle().map(|s| fm.real_path(&s.path))
+            request.saved_filehandle().map(|s| s.path.as_str())
         }
         _ => None,
     };
@@ -316,12 +322,12 @@ pub fn check_confined(arg: &NfsArgOp, request: &NfsRequest<'_>) -> Result<(), Nf
         _ => {}
     }
 
-    if escapes_root(root, &current) || saved.as_deref().is_some_and(|s| escapes_root(root, s)) {
+    if escapes_root(root, current) || saved.is_some_and(|s| escapes_root(root, s)) {
         return Err(NfsStat4::Nfs4errStale);
     }
 
-    let need_not_symlink = |path: &Path, status: NfsStat4| {
-        if is_symlink(path) { Err(status) } else { Ok(()) }
+    let need_not_symlink = |path: &str, status: NfsStat4| {
+        if is_symlink(root, path) { Err(status) } else { Ok(()) }
     };
     match arg {
         NfsArgOp::Oplookup(_)
@@ -329,29 +335,29 @@ pub fn check_confined(arg: &NfsArgOp, request: &NfsRequest<'_>) -> Result<(), Nf
         | NfsArgOp::Opremove(_)
         | NfsArgOp::Oplink(_)
         | NfsArgOp::Opreaddir(_)
-        | NfsArgOp::OpSecinfo(_) => need_not_symlink(&current, NfsStat4::Nfs4errSymlink),
+        | NfsArgOp::OpSecinfo(_) => need_not_symlink(current, NfsStat4::Nfs4errSymlink),
         NfsArgOp::Oprename(_) => {
-            need_not_symlink(&current, NfsStat4::Nfs4errSymlink)?;
-            match &saved {
+            need_not_symlink(current, NfsStat4::Nfs4errSymlink)?;
+            match saved {
                 Some(s) => need_not_symlink(s, NfsStat4::Nfs4errSymlink),
                 None => Ok(()),
             }
         }
         NfsArgOp::Opopen(a) => match &a.claim {
             OpenClaim4::ClaimNull(name) => {
-                need_not_symlink(&current, NfsStat4::Nfs4errSymlink)?;
-                need_not_symlink(&current.join(name), NfsStat4::Nfs4errSymlink)
+                need_not_symlink(current, NfsStat4::Nfs4errSymlink)?;
+                need_not_symlink(&join(current, name), NfsStat4::Nfs4errSymlink)
             }
-            _ => need_not_symlink(&current, NfsStat4::Nfs4errSymlink),
+            _ => need_not_symlink(current, NfsStat4::Nfs4errSymlink),
         },
         NfsArgOp::Opread(_)
         | NfsArgOp::Opwrite(_)
         | NfsArgOp::Opcommit(_)
         | NfsArgOp::Opallocate(_)
-        | NfsArgOp::Opseek(_) => need_not_symlink(&current, NfsStat4::Nfs4errInval),
+        | NfsArgOp::Opseek(_) => need_not_symlink(current, NfsStat4::Nfs4errInval),
         NfsArgOp::Opcopy(_) => {
-            need_not_symlink(&current, NfsStat4::Nfs4errInval)?;
-            match &saved {
+            need_not_symlink(current, NfsStat4::Nfs4errInval)?;
+            match saved {
                 Some(s) => need_not_symlink(s, NfsStat4::Nfs4errInval),
                 None => Ok(()),
             }
@@ -361,7 +367,7 @@ pub fn check_confined(arg: &NfsArgOp, request: &NfsRequest<'_>) -> Result<(), Nf
                 matches!(v, FileAttrValue::Size(_) | FileAttrValue::Mode(_) | FileAttrValue::Acl(_))
             });
             if content {
-                need_not_symlink(&current, NfsStat4::Nfs4errInval)
+                need_not_symlink(current, NfsStat4::Nfs4errInval)
             } else {
                 Ok(())
             }
@@ -381,20 +387,21 @@ pub fn check_op(arg: &NfsArgOp, request: &NfsRequest<'_>, caller: &Caller) -> Re
     }
     let Some(fm) = request.file_manager_opt() else { return Ok(()) };
     let Some(fh) = request.current_filehandle() else { return Ok(()) };
-    let current = || fm.real_path(&fh.path);
+    let root = fm.beneath();
+    let current = fh.path.as_str();
 
     match arg {
-        NfsArgOp::Oplookup(_) | NfsArgOp::Oplookupp(_) => need_dir(caller, &current(), MAY_EXEC),
-        NfsArgOp::Opreaddir(_) => need_dir(caller, &current(), MAY_READ),
-        NfsArgOp::Opcreate(_) => need_dir(caller, &dir_path(fm, fh), MAY_WRITE | MAY_EXEC),
-        NfsArgOp::Opremove(args) => need_unlink(caller, &current(), &args.target),
+        NfsArgOp::Oplookup(_) | NfsArgOp::Oplookupp(_) => need_dir(caller, root, current, MAY_EXEC),
+        NfsArgOp::Opreaddir(_) => need_dir(caller, root, current, MAY_READ),
+        NfsArgOp::Opcreate(_) => need_dir(caller, root, dir_path(root, fh), MAY_WRITE | MAY_EXEC),
+        NfsArgOp::Opremove(args) => need_unlink(caller, root, current, &args.target),
         NfsArgOp::Oprename(args) => {
             let Some(saved) = request.saved_filehandle() else { return Ok(()) };
             if op_pseudo::export_id_from_fh(&saved.id) != op_pseudo::export_id_from_fh(&fh.id) {
                 return Err(NfsStat4::Nfs4errXdev);
             }
-            need_unlink(caller, &fm.real_path(&saved.path), &args.oldname)?;
-            need_unlink(caller, &current(), &args.newname)
+            need_unlink(caller, root, &saved.path, &args.oldname)?;
+            need_unlink(caller, root, current, &args.newname)
         }
         NfsArgOp::Oplink(_) => {
             if let Some(saved) = request.saved_filehandle() {
@@ -402,32 +409,33 @@ pub fn check_op(arg: &NfsArgOp, request: &NfsRequest<'_>, caller: &Caller) -> Re
                     return Err(NfsStat4::Nfs4errXdev);
                 }
             }
-            need_dir(caller, &current(), MAY_WRITE | MAY_EXEC)
+            need_dir(caller, root, current, MAY_WRITE | MAY_EXEC)
         }
         NfsArgOp::Opopen(args) => match &args.claim {
             OpenClaim4::ClaimNull(name) => {
-                let dir = current();
-                need_dir(caller, &dir, MAY_EXEC)?;
-                let target = child(fm, fh, name);
-                if stat(&target).is_some() {
-                    need_file(caller, &target, share_want(args.share_access))
+                need_dir(caller, root, current, MAY_EXEC)?;
+                let target = join(current, name);
+                if stat(root, &target).is_some() {
+                    need_file(caller, root, &target, share_want(args.share_access))
                 } else if matches!(args.openhow, OpenFlag4::How(_)) {
-                    need_dir(caller, &dir, MAY_WRITE | MAY_EXEC)
+                    need_dir(caller, root, current, MAY_WRITE | MAY_EXEC)
                 } else {
                     Ok(())
                 }
             }
-            _ => need_file(caller, &current(), share_want(args.share_access)),
+            _ => need_file(caller, root, current, share_want(args.share_access)),
         },
-        NfsArgOp::Opread(_) => need_file(caller, &current(), MAY_READ),
-        NfsArgOp::Opwrite(_) | NfsArgOp::Opallocate(_) => need_file(caller, &current(), MAY_WRITE),
+        NfsArgOp::Opread(_) => need_file(caller, root, current, MAY_READ),
+        NfsArgOp::Opwrite(_) | NfsArgOp::Opallocate(_) => need_file(caller, root, current, MAY_WRITE),
         NfsArgOp::Opcopy(_) => {
             if let Some(saved) = request.saved_filehandle() {
-                need_file(caller, &fm.real_path(&saved.path), MAY_READ)?;
+                need_file(caller, root, &saved.path, MAY_READ)?;
             }
-            need_file(caller, &current(), MAY_WRITE)
+            need_file(caller, root, current, MAY_WRITE)
         }
-        NfsArgOp::Opsetattr(args) => check_setattr(caller, &current(), &args.obj_attributes.attr_vals.0),
+        NfsArgOp::Opsetattr(args) => {
+            check_setattr(caller, root, current, &args.obj_attributes.attr_vals.0)
+        }
         _ => Ok(()),
     }
 }
@@ -443,7 +451,7 @@ pub fn creates_object(arg: &NfsArgOp, request: &NfsRequest<'_>) -> bool {
                 return false;
             }
             match (request.file_manager_opt(), request.current_filehandle()) {
-                (Some(fm), Some(fh)) => stat(&child(fm, fh, name)).is_none(),
+                (Some(fm), Some(fh)) => stat(fm.beneath(), &join(&fh.path, name)).is_none(),
                 _ => false,
             }
         }
@@ -457,25 +465,23 @@ pub fn creates_object(arg: &NfsArgOp, request: &NfsRequest<'_>) -> bool {
 pub async fn chown_new_object(request: &mut NfsRequest<'_>, caller: &Caller) {
     let Some(fm) = request.file_manager_opt().cloned() else { return };
     let Some(fh) = request.current_filehandle().cloned() else { return };
-    let real = fm.real_path(&fh.path);
-    let Some(meta) = stat(&real) else { return };
-    let gid = match real.parent().and_then(stat) {
+    let root = fm.beneath();
+    let Some(meta) = stat(root, &fh.path) else { return };
+    let gid = match stat(root, parent(&fh.path)) {
         Some(parent) if parent.mode & libc::S_ISGID != 0 => parent.gid,
         _ => caller.gid,
     };
     if meta.uid == caller.uid && meta.gid == gid {
         return;
     }
-    let Ok(c_path) = std::ffi::CString::new(real.as_os_str().as_bytes()) else { return };
-    // lchown: a new symlink is chowned itself, not its target.
-    let ret = unsafe { libc::lchown(c_path.as_ptr(), caller.uid, gid) };
-    if ret != 0 {
+    // fchownat on an O_PATH fd of the object itself, resolved beneath the
+    // export root (#123): a new symlink is chowned itself, not its target.
+    if let Err(e) = root.lchown(&fh.path, caller.uid, gid) {
         tracing::debug!(
-            path = %real.display(),
+            path = %fh.path,
             uid = caller.uid,
             gid,
-            "chown of new object failed: {}",
-            std::io::Error::last_os_error()
+            "chown of new object failed: {e}"
         );
         return;
     }
@@ -491,6 +497,33 @@ pub async fn chown_new_object(request: &mut NfsRequest<'_>, caller: &Caller) {
 mod tests {
     use super::*;
     use crate::server::export_manager::{AccessConfig, SquashMode};
+
+    #[test]
+    fn test_export_path_helpers() {
+        assert_eq!(join("/", "a"), "/a");
+        assert_eq!(join("/a", "b"), "/a/b");
+        assert_eq!(parent("/a"), "/");
+        assert_eq!(parent("/a/b"), "/a");
+        assert_eq!(parent("/"), "/");
+    }
+
+    #[test]
+    fn test_escapes_root_by_descriptor() {
+        let export = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::create_dir(export.path().join("d")).unwrap();
+        std::fs::write(export.path().join("d/f"), b"x").unwrap();
+        std::os::unix::fs::symlink(outside.path(), export.path().join("l")).unwrap();
+        let root = ExportRoot::open(export.path()).unwrap();
+        assert!(!escapes_root(&root, "/d/f"));
+        assert!(!escapes_root(&root, "/d/missing"));
+        // The link itself is fine (an object), going through it is not.
+        assert!(!escapes_root(&root, "/l"));
+        assert!(escapes_root(&root, "/l/anything"));
+        assert!(escapes_root(&root, "/d/../.."));
+        assert!(is_symlink(&root, "/l"));
+        assert!(!is_symlink(&root, "/d"));
+    }
     use nextnfs_proto::rpc_proto::AuthUnix;
 
     fn unix(uid: u32, gid: u32, gids: Vec<u32>) -> OpaqueAuth {
@@ -583,28 +616,30 @@ mod tests {
     #[test]
     fn test_setattr_rules() {
         let dir = tempfile::tempdir().unwrap();
-        let p = dir.path().join("f");
-        std::fs::write(&p, b"x").unwrap();
-        let m = stat(&p).unwrap();
+        std::fs::write(dir.path().join("f"), b"x").unwrap();
+        let root = ExportRoot::open(dir.path()).unwrap();
+        let root = &root;
+        let p = "/f";
+        let m = stat(root, p).unwrap();
         let owner = Caller { uid: m.uid, gid: m.gid, gids: vec![] };
         let other = Caller { uid: m.uid.wrapping_add(4242), gid: 4242, gids: vec![] };
 
-        assert!(check_setattr(&owner, &p, &[FileAttrValue::Mode(0o600)]).is_ok());
-        assert_eq!(check_setattr(&other, &p, &[FileAttrValue::Mode(0o600)]), Err(NfsStat4::Nfs4errPerm));
+        assert!(check_setattr(&owner, root, p, &[FileAttrValue::Mode(0o600)]).is_ok());
+        assert_eq!(check_setattr(&other, root, p, &[FileAttrValue::Mode(0o600)]), Err(NfsStat4::Nfs4errPerm));
         // Giving the file to someone else needs root.
         let give = FileAttrValue::Owner(other.uid.to_string());
         if !owner.is_root() {
-            assert_eq!(check_setattr(&owner, &p, std::slice::from_ref(&give)), Err(NfsStat4::Nfs4errPerm));
+            assert_eq!(check_setattr(&owner, root, p, std::slice::from_ref(&give)), Err(NfsStat4::Nfs4errPerm));
         }
         let keep = FileAttrValue::Owner(m.uid.to_string());
-        assert!(check_setattr(&owner, &p, &[keep]).is_ok());
+        assert!(check_setattr(&owner, root, p, &[keep]).is_ok());
         // chgrp to a group the owner is not in.
         if !owner.is_root() {
             let grp = FileAttrValue::OwnerGroup("4243".to_string());
-            assert_eq!(check_setattr(&owner, &p, &[grp]), Err(NfsStat4::Nfs4errPerm));
+            assert_eq!(check_setattr(&owner, root, p, &[grp]), Err(NfsStat4::Nfs4errPerm));
         }
         let grp = FileAttrValue::OwnerGroup(m.gid.to_string());
-        assert!(check_setattr(&owner, &p, &[grp]).is_ok());
+        assert!(check_setattr(&owner, root, p, &[grp]).is_ok());
     }
 
     #[test]
@@ -612,14 +647,16 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let d = dir.path();
         std::fs::write(d.join("f"), b"x").unwrap();
-        let m = stat(d).unwrap();
+        let root = ExportRoot::open(d).unwrap();
+        let root = &root;
+        let m = stat(root, "/").unwrap();
         // Group/other may write, sticky set: a non-owner may not remove.
         std::fs::set_permissions(d, std::os::unix::fs::PermissionsExt::from_mode(0o1777)).unwrap();
         let other = Caller { uid: m.uid.wrapping_add(4242), gid: 4242, gids: vec![] };
-        assert_eq!(need_unlink(&other, d, "f"), Err(NfsStat4::Nfs4errPerm));
+        assert_eq!(need_unlink(&other, root, "/", "f"), Err(NfsStat4::Nfs4errPerm));
         std::fs::set_permissions(d, std::os::unix::fs::PermissionsExt::from_mode(0o777)).unwrap();
-        assert!(need_unlink(&other, d, "f").is_ok());
+        assert!(need_unlink(&other, root, "/", "f").is_ok());
         std::fs::set_permissions(d, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
-        assert_eq!(need_unlink(&other, d, "f"), Err(NfsStat4::Nfs4errAccess));
+        assert_eq!(need_unlink(&other, root, "/", "f"), Err(NfsStat4::Nfs4errAccess));
     }
 }

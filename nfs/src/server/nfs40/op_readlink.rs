@@ -27,10 +27,10 @@ impl NfsOperation for Readlink4args {
             }
         };
 
-        // Get the real path via export_root and use std::fs::read_link
+        // readlinkat in the parent resolved beneath the export root (#123).
         let path_str = filehandle.file.as_str().to_string();
-        let real_path = request.file_manager().real_path(&path_str);
-        match std::fs::read_link(&real_path) {
+        let target = request.file_manager().beneath().read_link(&path_str);
+        match target {
             Ok(target) => {
                 let link_target = target.to_string_lossy().to_string();
                 debug!("READLINK {} -> {}", path_str, link_target);

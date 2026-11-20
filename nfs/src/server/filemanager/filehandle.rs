@@ -61,7 +61,12 @@ pub struct RealMeta {
 impl RealMeta {
     pub fn from_path(real_path: &PathBuf) -> Option<Self> {
         let meta = std::fs::symlink_metadata(real_path).ok()?;
-        Some(Self {
+        Some(Self::from_metadata(&meta))
+    }
+
+    /// From an lstat result (`ExportRoot::symlink_metadata`, #123).
+    pub fn from_metadata(meta: &std::fs::Metadata) -> Self {
+        Self {
             ino: meta.ino(),
             dev: meta.dev(),
             mode: meta.mode(),
@@ -76,7 +81,7 @@ impl RealMeta {
             mtime_nsec: meta.mtime_nsec(),
             ctime: meta.ctime(),
             ctime_nsec: meta.ctime_nsec(),
-        })
+        }
     }
 }
 

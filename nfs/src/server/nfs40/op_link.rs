@@ -48,7 +48,6 @@ impl NfsOperation for Link4args {
             }
         };
 
-        // Use std::fs::hard_link with real filesystem paths via export_root
         let source_vfs_path = saved_fh.file.as_str();
         if source_vfs_path.is_empty() || source_vfs_path == "/" {
             // Can't hard-link the root
@@ -59,10 +58,13 @@ impl NfsOperation for Link4args {
             };
         }
 
-        let source_real = request.file_manager().real_path(source_vfs_path);
-        let target_real = request.file_manager().real_path(target_path.as_str());
-
-        match std::fs::hard_link(&source_real, &target_real) {
+        // Both names resolved beneath the export root (#123): linkat on
+        // confined parent directory fds, the source never followed.
+        let linked = request
+            .file_manager()
+            .beneath()
+            .hard_link(source_vfs_path, target_path.as_str());
+        match linked {
             Ok(_) => {
                 let change_before = target_dir.attr_change;
                 let change_after = change_before + 1;

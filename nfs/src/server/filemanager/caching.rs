@@ -1,6 +1,6 @@
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::io::{Seek, SeekFrom, Write};
-use std::os::unix::fs::{FileExt, OpenOptionsExt};
+use std::os::unix::fs::FileExt;
 
 use tokio::sync::mpsc;
 use tracing::{debug, error};
@@ -14,7 +14,6 @@ pub struct WriteCache {
     pub filehandle: Filehandle,
     pub receiver: mpsc::Receiver<WriteCacheMessage>,
     pub filemanager: FileManagerHandle,
-    pub _real_path: std::path::PathBuf,
 }
 
 impl WriteCache {
@@ -22,21 +21,20 @@ impl WriteCache {
         receiver: mpsc::Receiver<WriteCacheMessage>,
         filehandle: Filehandle,
         filemanager: FileManagerHandle,
-        real_path: std::path::PathBuf,
     ) -> Self {
-        // Open the real file for writing — keep the fd open for the duration
-        let file = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .mode(0o644)
-            // A symlink is never written through (#122).
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(&real_path);
+        // Open the file for writing, resolved beneath the export root (no
+        // symlink on the way or as the file, #122/#123); the fd stays open
+        // for the cache's life, so later writes cannot be redirected.
+        let path = filehandle.file.as_str().to_string();
+        let file = filemanager.beneath().open_file(
+            &path,
+            libc::O_WRONLY | libc::O_CREAT,
+            0o644,
+        );
 
         match &file {
-            Ok(_) => debug!("WriteCache opened {:?}", real_path),
-            Err(e) => error!("WriteCache failed to open {:?}: {:?}", real_path, e),
+            Ok(_) => debug!("WriteCache opened {:?}", path),
+            Err(e) => error!("WriteCache failed to open {:?}: {:?}", path, e),
         }
 
         WriteCache {
@@ -45,7 +43,6 @@ impl WriteCache {
             filehandle,
             receiver,
             filemanager,
-            _real_path: real_path,
         }
     }
 
@@ -107,22 +104,26 @@ mod tests {
     use tokio::sync::mpsc;
     use vfs::{MemoryFS, VfsPath};
 
-    fn make_test_handle() -> FileManagerHandle {
+    fn make_test_handle(root: &std::path::Path) -> FileManagerHandle {
         let vfs_root = VfsPath::new(MemoryFS::new());
-        FileManagerHandle::new(vfs_root, Some(1), PathBuf::from("/tmp"))
+        FileManagerHandle::new(vfs_root, Some(1), PathBuf::from(root))
     }
 
-    fn make_test_filehandle() -> super::super::Filehandle {
+    /// A filehandle for `path` ("/a/b"); its parents exist in MemoryFS only.
+    fn make_test_filehandle(path: &str) -> super::super::Filehandle {
         let vfs_root = VfsPath::new(MemoryFS::new());
-        super::super::Filehandle::new(vfs_root, [0u8; 26], 1, 1, 0)
+        let file = vfs_root.join(path.trim_start_matches('/')).unwrap();
+        let _ = file.parent().create_dir_all();
+        super::super::Filehandle::new(file, [0u8; 26], 1, 1, 0)
     }
 
     #[tokio::test]
     async fn test_write_cache_new_invalid_path() {
         let (_, rx) = mpsc::channel(256);
-        let fh = make_test_filehandle();
-        let fm = make_test_handle();
-        let wc = WriteCache::new(rx, fh, fm, PathBuf::from("/nonexistent/path/file.dat"));
+        let dir = tempfile::tempdir().unwrap();
+        let fh = make_test_filehandle("/nonexistent/path/file.dat");
+        let fm = make_test_handle(dir.path());
+        let wc = WriteCache::new(rx, fh, fm);
         assert!(wc.file.is_none());
         assert!(!wc.dirty);
     }
@@ -130,22 +131,22 @@ mod tests {
     #[tokio::test]
     async fn test_write_cache_new_valid_path() {
         let (_, rx) = mpsc::channel(256);
-        let fh = make_test_filehandle();
-        let fm = make_test_handle();
-        let path = PathBuf::from("/tmp/nextnfs_test_cache_valid");
-        let wc = WriteCache::new(rx, fh, fm, path.clone());
+        let dir = tempfile::tempdir().unwrap();
+        let fh = make_test_filehandle("/cache_valid");
+        let fm = make_test_handle(dir.path());
+        let wc = WriteCache::new(rx, fh, fm);
         assert!(wc.file.is_some());
         assert!(!wc.dirty);
-        let _ = std::fs::remove_file(path);
+        assert!(dir.path().join("cache_valid").exists());
     }
 
     #[tokio::test]
     async fn test_write_cache_write_sets_dirty() {
         let (_, rx) = mpsc::channel(256);
-        let fh = make_test_filehandle();
-        let fm = make_test_handle();
-        let path = PathBuf::from("/tmp/nextnfs_test_cache_dirty");
-        let mut wc = WriteCache::new(rx, fh, fm, path.clone());
+        let dir = tempfile::tempdir().unwrap();
+        let fh = make_test_filehandle("/cache_dirty");
+        let fm = make_test_handle(dir.path());
+        let mut wc = WriteCache::new(rx, fh, fm);
         assert!(!wc.dirty);
 
         let write_msg = WriteCacheMessage::Write(WriteBytesRequest {
@@ -154,19 +155,17 @@ mod tests {
         });
         wc.handle_message(write_msg).await;
         assert!(wc.dirty);
-        let _ = std::fs::remove_file(path);
+        assert_eq!(std::fs::read(dir.path().join("cache_dirty")).unwrap(), b"hello");
     }
 
     #[tokio::test]
     async fn test_write_cache_vfs_fallback() {
         let (_, rx) = mpsc::channel(256);
-        let vfs = VfsPath::new(MemoryFS::new());
-        let _ = vfs.join("testfile").unwrap().create_file();
-        let fh = super::super::Filehandle::new(
-            vfs.join("testfile").unwrap(), [0u8; 26], 1, 1, 0,
-        );
-        let fm = make_test_handle();
-        let mut wc = WriteCache::new(rx, fh, fm, PathBuf::from("/nonexistent/fallback"));
+        let dir = tempfile::tempdir().unwrap();
+        let fh = make_test_filehandle("/memonly/testfile");
+        let _ = fh.file.create_file();
+        let fm = make_test_handle(dir.path());
+        let mut wc = WriteCache::new(rx, fh, fm);
         assert!(wc.file.is_none());
 
         let write_msg = WriteCacheMessage::Write(WriteBytesRequest {

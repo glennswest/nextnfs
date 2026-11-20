@@ -84,10 +84,9 @@ impl NfsOperation for Rename4args {
 
         // Perform the rename via direct filesystem call (preserves inodes).
         //
-        // We bypass VfsPath::move_file() because the vfs crate's AltrootFS
-        // doesn't implement FileSystem::move_file(), causing it to fall through
-        // to a copy-and-delete path that creates a NEW inode. The Linux kernel
-        // then detects "fileid changed" and reports ESTALE.
+        // Not VfsPath::move_file(): it refuses an existing destination,
+        // which RENAME replaces, and falls back to copy-and-delete (a NEW
+        // inode, which the Linux client reports as ESTALE).
         let dst_vfs = match current_fh.file.join(&self.newname) {
             Ok(p) => p,
             Err(_) => {
@@ -99,20 +98,22 @@ impl NfsOperation for Rename4args {
             }
         };
         let is_dir = src_vfs.is_dir().unwrap_or(false);
-        let real_src = request.file_manager().real_path(&src_path);
-        let real_dst = request.file_manager().real_path(&dst_path);
-        let result = if real_src.exists() {
-            // Physical filesystem — use std::fs::rename() directly to preserve inodes.
-            std::fs::rename(&real_src, &real_dst).map_err(|e| {
-                error!("std::fs::rename({:?} -> {:?}) failed: {}", real_src, real_dst, e);
-                vfs::VfsError::from(vfs::error::VfsErrorKind::IoError(e))
-            })
-        } else {
-            // Non-physical filesystem (e.g., MemoryFS in tests) — use VFS.
-            if is_dir {
-                src_vfs.move_dir(&dst_vfs)
-            } else {
-                src_vfs.move_file(&dst_vfs)
+        // renameat on parent directory fds resolved beneath the export root
+        // (#123); a symlink on either path fails the rename (ELOOP).
+        let beneath = request.file_manager().beneath();
+        let result = match beneath.rename(&src_path, &dst_path) {
+            Ok(()) => Ok(()),
+            // Not on disk: MemoryFS in unit tests — use the VFS.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound && !beneath.exists(&src_path) => {
+                if is_dir {
+                    src_vfs.move_dir(&dst_vfs)
+                } else {
+                    src_vfs.move_file(&dst_vfs)
+                }
+            }
+            Err(e) => {
+                error!("rename({:?} -> {:?}) failed: {}", src_path, dst_path, e);
+                Err(vfs::VfsError::from(vfs::error::VfsErrorKind::IoError(e)))
             }
         };
 

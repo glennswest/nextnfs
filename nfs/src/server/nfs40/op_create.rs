@@ -73,10 +73,15 @@ impl NfsOperation for Create4args {
                 };
 
                 let link_vfs_str = link_path.as_str().to_string();
-                let link_real = request.file_manager().real_path(&link_vfs_str);
                 let parent_vfs_str = current_dir.as_str().to_string();
                 let before_change = request.file_manager().dir_change_attr(&parent_vfs_str);
-                match std::os::unix::fs::symlink(linkdata, &link_real) {
+                // symlinkat in the parent resolved beneath the export root
+                // (#123); the target is stored as given, never resolved.
+                let made = request
+                    .file_manager()
+                    .beneath()
+                    .symlink(std::ffi::OsStr::new(linkdata.as_str()), &link_vfs_str);
+                match made {
                     Ok(_) => {
                         request.file_manager().touch_file(filehandle.id).await;
                         let after_change = request.file_manager().dir_change_attr(&parent_vfs_str);
@@ -143,9 +148,8 @@ impl NfsOperation for Create4args {
                 // An existing name (file, directory, or a symlink, dangling
                 // or not) is NFS4ERR_EXIST: a CREATE that "succeeded" on it
                 // would hand the existing object to the caller (#122).
-                let new_real = request.file_manager().real_path(new_dir.as_str());
                 let exists = new_dir.exists().unwrap_or(false)
-                    || std::fs::symlink_metadata(&new_real).is_ok();
+                    || request.file_manager().beneath().exists(new_dir.as_str());
                 let created = if exists {
                     Err(NfsStat4::Nfs4errExist)
                 } else {

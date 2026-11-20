@@ -3730,6 +3730,161 @@ mod tests {
         assert_eq!(std::fs::read(outside.path().join("secret")).unwrap(), b"outside");
     }
 
+    // --- #123: the op itself resolves beneath the export root ---
+
+    /// An export with d/secret ("inside") and a handle for it; then d is
+    /// swapped for a symlink to the outside directory, as if after the
+    /// dispatcher's checks had passed.
+    async fn swapped_after_check() -> (
+        tempfile::TempDir,
+        tempfile::TempDir,
+        NfsRequest<'static>,
+        crate::server::filemanager::Filehandle,
+    ) {
+        let (export, outside) = symlink_export();
+        std::fs::create_dir(export.path().join("d")).unwrap();
+        std::fs::write(export.path().join("d/secret"), b"inside").unwrap();
+        let request = request_on_export_squash(false, export.path(), SquashMode::None).await;
+        let fh = request
+            .file_manager()
+            .get_filehandle_for_path("/d/secret".to_string())
+            .await
+            .unwrap();
+        std::fs::rename(export.path().join("d"), export.path().join("moved")).unwrap();
+        std::os::unix::fs::symlink(outside.path(), export.path().join("d")).unwrap();
+        (export, outside, request, fh)
+    }
+
+    #[tokio::test]
+    async fn test_beneath_ops_after_swap_stay_inside() {
+        use crate::server::operation::NfsOperation;
+        let (export, outside, mut request, fh) = swapped_after_check().await;
+        let secret = outside.path().join("secret");
+        let mode_before = std::fs::metadata(&secret).unwrap().permissions().mode();
+
+        // WRITE (sync and unstable), run without the dispatcher's checks.
+        for stable in [StableHow4::FileSync4, StableHow4::Unstable4] {
+            request.set_filehandle(fh.clone());
+            let args = Write4args {
+                stateid: Stateid4 { seqid: 0, other: [0; 12] },
+                offset: 0,
+                stable,
+                data: b"x".to_vec(),
+            };
+            let resp = args.execute(request).await;
+            request = resp.request;
+            if stable == StableHow4::FileSync4 {
+                assert_ne!(resp.status, NfsStat4::Nfs4Ok);
+            }
+        }
+        // SETATTR size and mode, owner and times.
+        let (uid, gid) = own_ids();
+        let set = request.file_manager().set_attr(
+            &fh,
+            &Attrlist4(vec![
+                FileAttrValue::Size(0),
+                FileAttrValue::Mode(0o777),
+                FileAttrValue::Owner(uid.to_string()),
+                FileAttrValue::OwnerGroup(gid.to_string()),
+                FileAttrValue::TimeModifySet,
+            ]),
+        );
+        assert!(set.0.is_empty(), "set through the swapped directory: {:?}", set.0);
+        // READ through the vfs (BeneathFS).
+        assert!(fh.file.open_file().is_err());
+        // REMOVE, RENAME and LINK of the name below the symlink.
+        let root = request.file_manager().beneath();
+        assert!(root.remove_file("/d/secret").is_err());
+        assert!(root.rename("/d/secret", "/stolen").is_err());
+        assert!(root.hard_link("/d/secret", "/stolen").is_err());
+        assert!(fh.file.remove_file().is_err());
+
+        assert_eq!(std::fs::read(&secret).unwrap(), b"outside");
+        assert_eq!(std::fs::metadata(&secret).unwrap().permissions().mode(), mode_before);
+        assert!(!export.path().join("stolen").exists());
+        assert_eq!(std::fs::read(export.path().join("moved/secret")).unwrap(), b"inside");
+    }
+
+    /// The issue's test: a thread swaps d for a symlink to the outside
+    /// directory and back, in a loop, while WRITEs of d/secret run, through
+    /// the dispatcher and as the op alone. The outside file never changes.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_beneath_write_races_symlink_swap() {
+        use crate::server::operation::NfsOperation;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        let (export, outside) = symlink_export();
+        let d = export.path().join("d");
+        std::fs::create_dir(&d).unwrap();
+        std::fs::write(d.join("secret"), b"inside").unwrap();
+        let mut request = request_on_export_squash(false, export.path(), SquashMode::None).await;
+        let fh = request
+            .file_manager()
+            .get_filehandle_for_path("/d/secret".to_string())
+            .await
+            .unwrap();
+        let mut id = fh.id;
+        op_pseudo::stamp_export_id(&mut id, request.current_export_id().unwrap());
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let swapper = {
+            let (d, out, held, stop) = (
+                d.clone(),
+                outside.path().to_path_buf(),
+                export.path().join("held"),
+                stop.clone(),
+            );
+            std::thread::spawn(move || {
+                let mut swaps = 0u64;
+                while !stop.load(Ordering::Relaxed) {
+                    std::fs::rename(&d, &held).unwrap();
+                    std::os::unix::fs::symlink(&out, &d).unwrap();
+                    std::thread::yield_now();
+                    std::fs::remove_file(&d).unwrap();
+                    std::fs::rename(&held, &d).unwrap();
+                    std::thread::yield_now();
+                    swaps += 1;
+                }
+                swaps
+            })
+        };
+
+        let (uid, gid) = own_ids();
+        let server = NFS40Server::new();
+        let mut written = 0;
+        for _ in 0..400 {
+            let msg = make_compound_as(
+                auth_sys(uid, gid),
+                vec![NfsArgOp::Opputfh(PutFh4args { object: id }), write_op()],
+            );
+            let (r, _reply) = server.compound(msg, request).await;
+            request = r;
+
+            request.set_filehandle(fh.clone());
+            let args = Write4args {
+                stateid: Stateid4 { seqid: 0, other: [0; 12] },
+                offset: 0,
+                stable: StableHow4::FileSync4,
+                data: b"x".to_vec(),
+            };
+            let resp = args.execute(request).await;
+            if resp.status == NfsStat4::Nfs4Ok {
+                written += 1;
+            }
+            request = resp.request;
+        }
+        stop.store(true, Ordering::Relaxed);
+        let swaps = swapper.join().unwrap();
+
+        assert!(swaps > 0);
+        assert_eq!(std::fs::read(outside.path().join("secret")).unwrap(), b"outside");
+        // The writes that went through landed inside.
+        if written > 0 {
+            assert_eq!(std::fs::read(d.join("secret")).unwrap(), b"xnside");
+        }
+    }
+
     #[tokio::test]
     async fn test_create_existing_name_is_exist() {
         let dir = tempfile::tempdir().unwrap();

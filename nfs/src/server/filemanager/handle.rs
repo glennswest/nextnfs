@@ -3,6 +3,9 @@ use tracing::{debug, error, warn};
 use vfs::VfsPath;
 
 use std::path::PathBuf;
+use std::sync::Arc;
+
+use crate::server::beneath::ExportRoot;
 
 use nextnfs_proto::nfs4_proto::{
     Attrlist4, FileAttr, FileAttrValue, NfsLease4, NfsLockType4, Nfsace4, NfsStat4, Nfstime4,
@@ -271,6 +274,8 @@ pub fn mode_to_acl(mode: u32, owner: &str, group: &str) -> Vec<Nfsace4> {
 pub struct FileManagerHandle {
     sender: mpsc::Sender<FileManagerMessage>,
     export_root: PathBuf,
+    /// Every path of the export is resolved beneath this fd (#123).
+    beneath: Arc<ExportRoot>,
     lease_time: u32,
     hard_link_support: bool,
     symlink_support: bool,
@@ -278,14 +283,24 @@ pub struct FileManagerHandle {
 }
 
 impl FileManagerHandle {
+    /// A file manager for `root` at `export_root`, which is opened as the
+    /// confining root (`ExportRoot::open_or_closed`: if it cannot be, every
+    /// op on the export fails).
     pub fn new(root: VfsPath, fsid: Option<u64>, export_root: PathBuf) -> Self {
+        Self::with_root(root, fsid, Arc::new(ExportRoot::open_or_closed(&export_root)))
+    }
+
+    /// A file manager whose paths are resolved beneath `beneath`.
+    pub fn with_root(root: VfsPath, fsid: Option<u64>, beneath: Arc<ExportRoot>) -> Self {
         let (sender, receiver) = mpsc::channel(256);
-        let fmanager = FileManager::new(receiver, root, fsid, export_root.clone());
+        let export_root = beneath.path().to_path_buf();
+        let fmanager = FileManager::new(receiver, root, fsid, beneath.clone());
         tokio::spawn(run_file_manager(fmanager));
 
         Self {
             sender,
             export_root,
+            beneath,
             lease_time: 90,
             hard_link_support: true,
             symlink_support: true,
@@ -298,7 +313,19 @@ impl FileManagerHandle {
         &self.export_root
     }
 
-    /// Construct a real filesystem path from a VFS path string.
+    /// The export root fd that every op resolves its path beneath (#123).
+    pub fn beneath(&self) -> &ExportRoot {
+        &self.beneath
+    }
+
+    /// lstat of the export path `path` ("/a/b"), resolved beneath the root.
+    pub fn meta(&self, path: &str) -> Option<RealMeta> {
+        self.beneath.symlink_metadata(path).ok().map(|m| RealMeta::from_metadata(&m))
+    }
+
+    /// The server path of an export path, for messages only: ops never open
+    /// it (a symlink swapped in on the way would be followed), they go
+    /// through `beneath()`.
     pub fn real_path(&self, vfs_path: &str) -> PathBuf {
         if vfs_path.is_empty() || vfs_path == "/" {
             self.export_root.clone()
@@ -312,8 +339,7 @@ impl FileManagerHandle {
     /// populate ChangeInfo4 before/after for directory-modifying operations
     /// that execute outside the FileManager actor (so cinfo.atomic = false).
     pub fn dir_change_attr(&self, vfs_path: &str) -> u64 {
-        let real_path = self.real_path(vfs_path);
-        super::filehandle::RealMeta::from_path(&real_path)
+        self.meta(vfs_path)
             .map(|m| {
                 (m.mtime as u64)
                     .wrapping_mul(1_000_000_000)
@@ -758,7 +784,7 @@ impl FileManagerHandle {
         // Refresh from real filesystem to pick up current size/mtime/etc.
         let real_path = self.real_path(filehandle.file.as_str());
         let input_fileid = filehandle.attr_fileid;
-        let fh = if let Some(meta) = RealMeta::from_path(&real_path) {
+        let fh = if let Some(meta) = self.meta(filehandle.file.as_str()) {
             let refreshed = Filehandle::new_real(
                 filehandle.file.clone(),
                 filehandle.id,
@@ -1070,52 +1096,55 @@ impl FileManagerHandle {
         None
     }
 
+    /// SETATTR size on a vfs-only file (MemoryFS in unit tests): read it,
+    /// cut or zero-extend it to `size`, write it back.
+    fn vfs_set_len(file: &VfsPath, size: u64) -> std::io::Result<()> {
+        use std::io::{Read, Write};
+        let io = |e: vfs::VfsError| std::io::Error::other(e.to_string());
+        let mut data = Vec::new();
+        file.open_file().map_err(io)?.read_to_end(&mut data)?;
+        data.resize(size as usize, 0);
+        let mut out = file.create_file().map_err(io)?;
+        out.write_all(&data)?;
+        out.flush()
+    }
+
     pub fn set_attr(
         &self,
         filehandle: &Filehandle,
         attr_vals: &Attrlist4<FileAttrValue>,
     ) -> Attrlist4<FileAttr> {
         let mut attrsset = Attrlist4::<FileAttr>::new(None);
-        let real_path = self.real_path(filehandle.file.as_str());
-        // Owner, group and times are set on a symlink itself (lchown,
-        // AT_SYMLINK_NOFOLLOW), never on what it points to (#122).
-        let is_symlink = std::fs::symlink_metadata(&real_path)
-            .is_ok_and(|m| m.file_type().is_symlink());
+        // Every change is made on the object resolved beneath the export
+        // root at the moment of the change (#123). Owner, group and times
+        // are set on a symlink itself, never on what it points to; size and
+        // mode are refused on one (ELOOP; the dispatcher already answers
+        // NFS4ERR_INVAL, #122).
+        let path = filehandle.file.as_str();
+        let root = &self.beneath;
         for attr in attr_vals.iter() {
             match attr {
-                FileAttrValue::Size(args) => {
-                    debug!("Set size to: {:?}", args);
-                    if is_symlink {
-                        error!("SETATTR size on a symlink refused");
-                        continue;
-                    }
-                    let mut buf = vec![0_u8; *args as usize];
-                    let result = (|| -> Result<(), Box<dyn std::error::Error>> {
-                        let mut file = filehandle.file.open_file()?;
-                        let _ = file.rewind();
-                        file.read_exact(&mut buf)?;
-
-                        let mut file = filehandle.file.append_file()?;
-                        let _ = file.rewind();
-                        file.write_all(&buf)?;
-                        file.flush()?;
-                        Ok(())
-                    })();
+                FileAttrValue::Size(size) => {
+                    debug!("Set size to: {:?}", size);
+                    let result = match root.set_len(path, *size) {
+                        // MemoryFS (unit tests) has no file under the root.
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound
+                            && filehandle.file.exists().unwrap_or(false) =>
+                        {
+                            Self::vfs_set_len(&filehandle.file, *size)
+                        }
+                        other => other,
+                    };
                     match result {
-                        Ok(_) => attrsset.push(FileAttr::Size),
+                        Ok(()) => attrsset.push(FileAttr::Size),
                         Err(e) => error!("SETATTR size failed: {}", e),
                     }
                 }
                 FileAttrValue::Owner(uid_str) => {
                     if let Some(uid) = Self::resolve_nfs4_uid(uid_str) {
-                        let c_path = std::ffi::CString::new(
-                            real_path.to_string_lossy().as_ref()
-                        ).unwrap_or_default();
-                        let ret = unsafe { libc::lchown(c_path.as_ptr(), uid, u32::MAX) };
-                        if ret == 0 {
-                            attrsset.push(FileAttr::Owner);
-                        } else {
-                            error!("SETATTR chown(uid={}) failed: {}", uid, std::io::Error::last_os_error());
+                        match root.lchown(path, uid, u32::MAX) {
+                            Ok(()) => attrsset.push(FileAttr::Owner),
+                            Err(e) => error!("SETATTR chown(uid={}) failed: {}", uid, e),
                         }
                     } else {
                         error!("SETATTR Owner: cannot resolve {:?} to uid", uid_str);
@@ -1123,53 +1152,23 @@ impl FileManagerHandle {
                 }
                 FileAttrValue::OwnerGroup(gid_str) => {
                     if let Some(gid) = Self::resolve_nfs4_gid(gid_str) {
-                        let c_path = std::ffi::CString::new(
-                            real_path.to_string_lossy().as_ref()
-                        ).unwrap_or_default();
-                        let ret = unsafe { libc::lchown(c_path.as_ptr(), u32::MAX, gid) };
-                        if ret == 0 {
-                            attrsset.push(FileAttr::OwnerGroup);
-                        } else {
-                            error!("SETATTR chown(gid={}) failed: {}", gid, std::io::Error::last_os_error());
+                        match root.lchown(path, u32::MAX, gid) {
+                            Ok(()) => attrsset.push(FileAttr::OwnerGroup),
+                            Err(e) => error!("SETATTR chown(gid={}) failed: {}", gid, e),
                         }
                     } else {
                         error!("SETATTR OwnerGroup: cannot resolve {:?} to gid", gid_str);
                     }
                 }
-                FileAttrValue::Mode(mode) => {
-                    // chmod follows a symlink: never on one (#122; the
-                    // dispatcher refuses it with NFS4ERR_INVAL first).
-                    if is_symlink {
-                        error!("SETATTR mode on a symlink refused");
-                        continue;
-                    }
-                    let c_path = std::ffi::CString::new(
-                        real_path.to_string_lossy().as_ref()
-                    ).unwrap_or_default();
-                    let ret = unsafe { libc::chmod(c_path.as_ptr(), *mode as libc::mode_t) };
-                    if ret == 0 {
-                        attrsset.push(FileAttr::Mode);
-                    } else {
-                        error!("SETATTR chmod({:#o}) failed: {}", mode, std::io::Error::last_os_error());
-                    }
-                }
+                FileAttrValue::Mode(mode) => match root.chmod(path, *mode) {
+                    Ok(()) => attrsset.push(FileAttr::Mode),
+                    Err(e) => error!("SETATTR chmod({:#o}) failed: {}", mode, e),
+                },
                 FileAttrValue::TimeModifySet => {
-                    // SET_TO_SERVER_TIME4: set mtime to current server time
-                    let c_path = std::ffi::CString::new(
-                        real_path.to_string_lossy().as_ref()
-                    ).unwrap_or_default();
-                    // UTIME_NOW for both atime and mtime
-                    let times = [
-                        libc::timespec { tv_sec: 0, tv_nsec: libc::UTIME_NOW },
-                        libc::timespec { tv_sec: 0, tv_nsec: libc::UTIME_NOW },
-                    ];
-                    let ret = unsafe {
-                        libc::utimensat(libc::AT_FDCWD, c_path.as_ptr(), times.as_ptr(), libc::AT_SYMLINK_NOFOLLOW)
-                    };
-                    if ret == 0 {
-                        attrsset.push(FileAttr::TimeModifySet);
-                    } else {
-                        error!("SETATTR utimensat failed: {}", std::io::Error::last_os_error());
+                    // SET_TO_SERVER_TIME4: atime and mtime to the server's time.
+                    match root.set_times(path, None, None) {
+                        Ok(()) => attrsset.push(FileAttr::TimeModifySet),
+                        Err(e) => error!("SETATTR utimensat failed: {}", e),
                     }
                 }
                 _ => {
@@ -1272,10 +1271,9 @@ impl WriteCacheHandle {
     pub fn new(
         filehandle: Filehandle,
         filemanager: FileManagerHandle,
-        real_path: std::path::PathBuf,
     ) -> Self {
         let (sender, receiver) = mpsc::channel(256);
-        let write_cache = WriteCache::new(receiver, filehandle, filemanager, real_path);
+        let write_cache = WriteCache::new(receiver, filehandle, filemanager);
         tokio::spawn(run_file_write_cache(write_cache));
 
         Self { sender }

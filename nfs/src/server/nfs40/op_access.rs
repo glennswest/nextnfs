@@ -78,7 +78,7 @@ impl NfsOperation for Access4args {
             // handle's attrs when the object cannot be stat()ed.
             let meta = request
                 .file_manager_opt()
-                .and_then(|fm| RealMeta::from_path(&fm.real_path(&fh.path)))
+                .and_then(|fm| fm.meta(&fh.path))
                 .unwrap_or_else(|| RealMeta {
                     ino: fh.attr_fileid,
                     dev: 0,

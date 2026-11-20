@@ -7,7 +7,9 @@ use std::time::Instant;
 
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tracing::info;
-use vfs::{AltrootFS, PhysicalFS, VfsPath};
+use vfs::VfsPath;
+
+use super::beneath::{BeneathFS, ExportRoot};
 
 use super::filemanager::FileManagerHandle;
 
@@ -778,13 +780,17 @@ impl ExportManager {
             return Err(format!("{} is not a directory", canonical.display()));
         }
 
+        // Every path of the export is resolved beneath this fd (#123).
+        let beneath = Arc::new(ExportRoot::open(&canonical).map_err(|e| {
+            format!("export path {}: {}", canonical.display(), e)
+        })?);
+
         let export_id = self.next_export_id;
         self.next_export_id += 1;
 
-        let vfs_root: VfsPath =
-            AltrootFS::new(VfsPath::new(PhysicalFS::new(&canonical))).into();
+        let vfs_root = VfsPath::new(BeneathFS::new(beneath.clone()));
         let file_manager =
-            FileManagerHandle::new(vfs_root.clone(), Some(export_id as u64), canonical.clone());
+            FileManagerHandle::with_root(vfs_root.clone(), Some(export_id as u64), beneath);
 
         let stats = ExportStats::new();
         let rate_limiter = Arc::new(Mutex::new(RateLimiter::new(QosConfig::default())));

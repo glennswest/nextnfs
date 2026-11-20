@@ -1,5 +1,5 @@
 use std::io::Write;
-use std::os::unix::fs::{FileExt, OpenOptionsExt};
+use std::os::unix::fs::FileExt;
 use std::sync::atomic::Ordering;
 
 use async_trait::async_trait;
@@ -83,14 +83,22 @@ impl NfsOperation for Write4args {
             // appenders atomically (the kernel positions the write at the true
             // end of file). Writes past EOF (sparse/seek) still use pwrite to
             // preserve the requested offset and create holes.
-            let real_path = request.file_manager().real_path(filehandle.file.as_str());
-            let write_result = if real_path.exists() {
-                let file_len = std::fs::metadata(&real_path).map(|m| m.len()).unwrap_or(0);
+            //
+            // The file is opened beneath the export root (#123): no symlink
+            // on the way or as the file, at the moment of the open.
+            let path = filehandle.file.as_str().to_string();
+            let beneath = request.file_manager().beneath();
+            let on_disk = match beneath.symlink_metadata(&path) {
+                Ok(meta) => Ok(meta.len()),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(None),
+                Err(e) => Err(Some(e)),
+            };
+            let write_result = if let Ok(file_len) = on_disk {
                 if self.offset == file_len {
                     // Append at exact EOF: use O_APPEND so the kernel atomically
                     // positions the write at the true end of file, preventing
                     // concurrent appenders from overwriting each other.
-                    match std::fs::OpenOptions::new().append(true).custom_flags(libc::O_NOFOLLOW).open(&real_path) {
+                    match beneath.open_file(&path, libc::O_WRONLY | libc::O_APPEND, 0) {
                         Ok(mut file) => {
                             file.write_all(&self.data)
                                 .and_then(|_| file.sync_all())
@@ -100,7 +108,7 @@ impl NfsOperation for Write4args {
                     }
                 } else {
                     // Positional write (mid-file or sparse/past-EOF): use pwrite
-                    match std::fs::OpenOptions::new().write(true).custom_flags(libc::O_NOFOLLOW).open(&real_path) {
+                    match beneath.open_file(&path, libc::O_WRONLY, 0) {
                         Ok(file) => {
                             file.write_all_at(&self.data, self.offset)
                                 .and_then(|_| file.sync_all())
@@ -109,6 +117,10 @@ impl NfsOperation for Write4args {
                         Err(e) => Err(e),
                     }
                 }
+            } else if let Err(Some(e)) = on_disk {
+                // A symlink on the way (ELOOP) or a path out of the export
+                // (EXDEV): refused, never written.
+                Err(e)
             } else {
                 // VFS fallback (MemoryFS in tests): seek + write
                 match filehandle.file.append_file() {

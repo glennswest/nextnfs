@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::os::unix::fs::MetadataExt;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use nextnfs_proto::nfs4_proto::{
     Attrlist4, FileAttr, FileAttrValue, FsLocations4, NfsFh4, NfsStat4, Stateid4,
@@ -23,6 +24,8 @@ use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 use vfs::VfsPath;
 
+use super::beneath::ExportRoot;
+
 /// Delegation held on a file by a client.
 #[derive(Debug, Clone)]
 pub struct DelegationState {
@@ -35,6 +38,8 @@ pub struct DelegationState {
 pub struct FileManager {
     pub root: VfsPath,
     pub export_root: PathBuf,
+    /// The export root's fd every path is resolved beneath (#123).
+    pub beneath: Arc<ExportRoot>,
     pub lease_time: u32,
     pub hard_link_support: bool,
     pub symlink_support: bool,
@@ -61,8 +66,9 @@ impl FileManager {
         receiver: mpsc::Receiver<FileManagerMessage>,
         root: VfsPath,
         fsid: Option<u64>,
-        export_root: PathBuf,
+        beneath: Arc<ExportRoot>,
     ) -> Self {
+        let export_root = beneath.path().to_path_buf();
         let export_id = fsid.map(|f| f as u8).unwrap_or(0);
         let fsid = fsid.unwrap_or(152);
         let boot_time = std::time::UNIX_EPOCH.elapsed().unwrap_or_default().as_secs();
@@ -70,6 +76,7 @@ impl FileManager {
             receiver,
             root: root.clone(),
             export_root,
+            beneath,
             lease_time: 90,
             hard_link_support: true,
             symlink_support: true,
@@ -245,8 +252,7 @@ impl FileManager {
                                 self.pending_deletes.insert(fh.id);
                                 // Update fhdb to point to the new path
                                 self.fhdb.remove_by_id(&fh.id);
-                                let real_path = self.real_path(&silly_path);
-                                let new_fh = if let Some(meta) = RealMeta::from_path(&real_path) {
+                                let new_fh = if let Some(meta) = self.meta(&silly_path) {
                                     Filehandle::new_real(silly_path, fh.id, self.fsid, self.fsid, fh.version + 1, &meta)
                                 } else {
                                     Filehandle::new(silly_path, fh.id, self.fsid, self.fsid, fh.version + 1)
@@ -346,6 +352,16 @@ impl FileManager {
         }
     }
 
+    /// lstat of `path`, resolved beneath the export root (#123).
+    fn meta(&self, path: &VfsPath) -> Option<RealMeta> {
+        self.beneath
+            .symlink_metadata(path.as_str())
+            .ok()
+            .map(|m| RealMeta::from_metadata(&m))
+    }
+
+    /// The path of `vfs_path` on the server, for messages only: ops resolve
+    /// it beneath the export root's fd (`self.beneath`), never by this path.
     fn real_path(&self, vfs_path: &VfsPath) -> PathBuf {
         let rel = vfs_path.as_str().to_string();
         if rel.is_empty() || rel == "/" {
@@ -359,8 +375,7 @@ impl FileManager {
     /// nanoseconds). Used to populate ChangeInfo4 before/after on operations
     /// that modify the directory.
     fn dir_change_attr(&self, dir: &VfsPath) -> u64 {
-        let real_path = self.real_path(dir);
-        match RealMeta::from_path(&real_path) {
+        match self.meta(dir) {
             Some(m) => (m.mtime as u64)
                 .wrapping_mul(1_000_000_000)
                 .wrapping_add(m.mtime_nsec as u64),
@@ -376,7 +391,7 @@ impl FileManager {
         if path.exists().unwrap_or(false) {
             return true;
         }
-        std::fs::symlink_metadata(self.real_path(path)).is_ok()
+        self.beneath.exists(path.as_str())
     }
 
     /// For an inode-based filehandle whose stored path is stale, try to locate
@@ -385,13 +400,13 @@ impl FileManager {
     /// `.nfsXXXX` within the same directory.
     fn find_by_inode_in_parent(&self, fh: &Filehandle, target_ino: u64) -> Option<VfsPath> {
         let parent_vfs = fh.file.parent();
-        let parent_real = self.real_path(&parent_vfs);
-        let entries = std::fs::read_dir(&parent_real).ok()?;
-        for entry in entries.flatten() {
-            if let Ok(meta) = std::fs::symlink_metadata(entry.path()) {
+        let names = self.beneath.read_dir(parent_vfs.as_str()).ok()?;
+        for name in names {
+            let name = name.to_string_lossy().to_string();
+            let Ok(candidate) = parent_vfs.join(&name) else { continue };
+            if let Ok(meta) = self.beneath.symlink_metadata(candidate.as_str()) {
                 if meta.ino() == target_ino {
-                    let name = entry.file_name().to_string_lossy().to_string();
-                    return parent_vfs.join(&name).ok();
+                    return Some(candidate);
                 }
             }
         }
@@ -480,8 +495,7 @@ impl FileManager {
         // find the entry by NfsFh4 ID (inode-based). The rename has already
         // completed, so the new path's inode matches the old fhdb entry's ID.
         if old_fh.is_none() {
-            let real_path = self.real_path(&new_vfs_path);
-            if let Some(meta) = RealMeta::from_path(&real_path) {
+            if let Some(meta) = self.meta(&new_vfs_path) {
                 let mut id = [0u8; 26];
                 id[0] = 0x01; // inode-based persistent handle
                 id[1] = self.export_id;
@@ -498,7 +512,7 @@ impl FileManager {
             let old_fileid = old_fh.attr_fileid;
             self.fhdb.remove_by_id(&old_fh.id);
             let real_path = self.real_path(&new_vfs_path);
-            let new_fh = if let Some(meta) = RealMeta::from_path(&real_path) {
+            let new_fh = if let Some(meta) = self.meta(&new_vfs_path) {
                 let fh = Filehandle::new_real(
                     new_vfs_path,
                     old_fh.id,
@@ -569,7 +583,7 @@ impl FileManager {
     fn touch_filehandle(&mut self, filehandle: Filehandle) {
         let real_path = self.real_path(&filehandle.file);
         let old_fileid = filehandle.attr_fileid;
-        let fh = if let Some(meta) = RealMeta::from_path(&real_path) {
+        let fh = if let Some(meta) = self.meta(&filehandle.file) {
             let fh = Filehandle::new_real(
                 filehandle.file.clone(),
                 filehandle.id,
@@ -647,8 +661,7 @@ impl FileManager {
         }
 
         // NfsFh4 is [u8; 26] — pack dev:ino into 26 bytes
-        let real_path = self.real_path(file);
-        if let Some(meta) = RealMeta::from_path(&real_path) {
+        if let Some(meta) = self.meta(file) {
             let mut id = [0u8; 26];
             id[0] = 0x01; // version: inode-based persistent handle
             id[1] = self.export_id;
@@ -701,8 +714,7 @@ impl FileManager {
                         new_vfs_path.as_str()
                     );
                     self.fhdb.remove_by_id(id);
-                    let real_path = self.real_path(&new_vfs_path);
-                    let new_fh = if let Some(meta) = RealMeta::from_path(&real_path) {
+                    let new_fh = if let Some(meta) = self.meta(&new_vfs_path) {
                         Filehandle::new_real(
                             new_vfs_path,
                             *id,
@@ -770,8 +782,7 @@ impl FileManager {
             self.fhdb.remove_by_id(&id);
         }
 
-        let real_path = self.real_path(file);
-        let fh = if let Some(meta) = RealMeta::from_path(&real_path) {
+        let fh = if let Some(meta) = self.meta(file) {
             Filehandle::new_real(file.clone(), id, self.fsid, self.fsid, 0, &meta)
         } else {
             Filehandle::new(file.clone(), id, self.fsid, self.fsid, 0)
@@ -798,8 +809,7 @@ impl FileManager {
         if let Some(cached) = self.cachedb.get(&filehandle.id) {
             cached.clone()
         } else {
-            let real_path = self.real_path(&filehandle.file);
-            let handle = WriteCacheHandle::new(filehandle.clone(), filemanager, real_path);
+            let handle = WriteCacheHandle::new(filehandle.clone(), filemanager);
             filehandle.write_cache = Some(handle.clone());
             self.cachedb.insert(filehandle.id, handle.clone());
             self.update_filehandle(filehandle);
@@ -853,7 +863,7 @@ impl FileManager {
             Some(old_fh) => {
                 let real_path = self.real_path(&old_fh.file);
                 let old_fileid = old_fh.attr_fileid;
-                if let Some(meta) = RealMeta::from_path(&real_path) {
+                if let Some(meta) = self.meta(&old_fh.file) {
                     let refreshed = Filehandle::new_real(
                         old_fh.file.clone(),
                         old_fh.id,
@@ -1245,7 +1255,7 @@ mod tests {
     fn make_fm() -> FileManager {
         let (_tx, rx) = mpsc::channel(256);
         let root = VfsPath::new(MemoryFS::new());
-        FileManager::new(rx, root, Some(42), PathBuf::from("/tmp"))
+        FileManager::new(rx, root, Some(42), Arc::new(ExportRoot::open_or_closed(std::path::Path::new("/tmp"))))
     }
 
     #[test]
@@ -1265,7 +1275,7 @@ mod tests {
     fn test_new_default_fsid() {
         let (_tx, rx) = mpsc::channel(256);
         let root = VfsPath::new(MemoryFS::new());
-        let fm = FileManager::new(rx, root, None, PathBuf::from("/tmp"));
+        let fm = FileManager::new(rx, root, None, Arc::new(ExportRoot::open_or_closed(std::path::Path::new("/tmp"))));
         assert_eq!(fm.fsid, 152);
     }
 
