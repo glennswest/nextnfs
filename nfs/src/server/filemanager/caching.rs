@@ -30,6 +30,8 @@ impl WriteCache {
             .create(true)
             .truncate(false)
             .mode(0o644)
+            // A symlink is never written through (#122).
+            .custom_flags(libc::O_NOFOLLOW)
             .open(&real_path);
 
         match &file {

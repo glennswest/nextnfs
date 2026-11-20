@@ -1077,10 +1077,18 @@ impl FileManagerHandle {
     ) -> Attrlist4<FileAttr> {
         let mut attrsset = Attrlist4::<FileAttr>::new(None);
         let real_path = self.real_path(filehandle.file.as_str());
+        // Owner, group and times are set on a symlink itself (lchown,
+        // AT_SYMLINK_NOFOLLOW), never on what it points to (#122).
+        let is_symlink = std::fs::symlink_metadata(&real_path)
+            .is_ok_and(|m| m.file_type().is_symlink());
         for attr in attr_vals.iter() {
             match attr {
                 FileAttrValue::Size(args) => {
                     debug!("Set size to: {:?}", args);
+                    if is_symlink {
+                        error!("SETATTR size on a symlink refused");
+                        continue;
+                    }
                     let mut buf = vec![0_u8; *args as usize];
                     let result = (|| -> Result<(), Box<dyn std::error::Error>> {
                         let mut file = filehandle.file.open_file()?;
@@ -1103,7 +1111,7 @@ impl FileManagerHandle {
                         let c_path = std::ffi::CString::new(
                             real_path.to_string_lossy().as_ref()
                         ).unwrap_or_default();
-                        let ret = unsafe { libc::chown(c_path.as_ptr(), uid, u32::MAX) };
+                        let ret = unsafe { libc::lchown(c_path.as_ptr(), uid, u32::MAX) };
                         if ret == 0 {
                             attrsset.push(FileAttr::Owner);
                         } else {
@@ -1118,7 +1126,7 @@ impl FileManagerHandle {
                         let c_path = std::ffi::CString::new(
                             real_path.to_string_lossy().as_ref()
                         ).unwrap_or_default();
-                        let ret = unsafe { libc::chown(c_path.as_ptr(), u32::MAX, gid) };
+                        let ret = unsafe { libc::lchown(c_path.as_ptr(), u32::MAX, gid) };
                         if ret == 0 {
                             attrsset.push(FileAttr::OwnerGroup);
                         } else {
@@ -1129,6 +1137,12 @@ impl FileManagerHandle {
                     }
                 }
                 FileAttrValue::Mode(mode) => {
+                    // chmod follows a symlink: never on one (#122; the
+                    // dispatcher refuses it with NFS4ERR_INVAL first).
+                    if is_symlink {
+                        error!("SETATTR mode on a symlink refused");
+                        continue;
+                    }
                     let c_path = std::ffi::CString::new(
                         real_path.to_string_lossy().as_ref()
                     ).unwrap_or_default();
@@ -1150,7 +1164,7 @@ impl FileManagerHandle {
                         libc::timespec { tv_sec: 0, tv_nsec: libc::UTIME_NOW },
                     ];
                     let ret = unsafe {
-                        libc::utimensat(libc::AT_FDCWD, c_path.as_ptr(), times.as_ptr(), 0)
+                        libc::utimensat(libc::AT_FDCWD, c_path.as_ptr(), times.as_ptr(), libc::AT_SYMLINK_NOFOLLOW)
                     };
                     if ret == 0 {
                         attrsset.push(FileAttr::TimeModifySet);

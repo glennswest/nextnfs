@@ -3558,4 +3558,199 @@ mod tests {
             other => panic!("unexpected {:?}", other),
         }
     }
+
+
+    // --- #122: symlinks never lead out of the export; CREATE never takes over ---
+
+    /// An export with `link` → a file outside it (`secret`, "outside") and
+    /// `dirlink` → the directory outside it. Returns (export, outside).
+    fn symlink_export() -> (tempfile::TempDir, tempfile::TempDir) {
+        let (export, outside) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        std::fs::write(outside.path().join("secret"), b"outside").unwrap();
+        chmod(&outside.path().join("secret"), 0o600);
+        std::os::unix::fs::symlink(outside.path().join("secret"), export.path().join("link")).unwrap();
+        std::os::unix::fs::symlink(outside.path(), export.path().join("dirlink")).unwrap();
+        (export, outside)
+    }
+
+    async fn run_own(dir: &std::path::Path, ops: Vec<NfsArgOp>) -> (NfsStat4, Vec<NfsResOp4>) {
+        let (uid, gid) = own_ids();
+        run_as(dir, SquashMode::None, auth_sys(uid, gid), ops).await
+    }
+
+    fn setattr_op(attrs: Vec<FileAttrValue>, mask: Vec<FileAttr>) -> NfsArgOp {
+        NfsArgOp::Opsetattr(SetAttr4args {
+            stateid: Stateid4 { seqid: 0, other: [0; 12] },
+            obj_attributes: Fattr4 {
+                attrmask: Attrlist4(mask),
+                attr_vals: Attrlist4(attrs),
+            },
+        })
+    }
+
+    #[tokio::test]
+    async fn test_confine_write_through_symlink_refused() {
+        let (export, outside) = symlink_export();
+        let (status, resarray) = run_own(
+            export.path(),
+            vec![NfsArgOp::Opputrootfh(()), lookup_op("link"), write_op()],
+        )
+        .await;
+        assert_eq!(status, NfsStat4::Nfs4errInval);
+        assert_eq!(resarray[2], NfsResOp4::OpError { op: 38, status: NfsStat4::Nfs4errInval });
+        assert_eq!(std::fs::read(outside.path().join("secret")).unwrap(), b"outside");
+    }
+
+    #[tokio::test]
+    async fn test_confine_read_through_symlink_refused() {
+        let (export, _outside) = symlink_export();
+        let read = NfsArgOp::Opread(Read4args {
+            stateid: Stateid4 { seqid: 0, other: [0; 12] },
+            offset: 0,
+            count: 64,
+        });
+        let (status, resarray) =
+            run_own(export.path(), vec![NfsArgOp::Opputrootfh(()), lookup_op("link"), read]).await;
+        assert_eq!(status, NfsStat4::Nfs4errInval);
+        assert_eq!(resarray.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_confine_setattr_mode_on_symlink_refused() {
+        let (export, outside) = symlink_export();
+        let (status, _) = run_own(
+            export.path(),
+            vec![
+                NfsArgOp::Opputrootfh(()),
+                lookup_op("link"),
+                setattr_op(vec![FileAttrValue::Mode(0o777)], vec![FileAttr::Mode]),
+            ],
+        )
+        .await;
+        assert_eq!(status, NfsStat4::Nfs4errInval);
+        let mode = std::fs::metadata(outside.path().join("secret")).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+
+    #[tokio::test]
+    async fn test_confine_setattr_times_on_symlink_set_the_link() {
+        let (export, outside) = symlink_export();
+        let secret = outside.path().join("secret");
+        let past = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000);
+        std::fs::File::options().write(true).open(&secret).unwrap().set_modified(past).unwrap();
+        let (status, _) = run_own(
+            export.path(),
+            vec![
+                NfsArgOp::Opputrootfh(()),
+                lookup_op("link"),
+                setattr_op(vec![FileAttrValue::TimeModifySet], vec![FileAttr::TimeModifySet]),
+            ],
+        )
+        .await;
+        assert_eq!(status, NfsStat4::Nfs4Ok);
+        // The target keeps its time; the link itself was touched.
+        assert_eq!(std::fs::metadata(&secret).unwrap().modified().unwrap(), past);
+        let link_mtime = std::fs::symlink_metadata(export.path().join("link")).unwrap().modified().unwrap();
+        assert!(link_mtime > past);
+    }
+
+    #[tokio::test]
+    async fn test_confine_lookup_through_dir_symlink_refused() {
+        let (export, _outside) = symlink_export();
+        let (status, resarray) = run_own(
+            export.path(),
+            vec![NfsArgOp::Opputrootfh(()), lookup_op("dirlink"), lookup_op("secret")],
+        )
+        .await;
+        assert_eq!(status, NfsStat4::Nfs4errSymlink);
+        assert_eq!(resarray[2], NfsResOp4::OpError { op: 15, status: NfsStat4::Nfs4errSymlink });
+    }
+
+    #[tokio::test]
+    async fn test_confine_multi_component_and_dot_names_refused() {
+        let (export, _outside) = symlink_export();
+        for name in ["dirlink/secret", "..", ".", "a\0b"] {
+            let (status, _) =
+                run_own(export.path(), vec![NfsArgOp::Opputrootfh(()), lookup_op(name)]).await;
+            assert_eq!(status, NfsStat4::Nfs4errBadname, "name {:?}", name);
+        }
+        let (status, _) = run_own(export.path(), vec![NfsArgOp::Opputrootfh(()), mkdir_op("x/y")]).await;
+        assert_eq!(status, NfsStat4::Nfs4errBadname);
+    }
+
+    #[tokio::test]
+    async fn test_confine_create_in_dir_symlink_refused() {
+        let (export, outside) = symlink_export();
+        let (status, _) = run_own(
+            export.path(),
+            vec![NfsArgOp::Opputrootfh(()), lookup_op("dirlink"), mkdir_op("planted")],
+        )
+        .await;
+        assert_eq!(status, NfsStat4::Nfs4errSymlink);
+        assert!(!outside.path().join("planted").exists());
+    }
+
+    #[tokio::test]
+    async fn test_confine_open_symlink_name_refused() {
+        let (export, outside) = symlink_export();
+        let mut open = open_args(3, OpenFlag4::Open4Nocreate);
+        open.claim = OpenClaim4::ClaimNull("link".to_string());
+        let (status, _) =
+            run_own(export.path(), vec![NfsArgOp::Opputrootfh(()), NfsArgOp::Opopen(open)]).await;
+        assert_eq!(status, NfsStat4::Nfs4errSymlink);
+        assert_eq!(std::fs::read(outside.path().join("secret")).unwrap(), b"outside");
+    }
+
+    #[tokio::test]
+    async fn test_confine_handle_through_swapped_dir_is_stale() {
+        // A handle for d/secret, then d is replaced by a symlink to a
+        // directory outside holding a file of the same name.
+        let (export, outside) = symlink_export();
+        std::fs::create_dir(export.path().join("d")).unwrap();
+        std::fs::write(export.path().join("d/secret"), b"inside").unwrap();
+        let request = request_on_export_squash(false, export.path(), SquashMode::None).await;
+        let fh = request
+            .file_manager()
+            .get_filehandle_for_path("/d/secret".to_string())
+            .await
+            .unwrap();
+        std::fs::rename(export.path().join("d"), export.path().join("moved")).unwrap();
+        std::os::unix::fs::symlink(outside.path(), export.path().join("d")).unwrap();
+        let mut id = fh.id;
+        op_pseudo::stamp_export_id(&mut id, request.current_export_id().unwrap());
+        let (uid, gid) = own_ids();
+        let server = NFS40Server::new();
+        let msg = make_compound_as(
+            auth_sys(uid, gid),
+            vec![NfsArgOp::Opputfh(PutFh4args { object: id }), write_op()],
+        );
+        let (_request, reply) = server.compound(msg, request).await;
+        let (status, _) = compound_result(reply);
+        assert_eq!(status, NfsStat4::Nfs4errStale);
+        assert_eq!(std::fs::read(outside.path().join("secret")).unwrap(), b"outside");
+    }
+
+    #[tokio::test]
+    async fn test_create_existing_name_is_exist() {
+        let dir = tempfile::tempdir().unwrap();
+        chmod(dir.path(), 0o777);
+        std::fs::create_dir(dir.path().join("victim")).unwrap();
+        std::fs::write(dir.path().join("file"), b"mine").unwrap();
+        std::os::unix::fs::symlink("/nonexistent-122", dir.path().join("dangling")).unwrap();
+        let (uid, _) = own_ids();
+        for name in ["victim", "file", "dangling"] {
+            let (status, resarray) = run_as(
+                dir.path(),
+                SquashMode::RootSquash,
+                auth_sys(OTHER, OTHER),
+                vec![NfsArgOp::Opputrootfh(()), mkdir_op(name)],
+            )
+            .await;
+            assert_eq!(status, NfsStat4::Nfs4errExist, "name {}", name);
+            assert_eq!(resarray.len(), 2);
+            let meta = std::fs::symlink_metadata(dir.path().join(name)).unwrap();
+            assert_eq!(std::os::unix::fs::MetadataExt::uid(&meta), uid);
+        }
+        assert!(dir.path().join("file").is_file());
+    }
 }

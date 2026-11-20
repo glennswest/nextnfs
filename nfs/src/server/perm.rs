@@ -232,10 +232,150 @@ fn check_setattr(
     Ok(())
 }
 
+fn is_symlink(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink())
+}
+
+/// Whether reaching `path` from the export `root` passes through a symlink
+/// (or a `.`/`..` component): every component before the last must be a real
+/// directory, or the path can lead out of the export (#122). A component
+/// that does not exist is not a symlink; the op then fails on its own.
+fn escapes_root(root: &Path, path: &Path) -> bool {
+    let Ok(rel) = path.strip_prefix(root) else { return true };
+    let comps: Vec<_> = rel.components().collect();
+    let mut cur = root.to_path_buf();
+    for c in comps.iter().take(comps.len().saturating_sub(1)) {
+        match c {
+            std::path::Component::Normal(n) => cur.push(n),
+            _ => return true,
+        }
+        if is_symlink(&cur) {
+            return true;
+        }
+    }
+    matches!(comps.last(), Some(c) if !matches!(c, std::path::Component::Normal(_)))
+}
+
+/// A component name a client may give (RFC 7530 §12.7): not empty
+/// (NFS4ERR_INVAL), not `.` or `..` and without `/` or NUL
+/// (NFS4ERR_BADNAME). A name with a `/` would be walked as several
+/// components, through symlinks and past the search check of each (#122).
+fn check_name(name: &str) -> Result<(), NfsStat4> {
+    if name.is_empty() {
+        return Err(NfsStat4::Nfs4errInval);
+    }
+    if name == "." || name == ".." || name.contains('/') || name.contains('\0') {
+        return Err(NfsStat4::Nfs4errBadname);
+    }
+    Ok(())
+}
+
+/// Keep `arg` inside its export (#122), whoever the caller is (root too):
+///
+/// - names are single components (`check_name`);
+/// - the current (and, for RENAME, LINK and COPY, the saved) filehandle is
+///   reached without passing through a symlink, else NFS4ERR_STALE: the
+///   object the handle was given for is no longer at that path;
+/// - an op that works in a directory refuses a symlink handle
+///   (NFS4ERR_SYMLINK), and OPEN refuses a name that is a symlink
+///   (NFS4ERR_SYMLINK: the client follows it itself, the server never does);
+/// - READ, WRITE, COMMIT, ALLOCATE, SEEK and COPY refuse a symlink handle
+///   (NFS4ERR_INVAL: not a regular file), and SETATTR refuses size, mode and
+///   ACL on one (NFS4ERR_INVAL). Owner, group and times are set on the link
+///   itself (`set_attr` never follows it).
+pub fn check_confined(arg: &NfsArgOp, request: &NfsRequest<'_>) -> Result<(), NfsStat4> {
+    if request.is_pseudo_root() {
+        return Ok(());
+    }
+    let Some(fm) = request.file_manager_opt() else { return Ok(()) };
+    let Some(fh) = request.current_filehandle() else { return Ok(()) };
+    let root = fm.export_root();
+    let current = fm.real_path(&fh.path);
+    let saved = match arg {
+        NfsArgOp::Oprename(_) | NfsArgOp::Oplink(_) | NfsArgOp::Opcopy(_) => {
+            request.saved_filehandle().map(|s| fm.real_path(&s.path))
+        }
+        _ => None,
+    };
+
+    match arg {
+        NfsArgOp::Oplookup(a) => check_name(&a.objname)?,
+        NfsArgOp::Opcreate(a) => check_name(&a.objname)?,
+        NfsArgOp::Opremove(a) => check_name(&a.target)?,
+        NfsArgOp::Oprename(a) => {
+            check_name(&a.oldname)?;
+            check_name(&a.newname)?;
+        }
+        NfsArgOp::Oplink(a) => check_name(&a.newname)?,
+        NfsArgOp::OpSecinfo(a) => check_name(&a.name)?,
+        NfsArgOp::Opopen(a) => {
+            if let OpenClaim4::ClaimNull(name) = &a.claim {
+                check_name(name)?;
+            }
+        }
+        _ => {}
+    }
+
+    if escapes_root(root, &current) || saved.as_deref().is_some_and(|s| escapes_root(root, s)) {
+        return Err(NfsStat4::Nfs4errStale);
+    }
+
+    let need_not_symlink = |path: &Path, status: NfsStat4| {
+        if is_symlink(path) { Err(status) } else { Ok(()) }
+    };
+    match arg {
+        NfsArgOp::Oplookup(_)
+        | NfsArgOp::Opcreate(_)
+        | NfsArgOp::Opremove(_)
+        | NfsArgOp::Oplink(_)
+        | NfsArgOp::Opreaddir(_)
+        | NfsArgOp::OpSecinfo(_) => need_not_symlink(&current, NfsStat4::Nfs4errSymlink),
+        NfsArgOp::Oprename(_) => {
+            need_not_symlink(&current, NfsStat4::Nfs4errSymlink)?;
+            match &saved {
+                Some(s) => need_not_symlink(s, NfsStat4::Nfs4errSymlink),
+                None => Ok(()),
+            }
+        }
+        NfsArgOp::Opopen(a) => match &a.claim {
+            OpenClaim4::ClaimNull(name) => {
+                need_not_symlink(&current, NfsStat4::Nfs4errSymlink)?;
+                need_not_symlink(&current.join(name), NfsStat4::Nfs4errSymlink)
+            }
+            _ => need_not_symlink(&current, NfsStat4::Nfs4errSymlink),
+        },
+        NfsArgOp::Opread(_)
+        | NfsArgOp::Opwrite(_)
+        | NfsArgOp::Opcommit(_)
+        | NfsArgOp::Opallocate(_)
+        | NfsArgOp::Opseek(_) => need_not_symlink(&current, NfsStat4::Nfs4errInval),
+        NfsArgOp::Opcopy(_) => {
+            need_not_symlink(&current, NfsStat4::Nfs4errInval)?;
+            match &saved {
+                Some(s) => need_not_symlink(s, NfsStat4::Nfs4errInval),
+                None => Ok(()),
+            }
+        }
+        NfsArgOp::Opsetattr(a) => {
+            let content = a.obj_attributes.attr_vals.0.iter().any(|v| {
+                matches!(v, FileAttrValue::Size(_) | FileAttrValue::Mode(_) | FileAttrValue::Acl(_))
+            });
+            if content {
+                need_not_symlink(&current, NfsStat4::Nfs4errInval)
+            } else {
+                Ok(())
+            }
+        }
+        _ => Ok(()),
+    }
+}
+
 /// Check `arg` for `caller` before it runs. `Err` is the status to refuse it
 /// with: NFS4ERR_ACCESS for a mode-bit denial, NFS4ERR_PERM for an
-/// owner-only change, NFS4ERR_XDEV for RENAME/LINK across exports.
+/// owner-only change, NFS4ERR_XDEV for RENAME/LINK across exports, and the
+/// export-confinement errors of `check_confined`.
 pub fn check_op(arg: &NfsArgOp, request: &NfsRequest<'_>, caller: &Caller) -> Result<(), NfsStat4> {
+    check_confined(arg, request)?;
     if request.is_pseudo_root() {
         return Ok(());
     }

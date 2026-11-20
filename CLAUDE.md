@@ -223,3 +223,14 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       on c9749c8: 612 tests, clippy 0 warnings, live `nextnfstest -V 4.1
       -l wire` 6/6 incl. W41-020. Released v0.16.1 (afc3f87, --locked
       build green); #118, #121 closed; image build d1a36bc38821 requested.
+- [ ] 2026-11-20 — #122 (P0, 4 critical review findings). Plan:
+      b31fc72eff57 + 7db43602328a (symlinks): `perm::check_confined` in the
+      COMPOUND dispatcher — single-component names (BADNAME), handles reached
+      through a symlinked directory → STALE, dir ops on a symlink → SYMLINK,
+      OPEN of a symlink name → SYMLINK, READ/WRITE/COMMIT/ALLOCATE/SEEK/COPY
+      on a symlink → INVAL, SETATTR size/mode/ACL on one → INVAL; `set_attr`
+      uses lchown + AT_SYMLINK_NOFOLLOW; WRITE opens with O_NOFOLLOW.
+      a163d43c8336: CREATE dir on an existing name → EXIST.
+      ea1e5db68528: API writes (POST/DELETE exports, PUT qos) need a bearer
+      token (`[server] api_token_file`, `--api-token-file`); none set → 403;
+      optional `api_export_roots` confine API-added exports.

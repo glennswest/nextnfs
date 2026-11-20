@@ -140,7 +140,35 @@ impl NfsOperation for Create4args {
                 };
                 let parent_vfs_str = current_dir.as_str().to_string();
                 let before_change = request.file_manager().dir_change_attr(&parent_vfs_str);
-                let _ = new_dir.create_dir();
+                // An existing name (file, directory, or a symlink, dangling
+                // or not) is NFS4ERR_EXIST: a CREATE that "succeeded" on it
+                // would hand the existing object to the caller (#122).
+                let new_real = request.file_manager().real_path(new_dir.as_str());
+                let exists = new_dir.exists().unwrap_or(false)
+                    || std::fs::symlink_metadata(&new_real).is_ok();
+                let created = if exists {
+                    Err(NfsStat4::Nfs4errExist)
+                } else {
+                    new_dir.create_dir().map_err(|e| match e.kind() {
+                        vfs::error::VfsErrorKind::DirectoryExists
+                        | vfs::error::VfsErrorKind::FileExists => NfsStat4::Nfs4errExist,
+                        vfs::error::VfsErrorKind::FileNotFound => NfsStat4::Nfs4errNoent,
+                        vfs::error::VfsErrorKind::IoError(io) => match io.kind() {
+                            std::io::ErrorKind::PermissionDenied => NfsStat4::Nfs4errAccess,
+                            std::io::ErrorKind::AlreadyExists => NfsStat4::Nfs4errExist,
+                            _ => NfsStat4::Nfs4errIo,
+                        },
+                        _ => NfsStat4::Nfs4errIo,
+                    })
+                };
+                if let Err(status) = created {
+                    debug!("CREATE dir {:?}: {:?}", new_dir.as_str(), status);
+                    return NfsOpResponse {
+                        request,
+                        result: None,
+                        status,
+                    };
+                }
 
                 request.file_manager().touch_file(filehandle.id).await;
                 let after_change = request.file_manager().dir_change_attr(&parent_vfs_str);

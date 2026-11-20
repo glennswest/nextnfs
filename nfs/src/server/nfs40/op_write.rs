@@ -1,5 +1,5 @@
 use std::io::Write;
-use std::os::unix::fs::FileExt;
+use std::os::unix::fs::{FileExt, OpenOptionsExt};
 use std::sync::atomic::Ordering;
 
 use async_trait::async_trait;
@@ -90,7 +90,7 @@ impl NfsOperation for Write4args {
                     // Append at exact EOF: use O_APPEND so the kernel atomically
                     // positions the write at the true end of file, preventing
                     // concurrent appenders from overwriting each other.
-                    match std::fs::OpenOptions::new().append(true).open(&real_path) {
+                    match std::fs::OpenOptions::new().append(true).custom_flags(libc::O_NOFOLLOW).open(&real_path) {
                         Ok(mut file) => {
                             file.write_all(&self.data)
                                 .and_then(|_| file.sync_all())
@@ -100,7 +100,7 @@ impl NfsOperation for Write4args {
                     }
                 } else {
                     // Positional write (mid-file or sparse/past-EOF): use pwrite
-                    match std::fs::OpenOptions::new().write(true).open(&real_path) {
+                    match std::fs::OpenOptions::new().write(true).custom_flags(libc::O_NOFOLLOW).open(&real_path) {
                         Ok(file) => {
                             file.write_all_at(&self.data, self.offset)
                                 .and_then(|_| file.sync_all())
