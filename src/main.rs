@@ -25,8 +25,8 @@ struct Cli {
     #[arg(short, long, default_value = "0.0.0.0:2049", global = true)]
     listen: String,
 
-    /// REST API listen address
-    #[arg(short, long, default_value = "0.0.0.0:8080", global = true)]
+    /// REST API + web UI listen address (loopback unless set, #125)
+    #[arg(short, long, default_value = config::DEFAULT_API_LISTEN, global = true)]
     api_listen: String,
 
     /// Config file path
@@ -216,7 +216,7 @@ async fn run_server(
                 } else {
                     cfg.server.listen
                 };
-                let api = if api_listen_addr != "0.0.0.0:8080" {
+                let api = if api_listen_addr != config::DEFAULT_API_LISTEN {
                     api_listen_addr
                 } else {
                     cfg.server.api_listen

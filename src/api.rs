@@ -22,7 +22,7 @@ pub struct AdminAuth {
     /// Bearer token the write routes require (`[server] api_token_file`).
     pub token: Option<String>,
     /// Canonical directories an API-added export must be inside
-    /// (`[server] api_export_roots`); empty: any directory.
+    /// (`[server] api_export_roots`); empty: the API adds no export (#125).
     pub export_roots: Vec<PathBuf>,
 }
 
@@ -54,11 +54,9 @@ impl AdminAuth {
         Ok(Self { token, export_roots })
     }
 
-    /// Whether `path` may be exported through the API.
+    /// Whether `path` may be exported through the API: only inside one of
+    /// the configured roots, and nowhere when none is configured (#125).
     fn allows_path(&self, path: &std::path::Path) -> bool {
-        if self.export_roots.is_empty() {
-            return true;
-        }
         match path.canonicalize() {
             Ok(p) => self.export_roots.iter().any(|r| p.starts_with(r)),
             Err(_) => false,
@@ -206,6 +204,12 @@ async fn add_export(
     State(state): State<ApiState>,
     Json(req): Json<AddExportRequest>,
 ) -> impl IntoResponse {
+    if state.admin.export_roots.is_empty() {
+        return json_error(
+            StatusCode::FORBIDDEN,
+            "adding exports through the API is off: the server has no api_export_roots",
+        );
+    }
     if !state.admin.allows_path(std::path::Path::new(&req.path)) {
         return json_error(
             StatusCode::FORBIDDEN,
@@ -402,8 +406,9 @@ mod tests {
         .unwrap()
     }
 
-    fn admin(token: &str) -> AdminAuth {
-        AdminAuth { token: Some(token.to_string()), export_roots: vec![] }
+    /// A token, and `root` as the one directory the API may export under.
+    fn admin(token: &str, root: &std::path::Path) -> AdminAuth {
+        AdminAuth { token: Some(token.to_string()), export_roots: vec![root.canonicalize().unwrap()] }
     }
 
     #[tokio::test]
@@ -442,7 +447,7 @@ mod tests {
     #[tokio::test]
     async fn writes_need_the_right_token() {
         let dir = Scratch::new("token");
-        let (app, em) = app(admin("s3cret"));
+        let (app, em) = app(admin("s3cret", &dir.0));
         for bad in [None, Some("Bearer wrong"), Some("Bearer s3cre"), Some("s3cret")] {
             let r = app.clone().oneshot(add_req(&dir.0, bad)).await.unwrap();
             assert_eq!(r.status(), StatusCode::UNAUTHORIZED, "{:?}", bad);
@@ -466,14 +471,41 @@ mod tests {
         assert!(em.list_exports().await.is_empty());
     }
 
+    /// #125: a valid token alone does not let the API export a directory;
+    /// with no `api_export_roots` it exports nothing (not `/`, not the
+    /// directory asked for), while remove and QoS still work with the token.
+    #[tokio::test]
+    async fn no_export_roots_means_no_api_exports() {
+        let dir = Scratch::new("noroots");
+        let a = AdminAuth { token: Some("t".to_string()), export_roots: vec![] };
+        let (app, em) = app(a);
+        for p in [std::path::Path::new("/"), dir.0.as_path()] {
+            let r = app.clone().oneshot(add_req(p, Some("Bearer t"))).await.unwrap();
+            assert_eq!(r.status(), StatusCode::FORBIDDEN, "{}", p.display());
+        }
+        assert!(em.list_exports().await.is_empty());
+        em.add_export("cfg".to_string(), dir.0.clone(), false).await.unwrap();
+        let r = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/api/v1/exports/cfg")
+                    .header(header::AUTHORIZATION, "Bearer t")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(r.status(), StatusCode::NO_CONTENT);
+        assert!(em.list_exports().await.is_empty());
+    }
+
     #[tokio::test]
     async fn export_roots_confine_added_exports() {
         let root = Scratch::new("roots");
         std::fs::create_dir(root.0.join("inside")).unwrap();
         let outside = Scratch::new("roots-out");
-        let mut a = admin("t");
-        a.export_roots = vec![root.0.join("inside").canonicalize().unwrap()];
-        let (app, em) = app(a);
+        let (app, em) = app(admin("t", &root.0.join("inside")));
         let r = app.clone().oneshot(add_req(&outside.0, Some("Bearer t"))).await.unwrap();
         assert_eq!(r.status(), StatusCode::FORBIDDEN);
         // `..` out of a root is resolved before the check.

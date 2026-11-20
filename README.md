@@ -97,7 +97,7 @@ nextnfs --config nextnfs.toml
 ```toml
 [server]
 listen = "0.0.0.0:2049"
-api_listen = "0.0.0.0:8080"
+api_listen = "127.0.0.1:8080"   # the default; "0.0.0.0:8080" to reach it from the network
 
 [[exports]]
 name = "data"
@@ -119,9 +119,9 @@ TOML, loaded with `--config FILE` (see `nextnfs.example.toml`). Every key is opt
 | Key | Default | Meaning |
 |---|---|---|
 | `listen` | `0.0.0.0:2049` | NFS TCP listen address |
-| `api_listen` | `0.0.0.0:8080` | REST API + web UI listen address (plain HTTP). Reads and `/health` are open to anyone who reaches it |
+| `api_listen` | `127.0.0.1:8080` | REST API + web UI listen address (plain HTTP); `--api-listen` overrides it. Loopback only unless set (#125): a deployment that serves `/health` or the UI to the network says `0.0.0.0:8080` (the container's `stormd.toml` and the stormcos golden do). Reads and `/health` are open to anyone who reaches it |
 | `api_token_file` | unset | File whose first line is the bearer token the API's write routes (add/remove an export, set QoS) require. Unset: those routes answer 403 and the web UI offers no changes. An unreadable or empty file stops the server at startup. `--api-token-file` overrides it |
-| `api_export_roots` | `[]` (any) | Directories an export added through the API must be inside (checked after resolving symlinks and `..`); others get 403. Each must exist, or the server exits at startup |
+| `api_export_roots` | `[]` (none) | Directories an export added through the API must be inside (checked after resolving symlinks and `..`); others get 403. Unset or empty: the API adds no export at all (403), whatever the token (#125). Each must exist, or the server exits at startup |
 | `state_dir` | unset | Directory for client-state snapshots (created if missing); written every 30 s, restored and cleared at startup |
 | `tls_cert`, `tls_key` | unset | PEM cert and key; when **both** are set the NFS port speaks RPC-over-TLS only |
 | `krb5_keytab` | unset | MIT keytab with the server's `nfs/<host>@REALM` keys (AES enctypes). Set: RPCSEC_GSS (krb5, krb5i, krb5p) is served; the server exits at startup if the file cannot be read or holds no AES key. Unset: RPCSEC_GSS is refused, and an export whose `sec` names a Kerberos flavour stops the server at startup |
@@ -165,7 +165,7 @@ nextnfs stats | health   [--api URL]     # default http://127.0.0.1:8080
 |--------|------|-------------|
 | GET | `/health` | `{"status":"ok","exports":N}` |
 | GET | `/api/v1/exports` | List exports: `name`, `path`, `read_only`, `export_id`, `stats` |
-| POST | `/api/v1/exports` | Add `{"name","path","read_only"}` (in-memory; no `clients`/QoS/squash). Token; `path` inside `api_export_roots` when set |
+| POST | `/api/v1/exports` | Add `{"name","path","read_only"}` (in-memory; no `clients`/QoS/squash). Token; `path` inside `api_export_roots` (none configured: 403) |
 | DELETE | `/api/v1/exports/{name}` | Remove export. Token |
 | GET | `/api/v1/stats` · `/api/v1/stats/{name}` | Server totals (`total_reads`, `total_writes`, `total_bytes_read`, `total_bytes_written`, `total_ops`, `exports`) / one export |
 | GET · PUT | `/api/v1/qos/{name}` | Read / set (PUT: token) `{"max_ops_per_sec","max_bytes_per_sec"}` (applies at once; a changed limit starts with a full bucket); 404 for unknown export |

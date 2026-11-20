@@ -148,7 +148,7 @@ The disk is partitioned with `wipeTable: false` and formatted with `wipeFilesyst
 ### Container Configuration
 
 The NextNFS container runs with:
-- `--network host` -- NFS on port 2049, the nextnfs REST API/web UI on 8080 and stormd on 9080, directly on the host network (the API reads are not authenticated; its export/QoS changes need `--api-token-file`, without it they are refused)
+- `--network host` -- NFS on port 2049, the nextnfs REST API/web UI on 8080 and stormd on 9080, directly on the host network (stormd passes `--api-listen 0.0.0.0:8080` explicitly; the binary's own default is loopback. The API reads are not authenticated; its export/QoS changes need `--api-token-file`, without it they are refused, and it adds no export without `api_export_roots` in a config file)
 - `-v /var/data/nfs:/export:z` -- exports the data directory
 - `--pull=always` -- pulls the latest image on every restart
 - Automatic restart on failure (5 second delay)

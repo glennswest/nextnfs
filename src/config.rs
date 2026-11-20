@@ -106,8 +106,13 @@ fn default_listen() -> String {
     "0.0.0.0:2049".to_string()
 }
 
+/// Where the REST API and web UI listen unless told otherwise: loopback
+/// only (#125). A deployment that wants them on the network says so
+/// (`api_listen = "0.0.0.0:8080"`, `--api-listen`).
+pub const DEFAULT_API_LISTEN: &str = "127.0.0.1:8080";
+
 fn default_api_listen() -> String {
-    "0.0.0.0:8080".to_string()
+    DEFAULT_API_LISTEN.to_string()
 }
 
 fn default_export_path() -> String {
@@ -225,5 +230,10 @@ path = "/srv/plain"
         assert_eq!(cfg.server.api_export_roots, vec!["/srv"]);
         let cfg: Config = toml::from_str("").unwrap();
         assert!(cfg.server.api_token_file.is_none() && cfg.server.api_export_roots.is_empty());
+        // #125: the API listens on loopback unless the config says otherwise.
+        assert_eq!(cfg.server.api_listen, "127.0.0.1:8080");
+        assert_eq!(ServerConfig::default().api_listen, DEFAULT_API_LISTEN);
+        let cfg: Config = toml::from_str("[server]\napi_listen = \"0.0.0.0:8080\"\n").unwrap();
+        assert_eq!(cfg.server.api_listen, "0.0.0.0:8080");
     }
 }

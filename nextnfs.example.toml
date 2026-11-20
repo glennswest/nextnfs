@@ -1,10 +1,13 @@
 [server]
 listen = "0.0.0.0:2049"
-api_listen = "0.0.0.0:8080"
+# REST API + web UI: loopback only by default. "0.0.0.0:8080" puts them on
+# the network; reads and /health are open to anyone who reaches the port.
+api_listen = "127.0.0.1:8080"
 state_dir = "/var/lib/nextnfs"
 
-# REST API changes (add/remove export, QoS) need this bearer token; unset:
-# the API is read-only. Optionally confine API-added exports to some roots.
+# REST API changes (remove export, QoS) need this bearer token; unset: the
+# API is read-only. Adding an export also needs api_export_roots: the API
+# exports only directories inside them, and none at all when unset.
 # api_token_file = "/etc/nextnfs/api-token"   # first line is the token
 # api_export_roots = ["/export"]
 

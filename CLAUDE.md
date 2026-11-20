@@ -260,3 +260,9 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       Next: `sc-build 'cargo test --workspace --locked && cargo clippy
       --workspace --all-targets --locked'` on 9b2a9a5 green, then v0.18.0
       (breaking: Linux >= 5.6), close #123, request the image.
+- [ ] 2026-11-20 — #125 (P0, review finding ea1e5db68528 on 8a66330, before
+      #122's token): the rest of the finding's fix. API listens on
+      127.0.0.1:8080 by default (`config::DEFAULT_API_LISTEN`; the container,
+      golden registry config and nfsop all set 0.0.0.0:8080 explicitly);
+      POST /api/v1/exports needs a non-empty `api_export_roots` (403
+      otherwise, even with the token). Breaking → v0.18.0 after sc-build.
