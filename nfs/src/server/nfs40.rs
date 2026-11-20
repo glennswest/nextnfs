@@ -3991,12 +3991,6 @@ mod tests {
         })
     }
 
-    /// COMPOUND as the test process's own uid (squash none).
-    async fn run_own(dir: &std::path::Path, ops: Vec<NfsArgOp>) -> (NfsStat4, Vec<NfsResOp4>) {
-        let (uid, gid) = own_ids();
-        run_as(dir, SquashMode::None, auth_sys(uid, gid), ops).await
-    }
-
     fn mode_of(path: &std::path::Path) -> u32 {
         std::fs::symlink_metadata(path).unwrap().permissions().mode() & 0o7777
     }
