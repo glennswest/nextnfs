@@ -736,7 +736,6 @@ impl NFS40Server {
                             }),
                         );
                     }
-                    let creates = super::perm::creates_object(&arg, &request);
 
                     let opnum = op_code(&arg);
                     let export_before = request.current_export_id();
@@ -834,10 +833,9 @@ impl NFS40Server {
                             status: NfsStat4::Nfs4errNotsupp,
                         },
                     };
-                    // A new file, directory or symlink belongs to the caller.
-                    if creates && response.status == NfsStat4::Nfs4Ok {
-                        super::perm::chown_new_object(&mut response.request, &caller).await;
-                    }
+                    // A new file, directory or symlink is given to the caller
+                    // (with its createattrs) by OPEN / CREATE themselves
+                    // (`createattrs::finish_new_object`, #127).
                     // An op that moved the client onto another export (PUTFH,
                     // PUTROOTFH, LOOKUP from the pseudo-root, RESTOREFH, ...)
                     // must pass that export's `clients` list (#97).
@@ -3960,5 +3958,181 @@ mod tests {
             assert_eq!(std::os::unix::fs::MetadataExt::uid(&meta), uid);
         }
         assert!(dir.path().join("file").is_file());
+    }
+
+    // --- #127 (finding 0d36258c216e): createattrs on OPEN and CREATE ---
+
+    fn cattrs(vals: Vec<FileAttrValue>) -> Fattr4 {
+        let mask = vals
+            .iter()
+            .map(|v| match v {
+                FileAttrValue::Size(_) => FileAttr::Size,
+                FileAttrValue::Mode(_) => FileAttr::Mode,
+                FileAttrValue::Owner(_) => FileAttr::Owner,
+                FileAttrValue::OwnerGroup(_) => FileAttr::OwnerGroup,
+                FileAttrValue::Acl(_) => FileAttr::Acl,
+                other => panic!("no mask bit in the test for {other:?}"),
+            })
+            .collect();
+        Fattr4 { attrmask: Attrlist4(mask), attr_vals: Attrlist4(vals) }
+    }
+
+    fn open_create_op(name: &str, how: CreateHow4) -> NfsArgOp {
+        let mut args = open_args(3, OpenFlag4::How(how));
+        args.claim = OpenClaim4::ClaimNull(name.to_string());
+        NfsArgOp::Opopen(args)
+    }
+
+    fn mkdir_with(name: &str, attrs: Fattr4) -> NfsArgOp {
+        NfsArgOp::Opcreate(Create4args {
+            objtype: Createtype4::Nf4dir,
+            objname: name.to_string(),
+            createattrs: attrs,
+        })
+    }
+
+    /// COMPOUND as the test process's own uid (squash none).
+    async fn run_own(dir: &std::path::Path, ops: Vec<NfsArgOp>) -> (NfsStat4, Vec<NfsResOp4>) {
+        let (uid, gid) = own_ids();
+        run_as(dir, SquashMode::None, auth_sys(uid, gid), ops).await
+    }
+
+    fn mode_of(path: &std::path::Path) -> u32 {
+        std::fs::symlink_metadata(path).unwrap().permissions().mode() & 0o7777
+    }
+
+    fn open_attrset(res: &NfsResOp4) -> Vec<FileAttr> {
+        match res {
+            NfsResOp4::Opopen(Open4res::Resok4(ok)) => ok.attrset.0.clone(),
+            other => panic!("Expected Opopen Resok4, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_open_create_applies_requested_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        // 0600 (private) and 0664 (wider than a 022 umask allows): both
+        // exactly as asked.
+        for (name, mode) in [("private", 0o600), ("shared", 0o664)] {
+            let how = CreateHow4::UNCHECKED4(cattrs(vec![FileAttrValue::Mode(mode)]));
+            let (status, res) =
+                run_own(dir.path(), vec![NfsArgOp::Opputrootfh(()), open_create_op(name, how)]).await;
+            assert_eq!(status, NfsStat4::Nfs4Ok, "{name}");
+            assert_eq!(mode_of(&dir.path().join(name)), mode, "{name}");
+            assert_eq!(open_attrset(&res[1]), vec![FileAttr::Mode], "{name}");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_open_create_applies_size_and_own_owner() {
+        let dir = tempfile::tempdir().unwrap();
+        let (uid, gid) = own_ids();
+        let how = CreateHow4::GUARDED4(cattrs(vec![
+            FileAttrValue::Size(10),
+            FileAttrValue::Mode(0o640),
+            FileAttrValue::Owner(uid.to_string()),
+            FileAttrValue::OwnerGroup(gid.to_string()),
+        ]));
+        let (status, res) =
+            run_own(dir.path(), vec![NfsArgOp::Opputrootfh(()), open_create_op("g", how)]).await;
+        assert_eq!(status, NfsStat4::Nfs4Ok);
+        let meta = std::fs::metadata(dir.path().join("g")).unwrap();
+        assert_eq!(meta.len(), 10);
+        assert_eq!(meta.permissions().mode() & 0o7777, 0o640);
+        assert_eq!(std::os::unix::fs::MetadataExt::uid(&meta), uid);
+        assert_eq!(
+            open_attrset(&res[1]),
+            vec![FileAttr::Size, FileAttr::Mode, FileAttr::Owner, FileAttr::OwnerGroup]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_open_guarded_existing_is_exist() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("e"), b"keep").unwrap();
+        let how = CreateHow4::GUARDED4(cattrs(vec![FileAttrValue::Mode(0o600)]));
+        let (status, _) =
+            run_own(dir.path(), vec![NfsArgOp::Opputrootfh(()), open_create_op("e", how)]).await;
+        assert_eq!(status, NfsStat4::Nfs4errExist);
+        assert_eq!(std::fs::read(dir.path().join("e")).unwrap(), b"keep");
+    }
+
+    #[tokio::test]
+    async fn test_open_unchecked_existing_keeps_data_and_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("e");
+        std::fs::write(&path, b"keep").unwrap();
+        chmod(&path, 0o644);
+        // Attributes other than size are not applied to an existing file.
+        let how = CreateHow4::UNCHECKED4(cattrs(vec![FileAttrValue::Mode(0o600)]));
+        let (status, res) =
+            run_own(dir.path(), vec![NfsArgOp::Opputrootfh(()), open_create_op("e", how)]).await;
+        assert_eq!(status, NfsStat4::Nfs4Ok);
+        assert_eq!(std::fs::read(&path).unwrap(), b"keep");
+        assert_eq!(mode_of(&path), 0o644);
+        assert!(open_attrset(&res[1]).is_empty());
+
+        // A size of zero truncates it.
+        let how = CreateHow4::UNCHECKED4(cattrs(vec![FileAttrValue::Size(0)]));
+        let (status, res) =
+            run_own(dir.path(), vec![NfsArgOp::Opputrootfh(()), open_create_op("e", how)]).await;
+        assert_eq!(status, NfsStat4::Nfs4Ok);
+        assert_eq!(std::fs::read(&path).unwrap(), b"");
+        assert_eq!(open_attrset(&res[1]), vec![FileAttr::Size]);
+    }
+
+    #[tokio::test]
+    async fn test_open_create_refuses_unsupported_attrs() {
+        let dir = tempfile::tempdir().unwrap();
+        let how = CreateHow4::UNCHECKED4(cattrs(vec![FileAttrValue::Mode(0o600), FileAttrValue::Acl(vec![])]));
+        let (status, _) =
+            run_own(dir.path(), vec![NfsArgOp::Opputrootfh(()), open_create_op("acl", how)]).await;
+        assert_eq!(status, NfsStat4::Nfs4errAttrnotsupp);
+        assert!(!dir.path().join("acl").exists());
+    }
+
+    #[tokio::test]
+    async fn test_open_create_cannot_give_file_away() {
+        if own_ids().0 == 0 {
+            return; // root may give a file away
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let how = CreateHow4::UNCHECKED4(cattrs(vec![FileAttrValue::Owner(OTHER.to_string())]));
+        let (status, _) =
+            run_own(dir.path(), vec![NfsArgOp::Opputrootfh(()), open_create_op("away", how)]).await;
+        assert_eq!(status, NfsStat4::Nfs4errPerm);
+        assert!(!dir.path().join("away").exists());
+    }
+
+    #[tokio::test]
+    async fn test_create_dir_applies_requested_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        for (name, mode) in [("private", 0o700), ("shared", 0o2775)] {
+            let (status, res) = run_own(
+                dir.path(),
+                vec![NfsArgOp::Opputrootfh(()), mkdir_with(name, cattrs(vec![FileAttrValue::Mode(mode)]))],
+            )
+            .await;
+            assert_eq!(status, NfsStat4::Nfs4Ok, "{name}");
+            assert_eq!(mode_of(&dir.path().join(name)), mode, "{name}");
+            match &res[1] {
+                NfsResOp4::Opcreate(Create4res::Resok4(ok)) => {
+                    assert_eq!(ok.attrset.0, vec![FileAttr::Mode], "{name}")
+                }
+                other => panic!("Expected Opcreate Resok4, got {:?}", other),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_create_dir_refuses_size() {
+        let dir = tempfile::tempdir().unwrap();
+        let (status, _) = run_own(
+            dir.path(),
+            vec![NfsArgOp::Opputrootfh(()), mkdir_with("d", cattrs(vec![FileAttrValue::Size(0)]))],
+        )
+        .await;
+        assert_eq!(status, NfsStat4::Nfs4errInval);
+        assert!(!dir.path().join("d").exists());
     }
 }

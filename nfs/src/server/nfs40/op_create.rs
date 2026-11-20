@@ -1,11 +1,15 @@
 use async_trait::async_trait;
 use tracing::{debug, error};
 
-use crate::server::{operation::NfsOperation, request::NfsRequest, response::NfsOpResponse};
+use crate::server::{
+    createattrs::{self, CreateAttrs, DEFAULT_DIR_MODE},
+    operation::NfsOperation,
+    request::NfsRequest,
+    response::NfsOpResponse,
+};
 
 use nextnfs_proto::nfs4_proto::{
-    Attrlist4, ChangeInfo4, Create4args, Create4res, Create4resok, Createtype4, FileAttr,
-    NfsResOp4, NfsStat4,
+    ChangeInfo4, Create4args, Create4res, Create4resok, Createtype4, NfsResOp4, NfsStat4,
 };
 
 #[async_trait]
@@ -15,6 +19,26 @@ impl NfsOperation for Create4args {
             "Operation 6: CREATE - Create a Non-regular File Object {:?}, with request {:?}",
             self, request
         );
+
+        // createattrs are validated before anything is created (#127). A
+        // size is for regular files, which CREATE never makes.
+        let caller = request.caller();
+        let attrs = match CreateAttrs::parse(&self.createattrs)
+            .and_then(|a| a.check(&caller).map(|_| a))
+        {
+            Ok(a) if a.size.is_some() => Err(NfsStat4::Nfs4errInval),
+            other => other,
+        };
+        let attrs = match attrs {
+            Ok(a) => a,
+            Err(status) => {
+                return NfsOpResponse {
+                    request,
+                    result: None,
+                    status,
+                };
+            }
+        };
 
         let current_filehandle = request.current_filehandle();
         let filehandle = match current_filehandle {
@@ -102,13 +126,16 @@ impl NfsOperation for Create4args {
                             }
                         };
                         request.set_filehandle(new_fh.clone());
+                        // Owner and group (a symlink has no settable mode).
+                        let attrset =
+                            createattrs::finish_new_object(&mut request, &caller, &attrs).await;
                         (
                             ChangeInfo4 {
                                 atomic: false,
                                 before: before_change,
                                 after: after_change,
                             },
-                            Attrlist4::<FileAttr>::new(None),
+                            attrset,
                         )
                     }
                     Err(e) => {
@@ -150,8 +177,16 @@ impl NfsOperation for Create4args {
                 // would hand the existing object to the caller (#122).
                 let exists = new_dir.exists().unwrap_or(false)
                     || request.file_manager().beneath().exists(new_dir.as_str());
+                let fm = request.file_manager();
                 let created = if exists {
                     Err(NfsStat4::Nfs4errExist)
+                } else if !fm.vfs_only() {
+                    // mkdirat with the requested permission bits from the
+                    // start (#127), in the parent resolved beneath the
+                    // export root (#123).
+                    fm.beneath()
+                        .create_dir(new_dir.as_str(), attrs.initial_mode(DEFAULT_DIR_MODE))
+                        .map_err(|e| createattrs::io_status(&e))
                 } else {
                     new_dir.create_dir().map_err(|e| match e.kind() {
                         vfs::error::VfsErrorKind::DirectoryExists
@@ -194,6 +229,8 @@ impl NfsOperation for Create4args {
                     }
                 };
                 request.set_filehandle(filehandle.clone());
+                // Owner, then the exact mode (set-id/sticky bits included).
+                let attrset = createattrs::finish_new_object(&mut request, &caller, &attrs).await;
 
                 (
                     ChangeInfo4 {
@@ -201,7 +238,7 @@ impl NfsOperation for Create4args {
                         before: before_change,
                         after: after_change,
                     },
-                    Attrlist4::<FileAttr>::new(None),
+                    attrset,
                 )
             }
             _ => {

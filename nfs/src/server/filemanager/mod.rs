@@ -623,14 +623,19 @@ impl FileManager {
         self.fhdb_replace(filehandle);
     }
 
+    /// The file OPEN asked for: created when it is not there (on a real
+    /// export OPEN has already created it with its mode, #127), opened as it
+    /// is when it is — never truncated (a vfs `create_file` is O_TRUNC).
     fn create_file(&mut self, request_file: &VfsPath) -> Option<Filehandle> {
-        match request_file.create_file() {
-            Ok(_) => debug!("File created successfully"),
-            Err(e) => {
-                error!("Error creating file {:?}", e);
-                return None;
-            }
-        };
+        if !request_file.exists().unwrap_or(false) {
+            match request_file.create_file() {
+                Ok(_) => debug!("File created successfully"),
+                Err(e) => {
+                    error!("Error creating file {:?}", e);
+                    return None;
+                }
+            };
+        }
 
         let fh = self.get_filehandle(request_file);
         let mut path = request_file.parent().as_str().to_string();

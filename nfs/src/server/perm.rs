@@ -4,7 +4,8 @@
 //! nothing on the caller's behalf. Every COMPOUND op that reads or changes an
 //! object is checked here first, against the object's mode bits as stat()
 //! reports them now, for the caller's identity after the export's `squash`
-//! mapping. Objects the caller creates are chowned to that identity.
+//! mapping. Objects the caller creates are given to that identity by OPEN
+//! and CREATE with their creation attributes (`createattrs`, #127).
 //!
 //! What is checked (the same rules knfsd applies):
 //!
@@ -14,7 +15,7 @@
 //! | READDIR | r on the directory |
 //! | CREATE, LINK, OPEN (new file) | w+x on the directory |
 //! | REMOVE, RENAME | w+x on the directory (both for RENAME), sticky bit |
-//! | OPEN (existing file) | r and/or w per share_access, x on the directory |
+//! | OPEN (existing file) | r and/or w per share_access (w too for UNCHECKED4 with a size), x on the directory |
 //! | READ / WRITE, ALLOCATE | r (or x) / w on the file |
 //! | COPY | r on the source, w on the destination |
 //! | SETATTR | owner for mode/ACL/times, root for owner, owner + member for group, w for size |
@@ -29,7 +30,9 @@
 //! fd (`ExportRoot`, #123), never through a symlink.
 
 
-use nextnfs_proto::nfs4_proto::{FileAttrValue, NfsArgOp, NfsStat4, OpenClaim4, OpenFlag4};
+use nextnfs_proto::nfs4_proto::{
+    CreateHow4, FileAttr, FileAttrValue, NfsArgOp, NfsStat4, OpenClaim4, OpenFlag4,
+};
 use nextnfs_proto::rpc_proto::OpaqueAuth;
 
 use super::beneath::ExportRoot;
@@ -416,7 +419,13 @@ pub fn check_op(arg: &NfsArgOp, request: &NfsRequest<'_>, caller: &Caller) -> Re
                 need_dir(caller, root, current, MAY_EXEC)?;
                 let target = join(current, name);
                 if stat(root, &target).is_some() {
-                    need_file(caller, root, &target, share_want(args.share_access))
+                    // UNCHECKED4 with a size truncates the existing file.
+                    let truncates = matches!(
+                        &args.openhow,
+                        OpenFlag4::How(CreateHow4::UNCHECKED4(f)) if f.attrmask.contains(&FileAttr::Size)
+                    );
+                    let want = share_want(args.share_access) | if truncates { MAY_WRITE } else { 0 };
+                    need_file(caller, root, &target, want)
                 } else if matches!(args.openhow, OpenFlag4::How(_)) {
                     need_dir(caller, root, current, MAY_WRITE | MAY_EXEC)
                 } else {
@@ -438,59 +447,6 @@ pub fn check_op(arg: &NfsArgOp, request: &NfsRequest<'_>, caller: &Caller) -> Re
         }
         _ => Ok(()),
     }
-}
-
-/// Whether `arg` will create a new object (OPEN with a create mode on a
-/// name that does not exist yet, or CREATE). Evaluated before the op runs.
-pub fn creates_object(arg: &NfsArgOp, request: &NfsRequest<'_>) -> bool {
-    match arg {
-        NfsArgOp::Opcreate(_) => true,
-        NfsArgOp::Opopen(args) => {
-            let OpenClaim4::ClaimNull(name) = &args.claim else { return false };
-            if !matches!(args.openhow, OpenFlag4::How(_)) {
-                return false;
-            }
-            match (request.file_manager_opt(), request.current_filehandle()) {
-                (Some(fm), Some(fh)) => stat(fm.beneath(), &join(&fh.path, name)).is_none(),
-                _ => false,
-            }
-        }
-        _ => false,
-    }
-}
-
-/// Give the object just created (the current filehandle) to `caller`: uid is
-/// the caller's, gid the caller's or, in a setgid directory, the directory's.
-/// Fails quietly when the server may not chown (it does not run as root).
-pub async fn chown_new_object(request: &mut NfsRequest<'_>, caller: &Caller) {
-    let Some(fm) = request.file_manager_opt().cloned() else { return };
-    let Some(fh) = request.current_filehandle().cloned() else { return };
-    let root = fm.beneath();
-    let Some(meta) = stat(root, &fh.path) else { return };
-    let gid = match stat(root, parent(&fh.path)) {
-        Some(parent) if parent.mode & libc::S_ISGID != 0 => parent.gid,
-        _ => caller.gid,
-    };
-    if meta.uid == caller.uid && meta.gid == gid {
-        return;
-    }
-    // fchownat on an O_PATH fd of the object itself, resolved beneath the
-    // export root (#123): a new symlink is chowned itself, not its target.
-    if let Err(e) = root.lchown(&fh.path, caller.uid, gid) {
-        tracing::debug!(
-            path = %fh.path,
-            uid = caller.uid,
-            gid,
-            "chown of new object failed: {e}"
-        );
-        return;
-    }
-    let mut fh = fh;
-    fh.attr_owner = caller.uid.to_string();
-    fh.attr_owner_group = gid.to_string();
-    fm.update_filehandle(fh.clone()).await;
-    request.cache_filehandle(fh.clone());
-    request.set_filehandle(fh);
 }
 
 #[cfg(test)]

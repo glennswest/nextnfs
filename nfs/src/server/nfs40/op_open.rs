@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use tracing::{debug, error};
 
 use crate::server::{
+    createattrs::{self, io_status, CreateAttrs, DEFAULT_FILE_MODE},
     filemanager::Filehandle,
     nfs40::{
         ChangeInfo4, Open4res, Open4resok, OpenDelegation4, OPEN4_RESULT_CONFIRM,
@@ -141,26 +142,40 @@ async fn open_for_writing<'a>(
 
     debug!("open_for_writing {:?}", fh_path);
 
-    // Quota enforcement: reject file creation if hard limit already exceeded
-    if let Some(qm) = request.quota_manager() {
-        if !qm.check_write(0) {
+    macro_rules! fail {
+        ($status:expr) => {
             return NfsOpResponse {
                 request,
                 result: None,
-                status: NfsStat4::Nfs4errDquot,
-            };
+                status: $status,
+            }
+        };
+    }
+
+    // Quota enforcement: reject file creation if hard limit already exceeded
+    if let Some(qm) = request.quota_manager() {
+        if !qm.check_write(0) {
+            fail!(NfsStat4::Nfs4errDquot);
         }
     }
+
+    // createattrs are validated before anything is created (#127).
+    let caller = request.caller();
+    let (attrs, guarded, verifier) = match how {
+        CreateHow4::UNCHECKED4(fattr) => (CreateAttrs::parse(fattr), false, None),
+        CreateHow4::GUARDED4(fattr) => (CreateAttrs::parse(fattr), true, None),
+        CreateHow4::EXCLUSIVE4(verifier) => (Ok(CreateAttrs::default()), false, Some(*verifier)),
+    };
+    let attrs = match attrs.and_then(|a| a.check(&caller).map(|_| a)) {
+        Ok(a) => a,
+        Err(status) => fail!(status),
+    };
 
     let newfile = match filehandle.file.join(file) {
         Ok(p) => p,
         Err(e) => {
             error!("OPEN write: invalid path join: {:?}", e);
-            return NfsOpResponse {
-                request,
-                result: None,
-                status: NfsStat4::Nfs4errInval,
-            };
+            fail!(NfsStat4::Nfs4errInval);
         }
     };
 
@@ -168,64 +183,56 @@ async fn open_for_writing<'a>(
     // ChangeInfo4 before/after — kernel clients need this to keep their
     // dentry/readdir caches in sync with directory mutations.
     let parent_vfs_str = filehandle.path.clone();
-    let before_change = request.file_manager().dir_change_attr(&parent_vfs_str);
+    let fm = request.file_manager();
+    let before_change = fm.dir_change_attr(&parent_vfs_str);
 
-    let filehandle = match how {
-        CreateHow4::UNCHECKED4(_fattr) => {
-            match request
-                .file_manager()
-                .create_file(
-                    newfile.clone(),
-                    args.owner.clientid,
-                    args.owner.owner.clone(),
-                    args.share_access,
-                    args.share_deny,
-                    None,
-                )
-                .await
-            {
-                Ok(filehandle) => filehandle,
-                Err(e) => {
-                    error!("Err {:?}", e);
-                    return NfsOpResponse {
-                        request,
-                        result: None,
-                        status: NfsStat4::Nfs4errServerfault,
-                    };
-                }
+    // Create the file with the requested permission bits from the start
+    // (O_EXCL: the file is ours only if this call made it), resolved
+    // beneath the export root (#123). The file manager then opens what is
+    // there; it never truncates (#127: UNCHECKED4 on an existing file
+    // keeps its data unless size 0 is asked).
+    let created = if fm.vfs_only() {
+        !newfile.exists().unwrap_or(false)
+    } else {
+        let flags = libc::O_RDONLY | libc::O_CREAT | libc::O_EXCL;
+        match fm.beneath().open_file(&fh_path, flags, attrs.initial_mode(DEFAULT_FILE_MODE)) {
+            Ok(_) => true,
+            Err(e) if e.raw_os_error() == Some(libc::EEXIST) => false,
+            Err(e) => {
+                debug!("OPEN create {:?}: {}", fh_path, e);
+                fail!(io_status(&e));
             }
         }
-        CreateHow4::EXCLUSIVE4(verifier) => {
-            match request
-                .file_manager()
-                .create_file(
-                    newfile,
-                    args.owner.clientid,
-                    args.owner.owner.clone(),
-                    args.share_access,
-                    args.share_deny,
-                    Some(*verifier),
-                )
-                .await
-            {
-                Ok(filehandle) => filehandle,
-                Err(e) => {
-                    error!("Err {:?}", e);
-                    return NfsOpResponse {
-                        request,
-                        result: None,
-                        status: NfsStat4::Nfs4errServerfault,
-                    };
-                }
-            }
+    };
+    if !created {
+        if guarded {
+            fail!(NfsStat4::Nfs4errExist);
         }
-        _ => {
-            error!("Unsupported CreateHow4 {:?}", how);
-            return NfsOpResponse {
-                request,
-                result: None,
-                status: NfsStat4::Nfs4errNotsupp,
-            };
+        let is_dir = if fm.vfs_only() {
+            newfile.is_dir().unwrap_or(false)
+        } else {
+            fm.beneath().is_dir(&fh_path)
+        };
+        if is_dir {
+            fail!(NfsStat4::Nfs4errIsdir);
+        }
+    }
+
+    let filehandle = match fm
+        .create_file(
+            newfile.clone(),
+            args.owner.clientid,
+            args.owner.owner.clone(),
+            args.share_access,
+            args.share_deny,
+            verifier,
+        )
+        .await
+    {
+        Ok(filehandle) => filehandle,
+        Err(e) => {
+            error!("Err {:?}", e);
+            fail!(NfsStat4::Nfs4errServerfault);
         }
     };
 
@@ -234,9 +241,29 @@ async fn open_for_writing<'a>(
     request.cache_filehandle(filehandle.clone());
     request.set_filehandle(filehandle.clone());
     // we expect this filehandle to have one lock (for the shared reservation)
-    let lock = &filehandle.locks[0];
+    let lock = filehandle.locks[0].clone();
 
-    let after_change = request.file_manager().dir_change_attr(&parent_vfs_str);
+    let attrset = if created {
+        // Owner, exact mode, size (#127); the filehandle keeps its locks.
+        createattrs::finish_new_object(&mut request, &caller, &attrs).await
+    } else if attrs.size == Some(0) && !fm.vfs_only() {
+        // UNCHECKED4 on an existing file applies only a size of zero
+        // (RFC 7530 §16.16.5); the dispatcher checked write access.
+        match fm.beneath().set_len(&fh_path, 0) {
+            Ok(()) => {
+                createattrs::refresh_current(&mut request).await;
+                Attrlist4::<FileAttr>::new(Some(vec![FileAttr::Size]))
+            }
+            Err(e) => {
+                error!("OPEN truncate {:?}: {}", fh_path, e);
+                fail!(io_status(&e));
+            }
+        }
+    } else {
+        Attrlist4::<FileAttr>::new(None)
+    };
+
+    let after_change = fm.dir_change_attr(&parent_vfs_str);
 
     NfsOpResponse {
         request,
@@ -253,7 +280,7 @@ async fn open_for_writing<'a>(
             // OPEN4_RESULT_CONFIRM indicates that the client MUST execute an
             // OPEN_CONFIRM operation before using the open file.
             rflags: OPEN4_RESULT_CONFIRM,
-            attrset: Attrlist4::<FileAttr>::new(None),
+            attrset,
             delegation: OpenDelegation4::None,
         }))),
         status: NfsStat4::Nfs4Ok,

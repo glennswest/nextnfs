@@ -3,6 +3,10 @@
 ## [Unreleased]
 <!-- New unreleased changes go here -->
 
+### 2026-11-20
+- **fix:** OPEN (UNCHECKED4, GUARDED4) and CREATE apply their creation attributes (#127, finding 0d36258c216e). They were ignored: every new file was made `0666 & umask` and every directory `0777 & umask` whatever mode the client asked, so a private 0600 file was 0644 (and already the caller's) until a later SETATTR. The object is now created with the requested permission bits (`O_CREAT|O_EXCL` / `mkdirat` with that mode, so it is never wider than asked), then given to the caller (or the requested owner/group), then set to the exact requested mode (set-id and sticky bits too), then its size. `size`, `mode`, `owner` and `owner_group` are applied and listed in the reply's `attrset`; any other writable attribute (ACL, `time_*_set`, archive, hidden, ...) is refused with `NFS4ERR_ATTRNOTSUPP`, a read-only one with `NFS4ERR_INVAL`, an unknown owner with `NFS4ERR_BADOWNER`, and giving the object to another uid or to a group the caller is not in (not root) with `NFS4ERR_PERM`; nothing is created then. New `nextnfs-server` module `createattrs`; the dispatcher's after-the-op chown of new objects moved into it
+- **fix:** OPEN UNCHECKED4 of an existing file no longer truncates it (the create was `O_TRUNC`): `open(O_CREAT)` without `O_TRUNC` emptied the file. Only a requested size of zero truncates it (RFC 7530 §16.16.5), which needs write access. GUARDED4 is implemented (`NFS4ERR_EXIST` on an existing name; it answered `NFS4ERR_NOTSUPP`), and OPEN with create of an existing directory answers `NFS4ERR_ISDIR`
+
 ## [v0.18.0] — 2026-11-20
 
 ### Breaking
