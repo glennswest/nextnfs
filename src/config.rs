@@ -37,6 +37,15 @@ pub struct ServerConfig {
     /// Kerberos principal → uid/gid, checked before `/etc/passwd`.
     #[serde(default)]
     pub krb5_map: Vec<Krb5Map>,
+    /// File holding the bearer token the REST API's write routes (add or
+    /// remove an export, set QoS) require. Unset: the API refuses every
+    /// change (#122).
+    #[serde(default)]
+    pub api_token_file: Option<String>,
+    /// Directories an export added through the API must be inside. Empty:
+    /// any directory (the token holder is trusted with the host).
+    #[serde(default)]
+    pub api_export_roots: Vec<String>,
 }
 
 /// `[[server.krb5_map]]`: the identity a Kerberos principal's calls run as.
@@ -115,6 +124,8 @@ impl Default for ServerConfig {
             tls_key: None,
             krb5_keytab: None,
             krb5_map: Vec::new(),
+            api_token_file: None,
+            api_export_roots: Vec::new(),
         }
     }
 }
@@ -202,5 +213,17 @@ path = "/srv/plain"
         assert!(cfg.exports[1].sec.is_empty());
         let cfg: Config = toml::from_str("[server]\n").unwrap();
         assert!(cfg.server.krb5_keytab.is_none() && cfg.server.krb5_map.is_empty());
+    }
+
+    #[test]
+    fn api_admin_keys_parse() {
+        let cfg: Config = toml::from_str(
+            "[server]\napi_token_file = \"/etc/nextnfs/api-token\"\napi_export_roots = [\"/srv\"]\n",
+        )
+        .unwrap();
+        assert_eq!(cfg.server.api_token_file.as_deref(), Some("/etc/nextnfs/api-token"));
+        assert_eq!(cfg.server.api_export_roots, vec!["/srv"]);
+        let cfg: Config = toml::from_str("").unwrap();
+        assert!(cfg.server.api_token_file.is_none() && cfg.server.api_export_roots.is_empty());
     }
 }

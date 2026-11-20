@@ -3,6 +3,11 @@ listen = "0.0.0.0:2049"
 api_listen = "0.0.0.0:8080"
 state_dir = "/var/lib/nextnfs"
 
+# REST API changes (add/remove export, QoS) need this bearer token; unset:
+# the API is read-only. Optionally confine API-added exports to some roots.
+# api_token_file = "/etc/nextnfs/api-token"   # first line is the token
+# api_export_roots = ["/export"]
+
 # TLS (optional — uncomment to enable RPC-over-TLS)
 # tls_cert = "/etc/nextnfs/tls/cert.pem"
 # tls_key = "/etc/nextnfs/tls/key.pem"

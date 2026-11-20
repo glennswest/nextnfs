@@ -37,6 +37,12 @@ struct Cli {
     /// all_squash or none. Config-file exports use their own `squash`.
     #[arg(long, global = true)]
     squash: Option<String>,
+
+    /// Serve: file holding the bearer token the API's write routes need
+    /// (overrides `[server] api_token_file`). Without one the API refuses
+    /// changes. `export add|remove`: the token to send.
+    #[arg(long, global = true)]
+    api_token_file: Option<PathBuf>,
 }
 
 #[derive(Subcommand)]
@@ -134,8 +140,10 @@ async fn main() {
                 path,
                 read_only,
                 api,
-            } => cli::export_add(&api, &name, &path, read_only).await,
-            ExportAction::Remove { name, api } => cli::export_remove(&api, &name).await,
+            } => cli::export_add(&api, &name, &path, read_only, cli.api_token_file.as_deref()).await,
+            ExportAction::Remove { name, api } => {
+                cli::export_remove(&api, &name, cli.api_token_file.as_deref()).await
+            }
         },
         Some(Commands::Stats { api }) => cli::stats(&api).await,
         Some(Commands::Health { api }) => cli::health(&api).await,
@@ -151,6 +159,7 @@ async fn main() {
                 api_listen.unwrap_or(cli.api_listen),
                 config.or(cli.config),
                 cli.squash.unwrap_or_default(),
+                cli.api_token_file,
             )
             .await;
         }
@@ -162,6 +171,7 @@ async fn main() {
                 cli.api_listen,
                 cli.config,
                 cli.squash.unwrap_or_default(),
+                cli.api_token_file,
             )
             .await;
         }
@@ -174,7 +184,28 @@ async fn run_server(
     api_listen_addr: String,
     config_path: Option<PathBuf>,
     cli_squash: String,
+    cli_api_token_file: Option<PathBuf>,
 ) {
+    // Who may change exports through the API (#122): the token file from
+    // the CLI or the config, and the config's export roots.
+    let (cfg_token_file, api_export_roots) = match &config_path {
+        Some(p) => match config::Config::load(p) {
+            Ok(cfg) => (cfg.server.api_token_file.map(PathBuf::from), cfg.server.api_export_roots),
+            Err(_) => (None, Vec::new()), // reported below
+        },
+        None => (None, Vec::new()),
+    };
+    let admin = match api::AdminAuth::load(
+        cli_api_token_file.or(cfg_token_file).as_deref(),
+        &api_export_roots,
+    ) {
+        Ok(a) => a,
+        Err(e) => {
+            error!("API admin settings: {}", e);
+            std::process::exit(1);
+        }
+    };
+
     // Load config and merge with CLI args
     let (exports, listen, api_listen, state_dir, tls_cert, tls_key, krb5) = if let Some(config_path) = config_path {
         match config::Config::load(&config_path) {
@@ -428,7 +459,7 @@ async fn run_server(
     });
 
     let api_task = tokio::spawn(async move {
-        api::start_api_server(api_bind, api_em).await;
+        api::start_api_server(api_bind, api_em, admin).await;
     });
 
     tokio::select! {

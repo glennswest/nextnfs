@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### 2026-11-20
+- **fix (security):** symlinks can no longer lead out of the export (#122, findings b31fc72eff57, 7db43602328a). A client could CREATE a symlink to any server file, LOOKUP it and READ/WRITE/SETATTR the target as root, or walk a symlinked directory (`LOOKUP dirlink`, then any op in it, or one LOOKUP of `dirlink/file`). Now every COMPOUND op is checked (`perm::check_confined`, for every caller, root too): names with `/`, `.` or `..` → `NFS4ERR_BADNAME`; directory ops (LOOKUP, CREATE, REMOVE, RENAME, LINK, READDIR, SECINFO, OPEN) on a symlink handle and OPEN of a symlink name → `NFS4ERR_SYMLINK`; READ, WRITE, COMMIT, ALLOCATE, SEEK, COPY on a symlink → `NFS4ERR_INVAL`; SETATTR size/mode/ACL on one → `NFS4ERR_INVAL`; a handle whose path passes through a symlink (its directory was swapped for one) → `NFS4ERR_STALE`. SETATTR owner/group/times use `lchown` / `AT_SYMLINK_NOFOLLOW`; WRITE and the write cache open with `O_NOFOLLOW`. Also fixes multi-component LOOKUP names skipping the search check of each directory
+- **fix (security):** CREATE of a directory on an existing name (file, directory or symlink) answers `NFS4ERR_EXIST`; it reported success and the new-object chown gave the existing object to the caller (#122, finding a163d43c8336). Other `mkdir` errors are returned (`NFS4ERR_ACCESS`, `NFS4ERR_NOENT`, `NFS4ERR_IO`) instead of ignored
+- **BREAKING (security):** the REST API's write routes (POST/DELETE `/api/v1/exports`, PUT `/api/v1/qos/{name}`) need `Authorization: Bearer <token>` from the new `[server] api_token_file` (or `--api-token-file`); without one they answer 403, so anyone reaching :8080 could export `/` (#122, finding ea1e5db68528). New `[server] api_export_roots` confines API-added exports. The web UI's exports page asks for the token, and offers no changes when the server has none; `nextnfs export add|remove` take `--api-token-file`. Reads and `/health` are unchanged
+
 ## [v0.16.1] — 2026-11-18
 
 ### Fixed

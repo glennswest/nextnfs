@@ -12,6 +12,7 @@ Current version: **0.16.1**.
 - **Multi-export** — serve multiple filesystem paths as separate exports under an NFSv4 pseudo-filesystem root; single-export mode is fully backwards-compatible
 - **Real-filesystem semantics** — `stat()`-based attributes (mode/uid/gid/nlink/atime/mtime/ctime), inode-based persistent file handles (`dev:ino`, survive restart), hard links and symlinks; every WRITE is a `pwrite`/`O_APPEND` write followed by `fsync` before the reply
 - **Per-export access control** — `clients` allow-list of IPs/CIDRs (checked whenever a COMPOUND moves onto an export — PUTFH, single-export PUTROOTFH, LOOKUP from the pseudo-root, RESTOREFH — others get `NFS4ERR_ACCESS`; pseudo-root READDIR lists only the exports the client may enter); `max_ops_per_sec` rate limit (excess COMPOUNDs get `NFS4ERR_DELAY`)
+- **Confined to the export** — the server never follows a symlink on the client's behalf: names are single components (`/`, `.`, `..` get `NFS4ERR_BADNAME`); an op in a directory on a symlink handle, or OPEN of a symlink name, gets `NFS4ERR_SYMLINK`; READ, WRITE, COMMIT, ALLOCATE, SEEK and COPY on a symlink get `NFS4ERR_INVAL`, as does SETATTR of size, mode or ACL (owner, group and times are set on the link itself); a handle whose path now passes through a symlink (its directory was replaced by one) is `NFS4ERR_STALE`. CREATE on an existing name is `NFS4ERR_EXIST` ([#122](https://github.com/glennswest/nextnfs/issues/122))
 - **POSIX permissions per caller** — every op is checked against the object's mode bits for the client's AUTH_SYS uid/gid/groups after the export's `squash` mapping (`root_squash` by default), as knfsd does: directory `w+x` to create, remove, rename or link (sticky bit honoured), `x` to LOOKUP, `r` to READDIR, `r`/`w` to OPEN, READ, WRITE (the file's owner always may), owner-only chmod and times, root-only chown. Refusals are `NFS4ERR_ACCESS` (`EACCES`) or `NFS4ERR_PERM` (`EPERM`). New files, directories and symlinks are owned by the caller (in a setgid directory, by the directory's group); this needs the server to run as root, which `nextnfs.service` does. AUTH_NONE calls are the anonymous user ([#91](https://github.com/glennswest/nextnfs/issues/91))
 - **Kerberos (RPCSEC_GSS, RFC 2203)** — with `krb5_keytab` set, clients can mount with `sec=krb5` (authentication), `krb5i` (plus an integrity checksum on every call and reply) or `krb5p` (plus encryption). Pure-Rust Kerberos (the `nextnfs-krb5` crate: AES enctypes aes128/256-cts-hmac-sha1-96 and aes128-cts-hmac-sha256-128 / aes256-cts-hmac-sha384-192, MIT keytabs, RFC 4121 tokens), so the binary stays static. Each export's `sec` lists the flavours it accepts (default `["sys"]`); a call with another flavour gets `NFS4ERR_WRONGSEC`, and SECINFO / SECINFO_NO_NAME announce the export's list. A principal's calls run as the uid/gid of `[[server.krb5_map]]`, else its `/etc/passwd` entry (local realms), else the export's anonymous user; machine principals (`nfs/`, `host/`, `root/<host>`) are uid 0, so `squash` applies to them as to AUTH_SYS root. Without a keytab RPCSEC_GSS calls are denied with `AUTH_BADCRED` ([#106](https://github.com/glennswest/nextnfs/issues/106)). Owner strings are still numeric, so a krb5 client without numeric id mapping shows files as `nobody`
 - **RPC-over-TLS** (RFC 9289) — set `tls_cert` + `tls_key` and the NFS listener requires TLS on every connection
@@ -118,7 +119,9 @@ TOML, loaded with `--config FILE` (see `nextnfs.example.toml`). Every key is opt
 | Key | Default | Meaning |
 |---|---|---|
 | `listen` | `0.0.0.0:2049` | NFS TCP listen address |
-| `api_listen` | `0.0.0.0:8080` | REST API + web UI listen address (plain HTTP, no auth) |
+| `api_listen` | `0.0.0.0:8080` | REST API + web UI listen address (plain HTTP). Reads and `/health` are open to anyone who reaches it |
+| `api_token_file` | unset | File whose first line is the bearer token the API's write routes (add/remove an export, set QoS) require. Unset: those routes answer 403 and the web UI offers no changes. An unreadable or empty file stops the server at startup. `--api-token-file` overrides it |
+| `api_export_roots` | `[]` (any) | Directories an export added through the API must be inside (checked after resolving symlinks and `..`); others get 403. Each must exist, or the server exits at startup |
 | `state_dir` | unset | Directory for client-state snapshots (created if missing); written every 30 s, restored and cleared at startup |
 | `tls_cert`, `tls_key` | unset | PEM cert and key; when **both** are set the NFS port speaks RPC-over-TLS only |
 | `krb5_keytab` | unset | MIT keytab with the server's `nfs/<host>@REALM` keys (AES enctypes). Set: RPCSEC_GSS (krb5, krb5i, krb5p) is served; the server exits at startup if the file cannot be read or holds no AES key. Unset: RPCSEC_GSS is refused, and an export whose `sec` names a Kerberos flavour stops the server at startup |
@@ -148,9 +151,11 @@ Exports added through the API or CLI live in memory only; they are gone after a 
 
 ```
 nextnfs [serve] [-e|--export PATH] [-l|--listen ADDR] [-a|--api-listen ADDR] [-c|--config FILE] [--squash MODE]
-nextnfs export list | add --name N --path P [--read-only] | remove --name N
+nextnfs export list | add --name N --path P [--read-only] | remove --name N   [--api-token-file F]
 nextnfs stats | health   [--api URL]     # default http://127.0.0.1:8080
 ```
+
+`--api-token-file F`: for `serve`, the API token file (overrides `[server] api_token_file`); for `export add|remove`, the token they send.
 
 `--squash` (`root_squash` by default, `all_squash`, `none`) sets the squash mode of the `--export` export only; config-file exports use their own `squash` key. The `[export]` legacy section has no `squash` key and is `root_squash`. Exports added through the API are `root_squash`.
 
@@ -160,13 +165,13 @@ nextnfs stats | health   [--api URL]     # default http://127.0.0.1:8080
 |--------|------|-------------|
 | GET | `/health` | `{"status":"ok","exports":N}` |
 | GET | `/api/v1/exports` | List exports: `name`, `path`, `read_only`, `export_id`, `stats` |
-| POST | `/api/v1/exports` | Add `{"name","path","read_only"}` (in-memory; no `clients`/QoS/squash) |
-| DELETE | `/api/v1/exports/{name}` | Remove export |
+| POST | `/api/v1/exports` | Add `{"name","path","read_only"}` (in-memory; no `clients`/QoS/squash). Token; `path` inside `api_export_roots` when set |
+| DELETE | `/api/v1/exports/{name}` | Remove export. Token |
 | GET | `/api/v1/stats` · `/api/v1/stats/{name}` | Server totals (`total_reads`, `total_writes`, `total_bytes_read`, `total_bytes_written`, `total_ops`, `exports`) / one export |
-| GET · PUT | `/api/v1/qos/{name}` | Read / set `{"max_ops_per_sec","max_bytes_per_sec"}` (applies at once; a changed limit starts with a full bucket); 404 for unknown export |
+| GET · PUT | `/api/v1/qos/{name}` | Read / set (PUT: token) `{"max_ops_per_sec","max_bytes_per_sec"}` (applies at once; a changed limit starts with a full bucket); 404 for unknown export |
 | GET | `/` · `/ui/exports` · `/ui/stats` | Web UI |
 
-The API has no authentication — bind `api_listen` to a trusted address.
+The write routes (marked *Token*) need `Authorization: Bearer <token>`, the first line of `api_token_file`: a missing or wrong token gets 401. Without `api_token_file` they answer 403 whatever is sent, so an API reachable from the network can no longer add an export of an arbitrary directory ([#122](https://github.com/glennswest/nextnfs/issues/122)). The reads (export list with paths, stats, QoS) are not authenticated: bind `api_listen` to a trusted address if they should not be public.
 
 ## Architecture
 

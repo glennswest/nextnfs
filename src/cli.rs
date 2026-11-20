@@ -35,7 +35,35 @@ pub async fn export_list(api_url: &str) {
     }
 }
 
-pub async fn export_add(api_url: &str, name: &str, path: &str, read_only: bool) {
+/// The API token from `--token-file` (first line, trimmed), for export
+/// changes (#122). `None` when no file was given.
+fn read_token(token_file: Option<&std::path::Path>) -> Result<Option<String>, String> {
+    let Some(f) = token_file else { return Ok(None) };
+    let text = std::fs::read_to_string(f).map_err(|e| format!("{}: {}", f.display(), e))?;
+    Ok(Some(text.lines().next().unwrap_or("").trim().to_string()))
+}
+
+fn with_token(req: reqwest::RequestBuilder, token: Option<String>) -> reqwest::RequestBuilder {
+    match token {
+        Some(t) => req.bearer_auth(t),
+        None => req,
+    }
+}
+
+pub async fn export_add(
+    api_url: &str,
+    name: &str,
+    path: &str,
+    read_only: bool,
+    token_file: Option<&std::path::Path>,
+) {
+    let token = match read_token(token_file) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("Error: token file {}", e);
+            return;
+        }
+    };
     let url = format!("{}/api/v1/exports", api_url);
     let client = reqwest::Client::new();
     let body = serde_json::json!({
@@ -44,7 +72,7 @@ pub async fn export_add(api_url: &str, name: &str, path: &str, read_only: bool) 
         "read_only": read_only,
     });
 
-    match client.post(&url).json(&body).send().await {
+    match with_token(client.post(&url).json(&body), token).send().await {
         Ok(resp) => {
             if resp.status().is_success() {
                 let data: serde_json::Value = resp.json().await.unwrap_or_default();
@@ -66,11 +94,18 @@ pub async fn export_add(api_url: &str, name: &str, path: &str, read_only: bool) 
     }
 }
 
-pub async fn export_remove(api_url: &str, name: &str) {
+pub async fn export_remove(api_url: &str, name: &str, token_file: Option<&std::path::Path>) {
+    let token = match read_token(token_file) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("Error: token file {}", e);
+            return;
+        }
+    };
     let url = format!("{}/api/v1/exports/{}", api_url, name);
     let client = reqwest::Client::new();
 
-    match client.delete(&url).send().await {
+    match with_token(client.delete(&url), token).send().await {
         Ok(resp) => {
             if resp.status().is_success() {
                 println!("Export '{}' removed.", name);

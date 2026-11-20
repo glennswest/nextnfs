@@ -155,44 +155,73 @@ pub fn render_dashboard(exports: &[ExportInfo]) -> String {
     html
 }
 
-pub fn render_exports(exports: &[ExportInfo]) -> String {
+/// The exports page. `writable`: the server has an API token, so the add
+/// and remove controls are shown (they send the token typed in the page);
+/// without one the API refuses changes and the page offers none (#122).
+pub fn render_exports(exports: &[ExportInfo], writable: bool) -> String {
     let mut html = head("NextNFS - Exports");
     html.push_str(&nav("Exports"));
     html.push_str(r#"<h1>Export Management</h1>"#);
 
-    // Add export form
-    html.push_str(r#"<div class="card"><h2>Add Export</h2>"#);
-    html.push_str(r#"<div class="form-row"><input type="text" id="exp-name" placeholder="Export name" style="width:160px">"#);
-    html.push_str(r#"<input type="text" id="exp-path" placeholder="/path/to/share" style="width:280px">"#);
-    html.push_str(r#"<label><input type="checkbox" id="exp-ro"> Read-only</label>"#);
-    html.push_str(r#"<button onclick="addExport()">Add</button></div>"#);
-    html.push_str(r#"<div id="status"></div></div>"#);
+    if writable {
+        // Add export form
+        html.push_str(r#"<div class="card"><h2>Add Export</h2>"#);
+        html.push_str(r#"<div class="form-row"><input type="password" id="api-token" placeholder="API token" style="width:160px" autocomplete="off"></div>"#);
+        html.push_str(r#"<div class="form-row"><input type="text" id="exp-name" placeholder="Export name" style="width:160px">"#);
+        html.push_str(r#"<input type="text" id="exp-path" placeholder="/path/to/share" style="width:280px">"#);
+        html.push_str(r#"<label><input type="checkbox" id="exp-ro"> Read-only</label>"#);
+        html.push_str(r#"<button onclick="addExport()">Add</button></div>"#);
+        html.push_str(r#"<div id="status"></div></div>"#);
+    }
 
     // Export list
     html.push_str(r#"<div class="card"><h2>Current Exports</h2>"#);
     if exports.is_empty() {
         html.push_str(r#"<div class="empty">No exports configured</div>"#);
     } else {
-        html.push_str("<table><tr><th>Name</th><th>Path</th><th>Mode</th><th>ID</th><th></th></tr>");
+        html.push_str(if writable {
+            "<table><tr><th>Name</th><th>Path</th><th>Mode</th><th>ID</th><th></th></tr>"
+        } else {
+            "<table><tr><th>Name</th><th>Path</th><th>Mode</th><th>ID</th></tr>"
+        });
         for e in exports {
             let badge = if e.read_only {
                 r#"<span class="badge badge-ro">RO</span>"#
             } else {
                 r#"<span class="badge badge-rw">RW</span>"#
             };
+            let remove = if writable {
+                format!(
+                    r#"<td><button class="btn-danger btn-sm" onclick="removeExport('{}')">Remove</button></td>"#,
+                    e.name
+                )
+            } else {
+                String::new()
+            };
             html.push_str(&format!(
-                r#"<tr><td>{name}</td><td class="mono">{path}</td><td>{badge}</td><td>{id}</td><td><button class="btn-danger btn-sm" onclick="removeExport('{name}')">Remove</button></td></tr>"#,
+                r#"<tr><td>{name}</td><td class="mono">{path}</td><td>{badge}</td><td>{id}</td>{remove}</tr>"#,
                 name = e.name,
                 path = e.path.display(),
                 badge = badge,
-                id = e.export_id
+                id = e.export_id,
+                remove = remove
             ));
         }
         html.push_str("</table>");
     }
     html.push_str("</div>");
 
+    if !writable {
+        html.push_str(r#"<div class="card"><div class="empty">Exports are changed in the config file: this server has no api_token_file, so its API does not accept changes.</div></div>"#);
+        html.push_str(foot());
+        return html;
+    }
+
     html.push_str(r#"<script>
+function authHeaders(extra) {
+    const t = document.getElementById('api-token').value;
+    return Object.assign({'Authorization': 'Bearer ' + t}, extra || {});
+}
 async function addExport() {
     const name = document.getElementById('exp-name').value;
     const path = document.getElementById('exp-path').value;
@@ -201,7 +230,7 @@ async function addExport() {
     if (!name || !path) { st.innerHTML='<span class="status-err">Name and path required</span>'; return; }
     try {
         const r = await fetch('/api/v1/exports', {
-            method: 'POST', headers: {'Content-Type':'application/json'},
+            method: 'POST', headers: authHeaders({'Content-Type':'application/json'}),
             body: JSON.stringify({name, path, read_only: ro})
         });
         const d = await r.json();
@@ -212,7 +241,7 @@ async function addExport() {
 async function removeExport(name) {
     if (!confirm('Remove export "'+name+'"?')) return;
     try {
-        const r = await fetch('/api/v1/exports/'+name, {method:'DELETE'});
+        const r = await fetch('/api/v1/exports/'+name, {method:'DELETE', headers: authHeaders()});
         if (r.ok) location.reload();
         else { const d = await r.json(); alert(d.error); }
     } catch(e) { alert(e); }
@@ -278,5 +307,20 @@ fn format_bytes(n: u64) -> String {
         format!("{:.1} KB", n as f64 / 1024.0)
     } else {
         format!("{} B", n)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exports_page_offers_changes_only_with_a_token() {
+        let ro = render_exports(&[], false);
+        assert!(!ro.contains("addExport") && !ro.contains("removeExport"));
+        assert!(ro.contains("api_token_file"));
+        let rw = render_exports(&[], true);
+        assert!(rw.contains("addExport()") && rw.contains("api-token"));
+        assert!(rw.contains("'Bearer '"));
     }
 }
