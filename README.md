@@ -2,7 +2,7 @@
 
 High-performance, standalone **NFSv4.0/4.1 server over a real filesystem**, written in Rust. Runs as a static musl binary in a scratch/[stormd](https://github.com/glennswest/stormd) container, or as an RPM/DEB service on Fedora/RHEL/Debian. Multiple exports, a REST API + web UI for management, and NFSv4 protocol correctness verified against real Linux clients.
 
-Current version: **0.16.1**.
+Current version: **0.17.0**.
 
 ## Features
 
@@ -68,8 +68,8 @@ In the container, stormd (`stormd.toml`) starts `nextnfs serve --export /export 
 ### RPM / DEB
 
 ```bash
-sudo rpm -i nextnfs-0.16.1-1.x86_64.rpm     # Fedora/RHEL
-sudo dpkg -i nextnfs_0.16.1_amd64.deb        # Debian/Ubuntu
+sudo rpm -i nextnfs-0.17.0-1.x86_64.rpm     # Fedora/RHEL
+sudo dpkg -i nextnfs_0.17.0_amd64.deb        # Debian/Ubuntu
 ```
 
 | | RPM | DEB |

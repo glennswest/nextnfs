@@ -5,7 +5,7 @@ live in `../CLAUDE.md`; this file is the project context and work plan.
 
 ## Version
 
-**0.16.1** (tag `v0.16.1`). Version locations — all must match:
+**0.17.0** (tag `v0.17.0`). Version locations — all must match:
 
 - `Cargo.toml` → `[workspace.package] version` (every crate inherits it)
 - `build.sh` → `VERSION=`
@@ -223,7 +223,7 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       on c9749c8: 612 tests, clippy 0 warnings, live `nextnfstest -V 4.1
       -l wire` 6/6 incl. W41-020. Released v0.16.1 (afc3f87, --locked
       build green); #118, #121 closed; image build d1a36bc38821 requested.
-- [ ] 2026-11-20 — #122 (P0, 4 critical review findings). Plan:
+- [x] 2026-11-20 — #122 (P0, 4 critical review findings). Plan:
       b31fc72eff57 + 7db43602328a (symlinks): `perm::check_confined` in the
       COMPOUND dispatcher — single-component names (BADNAME), handles reached
       through a symlinked directory → STALE, dir ops on a symlink → SYMLINK,
@@ -234,3 +234,10 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       ea1e5db68528: API writes (POST/DELETE exports, PUT qos) need a bearer
       token (`[server] api_token_file`, `--api-token-file`); none set → 403;
       optional `api_export_roots` confine API-added exports.
+      Done: 0168750 (symlinks, CREATE), 6e6a145 (API token), a0398c1
+      (test fix); `sc-build 'cargo test --workspace --locked && cargo clippy
+      --workspace --all-targets --locked'` on a0398c1 green (635 tests,
+      0 warnings). Breaking (API) → v0.17.0. Residual: the symlink checks run
+      before the op, so a directory swapped for a symlink in between is a
+      narrow race; descriptor-relative opens (openat2 RESOLVE_BENEATH)
+      would close it. The majors of the same review follow as P1.
