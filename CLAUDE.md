@@ -266,3 +266,8 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       golden registry config and nfsop all set 0.0.0.0:8080 explicitly);
       POST /api/v1/exports needs a non-empty `api_export_roots` (403
       otherwise, even with the token). Breaking → v0.18.0 after sc-build.
+      Build on 9988108: #125 tests green; #123's race test failed (#126):
+      WRITE fell back to the vfs (O_APPEND) when the swap made the file
+      NotFound — appended inside, never outside. Fixed: vfs fallbacks
+      (WRITE, RENAME, SETATTR size) only for `FileManagerHandle::new`
+      (MemoryFS tests, `vfs_only`); real-export NotFound WRITE → STALE.

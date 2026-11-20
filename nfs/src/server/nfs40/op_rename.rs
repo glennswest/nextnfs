@@ -105,7 +105,10 @@ impl NfsOperation for Rename4args {
         let result = match beneath.rename(&src_path, &dst_path) {
             Ok(()) => Ok(()),
             // Not on disk: MemoryFS in unit tests — use the VFS.
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound && !beneath.exists(&src_path) => {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound
+                && fm.vfs_only()
+                && !beneath.exists(&src_path) =>
+            {
                 if is_dir {
                     src_vfs.move_dir(&dst_vfs)
                 } else {

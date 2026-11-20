@@ -3825,6 +3825,39 @@ mod tests {
         }
     }
 
+    /// A real export never writes through the vfs: WRITE of a file that is
+    /// gone from beneath the root (removed, or a directory on its path is
+    /// mid-swap) is NFS4ERR_STALE, and nothing is created or appended.
+    #[tokio::test]
+    async fn test_write_of_removed_file_is_stale() {
+        use crate::server::operation::NfsOperation;
+        let export = tempfile::tempdir().unwrap();
+        let d = export.path().join("d");
+        std::fs::create_dir(&d).unwrap();
+        std::fs::write(d.join("f"), b"abc").unwrap();
+        let mut request = request_on_export_squash(false, export.path(), SquashMode::None).await;
+        let fh = request
+            .file_manager()
+            .get_filehandle_for_path("/d/f".to_string())
+            .await
+            .unwrap();
+        assert!(!request.file_manager().vfs_only());
+        std::fs::remove_file(d.join("f")).unwrap();
+        for stable in [StableHow4::FileSync4, StableHow4::DataSync4] {
+            request.set_filehandle(fh.clone());
+            let args = Write4args {
+                stateid: Stateid4 { seqid: 0, other: [0; 12] },
+                offset: 1,
+                stable,
+                data: b"x".to_vec(),
+            };
+            let resp = args.execute(request).await;
+            assert_eq!(resp.status, NfsStat4::Nfs4errStale);
+            request = resp.request;
+            assert!(!d.join("f").exists());
+        }
+    }
+
     /// The issue's test: a thread swaps d for a symlink to the outside
     /// directory and back, in a loop, while WRITEs of d/secret run, through
     /// the dispatcher and as the op alone. The outside file never changes.

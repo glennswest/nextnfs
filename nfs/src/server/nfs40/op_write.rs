@@ -91,7 +91,11 @@ impl NfsOperation for Write4args {
             let beneath = fm.beneath();
             let on_disk = match beneath.symlink_metadata(&path) {
                 Ok(meta) => Ok(meta.len()),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(None),
+                // Only a vfs-only tree (unit tests) is written through the
+                // vfs. On a real export the file is gone, or a directory on
+                // its path is mid-swap: the WRITE fails, it is never
+                // appended through a second lookup.
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound && fm.vfs_only() => Err(None),
                 Err(e) => Err(Some(e)),
             };
             let write_result = if let Ok(file_len) = on_disk {
@@ -152,10 +156,16 @@ impl NfsOperation for Write4args {
                 }
                 Err(e) => {
                     error!("WRITE: write failed: {:?}", e);
+                    // Gone from beneath the export root: the handle is stale.
+                    let status = if e.kind() == std::io::ErrorKind::NotFound {
+                        NfsStat4::Nfs4errStale
+                    } else {
+                        NfsStat4::Nfs4errIo
+                    };
                     return NfsOpResponse {
                         request,
                         result: None,
-                        status: NfsStat4::Nfs4errIo,
+                        status,
                     };
                 }
             }

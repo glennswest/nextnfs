@@ -276,6 +276,10 @@ pub struct FileManagerHandle {
     export_root: PathBuf,
     /// Every path of the export is resolved beneath this fd (#123).
     beneath: Arc<ExportRoot>,
+    /// The vfs tree is not the disk under `beneath` (MemoryFS, unit tests):
+    /// an object missing beneath the root may be served from the vfs. Never
+    /// for a real export, where "missing" means it is gone, or is mid-swap.
+    vfs_only: bool,
     lease_time: u32,
     hard_link_support: bool,
     symlink_support: bool,
@@ -283,14 +287,18 @@ pub struct FileManagerHandle {
 }
 
 impl FileManagerHandle {
-    /// A file manager for `root` at `export_root`, which is opened as the
-    /// confining root (`ExportRoot::open_or_closed`: if it cannot be, every
-    /// op on the export fails).
+    /// A file manager over a vfs tree that is not the disk at `export_root`
+    /// (MemoryFS, unit tests). `export_root` is opened as the confining root
+    /// (`ExportRoot::open_or_closed`: if it cannot be, every disk op fails);
+    /// an object not found under it is served from the vfs tree.
     pub fn new(root: VfsPath, fsid: Option<u64>, export_root: PathBuf) -> Self {
-        Self::with_root(root, fsid, Arc::new(ExportRoot::open_or_closed(&export_root)))
+        let mut h = Self::with_root(root, fsid, Arc::new(ExportRoot::open_or_closed(&export_root)));
+        h.vfs_only = true;
+        h
     }
 
-    /// A file manager whose paths are resolved beneath `beneath`.
+    /// A file manager whose paths are resolved beneath `beneath`, and whose
+    /// vfs root is that same disk (`BeneathFS`): no vfs fallback.
     pub fn with_root(root: VfsPath, fsid: Option<u64>, beneath: Arc<ExportRoot>) -> Self {
         let (sender, receiver) = mpsc::channel(256);
         let export_root = beneath.path().to_path_buf();
@@ -301,6 +309,7 @@ impl FileManagerHandle {
             sender,
             export_root,
             beneath,
+            vfs_only: false,
             lease_time: 90,
             hard_link_support: true,
             symlink_support: true,
@@ -316,6 +325,12 @@ impl FileManagerHandle {
     /// The export root fd that every op resolves its path beneath (#123).
     pub fn beneath(&self) -> &ExportRoot {
         &self.beneath
+    }
+
+    /// Whether an object missing beneath the root may be served from the
+    /// vfs tree instead: only when that tree is not the disk (unit tests).
+    pub fn vfs_only(&self) -> bool {
+        self.vfs_only
     }
 
     /// lstat of the export path `path` ("/a/b"), resolved beneath the root.
@@ -1129,6 +1144,7 @@ impl FileManagerHandle {
                     let result = match root.set_len(path, *size) {
                         // MemoryFS (unit tests) has no file under the root.
                         Err(e) if e.kind() == std::io::ErrorKind::NotFound
+                            && self.vfs_only
                             && filehandle.file.exists().unwrap_or(false) =>
                         {
                             Self::vfs_set_len(&filehandle.file, *size)
