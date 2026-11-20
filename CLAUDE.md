@@ -254,3 +254,9 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       objects, stat (RealMeta) and the write cache use `ExportRoot` directly.
       Test: a thread swaps a directory for a symlink to an outside dir in a
       loop while WRITEs run; the outside file never changes.
+      Status 2026-11-20 (paused for P0 #125): code, tests, docs, CHANGELOG
+      pushed (5741704 … 9b2a9a5). 2c124c7 failed to compile (borrow of a
+      temporary `file_manager()`, non-Copy StableHow4), fixed in 9b2a9a5.
+      Next: `sc-build 'cargo test --workspace --locked && cargo clippy
+      --workspace --all-targets --locked'` on 9b2a9a5 green, then v0.18.0
+      (breaking: Linux >= 5.6), close #123, request the image.
