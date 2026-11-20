@@ -87,7 +87,8 @@ impl NfsOperation for Write4args {
             // The file is opened beneath the export root (#123): no symlink
             // on the way or as the file, at the moment of the open.
             let path = filehandle.file.as_str().to_string();
-            let beneath = request.file_manager().beneath();
+            let fm = request.file_manager();
+            let beneath = fm.beneath();
             let on_disk = match beneath.symlink_metadata(&path) {
                 Ok(meta) => Ok(meta.len()),
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(None),

@@ -100,7 +100,8 @@ impl NfsOperation for Rename4args {
         let is_dir = src_vfs.is_dir().unwrap_or(false);
         // renameat on parent directory fds resolved beneath the export root
         // (#123); a symlink on either path fails the rename (ELOOP).
-        let beneath = request.file_manager().beneath();
+        let fm = request.file_manager();
+        let beneath = fm.beneath();
         let result = match beneath.rename(&src_path, &dst_path) {
             Ok(()) => Ok(()),
             // Not on disk: MemoryFS in unit tests — use the VFS.

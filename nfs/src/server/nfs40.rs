@@ -3768,7 +3768,7 @@ mod tests {
             let args = Write4args {
                 stateid: Stateid4 { seqid: 0, other: [0; 12] },
                 offset: 0,
-                stable,
+                stable: stable.clone(),
                 data: b"x".to_vec(),
             };
             let resp = args.execute(request).await;
@@ -3793,7 +3793,8 @@ mod tests {
         // READ through the vfs (BeneathFS).
         assert!(fh.file.open_file().is_err());
         // REMOVE, RENAME and LINK of the name below the symlink.
-        let root = request.file_manager().beneath();
+        let fm = request.file_manager();
+        let root = fm.beneath();
         assert!(root.remove_file("/d/secret").is_err());
         assert!(root.rename("/d/secret", "/stolen").is_err());
         assert!(root.hard_link("/d/secret", "/stolen").is_err());
