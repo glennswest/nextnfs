@@ -241,3 +241,16 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       before the op, so a directory swapped for a symlink in between is a
       narrow race; descriptor-relative opens (openat2 RESOLVE_BENEATH)
       would close it. The majors of the same review follow as P1.
+- [ ] 2026-11-20 — #123 (P1): close the symlink-swap race left by #122.
+      Plan: `nfs/src/server/beneath.rs` — `ExportRoot` holds an O_PATH fd on
+      the export root; every path is opened with `openat2(RESOLVE_BENEATH |
+      RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS)` from it (Linux >= 5.6;
+      an export is refused when openat2 is missing), and ops run on the
+      returned fd or as `*at` calls on a confined parent fd (unlinkat,
+      renameat, linkat, symlinkat, readlinkat, mkdirat, fchownat,
+      utimensat NOFOLLOW, fchmodat2/proc fd, ftruncate, pwrite). `BeneathFS`
+      (a `vfs::FileSystem` on it) replaces AltrootFS/PhysicalFS; WRITE,
+      LINK, RENAME, CREATE symlink/dir, READLINK, SETATTR, chown of new
+      objects, stat (RealMeta) and the write cache use `ExportRoot` directly.
+      Test: a thread swaps a directory for a symlink to an outside dir in a
+      loop while WRITEs run; the outside file never changes.
