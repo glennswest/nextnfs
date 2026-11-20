@@ -3805,6 +3805,25 @@ mod tests {
         assert_eq!(std::fs::read(export.path().join("moved/secret")).unwrap(), b"inside");
     }
 
+    #[tokio::test]
+    async fn test_setattr_size_truncates() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("f"), b"hello").unwrap();
+        for (size, want) in [(2u64, &b"he"[..]), (4, &b"he\0\0"[..])] {
+            let (status, _) = run_own(
+                dir.path(),
+                vec![
+                    NfsArgOp::Opputrootfh(()),
+                    lookup_op("f"),
+                    setattr_op(vec![FileAttrValue::Size(size)], vec![FileAttr::Size]),
+                ],
+            )
+            .await;
+            assert_eq!(status, NfsStat4::Nfs4Ok);
+            assert_eq!(std::fs::read(dir.path().join("f")).unwrap(), want);
+        }
+    }
+
     /// The issue's test: a thread swaps d for a symlink to the outside
     /// directory and back, in a loop, while WRITEs of d/secret run, through
     /// the dispatcher and as the op alone. The outside file never changes.
