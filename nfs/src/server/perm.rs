@@ -148,7 +148,7 @@ fn parent(path: &str) -> &str {
 fn dir_path<'a>(root: &ExportRoot, fh: &'a Filehandle) -> &'a str {
     match stat(root, &fh.path) {
         Some(m) if m.mode & libc::S_IFMT != libc::S_IFDIR => parent(&fh.path),
-        _ => &fh.path,
+        _ => fh.path.as_str(),
     }
 }
 
