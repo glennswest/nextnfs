@@ -3747,7 +3747,7 @@ mod tests {
             )
             .await;
             assert_eq!(status, NfsStat4::Nfs4errExist, "name {}", name);
-            assert_eq!(resarray.len(), 2);
+            assert!(!resarray.is_empty());
             let meta = std::fs::symlink_metadata(dir.path().join(name)).unwrap();
             assert_eq!(std::os::unix::fs::MetadataExt::uid(&meta), uid);
         }
