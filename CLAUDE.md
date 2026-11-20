@@ -278,3 +278,17 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       0 warnings; #126 closed by it). Released v0.18.0 (carries #123's code
       too); #125 closed; image requested. #123 itself: its code is verified
       by the same build — close it when it is handed back.
+- [ ] 2026-11-20 — #127 (P1, review finding 0d36258c216e): OPEN/CREATE
+      createattrs. Plan: new `nfs/src/server/createattrs.rs` — parse and
+      validate createattrs (size, mode, owner, owner_group applied; ACL,
+      time_*_set, archive, hidden, mimetype, system, time_backup,
+      time_create → ATTRNOTSUPP; read-only attrs → INVAL; unknown
+      owner → BADOWNER; giving the object away needs root, a group the
+      caller is not in → PERM). The object is created with the requested
+      permission bits from the start (O_CREAT|O_EXCL / mkdirat with that
+      mode, so umask only narrows it), then chowned (caller, or the
+      requested owner/group; setgid dir's gid), then chmod to the exact
+      mode, then size; attrset says what was applied. The ops do this
+      themselves; the dispatcher's `chown_new_object` goes. UNCHECKED4 on
+      an existing file no longer truncates it (O_TRUNC did) unless size 0
+      is asked; GUARDED4 implemented (EXIST); existing dir → ISDIR.
