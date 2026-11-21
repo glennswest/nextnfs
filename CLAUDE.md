@@ -351,3 +351,17 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       (669 tests, 0 warnings, job afafaef97a); #129, #142 closed (#143,
       #144 closed by the build); golden-nextnfs-93bf37f484bd, release
       request stormcos#1506.
+- [ ] 2026-11-21 — #130 (P1, 2 major review findings on op_readdir.rs at
+      8a66330). 33b440b1f96e: cookieverf sampled from names, compared
+      unpadded (7-byte name → 7 bytes vs 8 on the wire) → NOT_SAME on every
+      continuation; now `listing_verifier` (FNV-1a 64 over the names in
+      order, always [u8; 8]), pseudo-root too (export names; was zeros,
+      unchecked). 9078222b42e0: dircount 0 ignored maxcount, fixed 200-byte
+      estimate; now `Budget` measures each Entry4 with the XDR codec,
+      maxcount always enforced, dircount a hint (never refuses the first
+      entry), TOOSMALL when nothing fits; pseudo-root budgeted (it returned
+      every export). Tests: 7-byte-name continuation, name lengths 1–20 one
+      entry per page, verifier changes with the directory, dircount 0 +
+      200 files within 1024, 11 attrs × 5 budgets every page ≤ maxcount,
+      TOOSMALL, pseudo-root paging/NOT_SAME/TOOSMALL. Next: sc-build test +
+      clippy, then close #130.

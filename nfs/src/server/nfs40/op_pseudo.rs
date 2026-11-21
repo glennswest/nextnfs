@@ -194,15 +194,19 @@ pub fn pseudo_root_getattr(
 }
 
 /// Build READDIR entries for the pseudo-root — one entry per export the
-/// client is allowed into (`clients` list, #97). Cookies stay tied to the
-/// export's position in the full list, so hiding one does not shift them.
+/// client is allowed into (`clients` list, #97), after `cookie`. Cookies stay
+/// tied to the export's position in the full list, so hiding one does not
+/// shift them. Also returns the listing's cookie verifier (over every
+/// export's name, so it changes when an export is added or removed, #130);
+/// the caller fits the entries into the reply budget.
 pub async fn pseudo_readdir(
     export_manager: &ExportManagerHandle,
     client_addr: &str,
     attr_request: &[FileAttr],
     cookie: u64,
-) -> (Vec<Entry4>, bool) {
+) -> (Vec<Entry4>, [u8; 8]) {
     let exports = export_manager.list_exports().await;
+    let verifier = super::op_readdir::listing_verifier(exports.iter().map(|e| e.name.as_str()));
     let mut entries = Vec::new();
 
     for (i, export) in exports.iter().enumerate() {
@@ -228,8 +232,7 @@ pub async fn pseudo_readdir(
         });
     }
 
-    let eof = true; // we always return all exports at once
-    (entries, eof)
+    (entries, verifier)
 }
 
 /// Attrs for an export entry shown in the pseudo-root READDIR.

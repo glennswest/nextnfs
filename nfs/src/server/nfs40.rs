@@ -3396,9 +3396,8 @@ mod tests {
         let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
         let (request, _) = multi_export_request(a.path(), b.path()).await;
         let em = request.export_manager();
-        let (entries, eof) =
+        let (entries, _verifier) =
             op_pseudo::pseudo_readdir(&em, request.client_addr(), &[], 0).await;
-        assert!(eof);
         let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
         assert_eq!(names, vec!["open"]);
         // An allowed client sees both
@@ -4384,5 +4383,64 @@ mod tests {
         assert!(!root.join("sub/g").unwrap().exists().unwrap());
         assert!(!root.join("sub/d").unwrap().exists().unwrap());
         assert!(!root.join("g").unwrap().exists().unwrap());
+    }
+
+    // --- #130: the pseudo-root READDIR is budgeted and verified too ---
+
+    fn readdir_op(cookie: u64, cookieverf: [u8; 8], maxcount: u32) -> NfsArgOp {
+        NfsArgOp::Opreaddir(Readdir4args {
+            cookie,
+            cookieverf,
+            dircount: 0,
+            maxcount,
+            attr_request: Attrlist4(vec![FileAttr::Type]),
+        })
+    }
+
+    #[tokio::test]
+    async fn test_pseudo_root_readdir_pages_within_maxcount() {
+        let dirs: Vec<_> = (0..3).map(|_| tempfile::tempdir().unwrap()).collect();
+        let mut request = create_nfs40_server(None).await;
+        let em = request.export_manager();
+        for (name, d) in ["ex1", "ex2", "ex3"].iter().zip(&dirs) {
+            em.add_export(name.to_string(), d.path().to_path_buf(), false).await.unwrap();
+        }
+        let server = NFS40Server::new();
+
+        // One export entry per page (an entry here is well under 64 bytes).
+        let (mut cookie, mut verf, mut names) = (0u64, [0u8; 8], vec![]);
+        for page in 0.. {
+            assert!(page < 10, "no progress");
+            let msg = make_compound(vec![NfsArgOp::Opputrootfh(()), readdir_op(cookie, verf, 16 + 64)]);
+            let (r, reply) = server.compound(msg, request).await;
+            request = r;
+            let (status, resarray) = compound_result(reply);
+            assert_eq!(status, NfsStat4::Nfs4Ok, "page {}", page);
+            let NfsResOp4::Opreaddir(ReadDir4res::Resok4(resok)) = &resarray[1] else {
+                panic!("{:?}", resarray)
+            };
+            assert!(nextnfs_proto::xdr::to_bytes(resok).unwrap().len() <= 16 + 64);
+            if let Some(e) = resok.reply.entries.as_ref() {
+                assert!(e.nextentry.is_none(), "one entry per page");
+                names.push(e.name.clone());
+                cookie = e.cookie;
+            }
+            verf = resok.cookieverf;
+            if resok.reply.eof {
+                break;
+            }
+        }
+        assert_eq!(names, vec!["ex1", "ex2", "ex3"]);
+
+        // A verifier from another export list is NOT_SAME.
+        let msg = make_compound(vec![NfsArgOp::Opputrootfh(()), readdir_op(3, [0xAB; 8], 4096)]);
+        let (r, reply) = server.compound(msg, request).await;
+        request = r;
+        assert_eq!(compound_result(reply).0, NfsStat4::Nfs4errNotSame);
+
+        // No room for one entry: TOOSMALL.
+        let msg = make_compound(vec![NfsArgOp::Opputrootfh(()), readdir_op(0, [0; 8], 20)]);
+        let (_, reply) = server.compound(msg, request).await;
+        assert_eq!(compound_result(reply).0, NfsStat4::Nfs4errToosmall);
     }
 }
