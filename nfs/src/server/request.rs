@@ -336,10 +336,22 @@ impl<'a> NfsRequest<'a> {
                             self.drop_filehandle_from_cache(filehandle.id);
                             return None;
                         }
-                        // Validate the cached path still exists on disk.
-                        // Inode reuse after deletion can cause a new file to
-                        // get the same fh ID as a deleted file's stale cache entry.
-                        if !filehandle.file.exists().unwrap_or(false) {
+                        // Validate the cached path still holds the object
+                        // the handle names: an inode-based handle by its
+                        // dev:ino (finding 9c0c932c5136; a file put in its
+                        // place is another object), a volatile one by the
+                        // path existing. Anything else goes to the file
+                        // manager, which knows about opens and renames.
+                        let alive = if filehandle.id[0] == 0x01 {
+                            self.cached_fmanager
+                                .as_ref()
+                                .and_then(|fm| fm.meta(filehandle.file.as_str()))
+                                .map(|m| crate::server::filemanager::id_names(&filehandle.id, &m))
+                                .unwrap_or(false)
+                        } else {
+                            filehandle.file.exists().unwrap_or(false)
+                        };
+                        if !alive {
                             self.drop_filehandle_from_cache(filehandle.id);
                             return None;
                         }

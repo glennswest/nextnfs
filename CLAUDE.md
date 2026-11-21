@@ -398,3 +398,15 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       clippy --workspace --all-targets --locked -- -D warnings'` green
       (684 tests, 0 warnings, job 63e70ec348); #132 closed; golden-nextnfs-52265f817560,
       release request stormcos#1506.
+- [ ] 2026-11-21 — #133 (P1, 4 major review findings on filemanager/mod.rs
+      at 8a66330). 60ad262caa93: share reservations enforced in one
+      file-manager step (`open_reservation`: SHARE_DENIED across
+      open-owners, same owner merges into its stateid, seqid+1);
+      OPEN_DOWNGRADE narrows it (`downgrade_open`), OPEN_CONFIRM picks the
+      given stateid. 696ec94aaf26 (+ #140): EXCLUSIVE4 verifier in
+      atime/mtime, retry → OK, else EXIST (UNCHECKED truncation was #127).
+      9c0c932c5136: inode handles checked by dev:ino (`id_names`) in
+      get_filehandle_by_id/by_path and the connection cache → STALE on a
+      replaced path; no descriptors are held for opens (STALE, not the
+      original object). fdfec7e60065 (handles after restart): needs the
+      owner's choice of design — not done; README claim corrected.

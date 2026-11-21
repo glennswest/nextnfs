@@ -42,27 +42,35 @@ impl NfsOperation for OpenDowngrade4args {
             };
         }
 
-        // Check that the current filehandle has locks (open state)
-        if filehandle.locks.is_empty() {
-            error!("OPEN_DOWNGRADE: no open state for filehandle");
-            return NfsOpResponse {
-                request,
-                result: None,
-                status: NfsStat4::Nfs4errBadStateid,
-            };
-        }
-
-        // Extract lock state before moving request
-        let lock_stateid = filehandle.locks[0].stateid;
-        let new_seqid = self.seqid.wrapping_add(1);
+        // The reservation itself is narrowed (finding 60ad262caa93): the
+        // deny modes other clients are checked against change with it.
+        let fh_id = filehandle.id;
+        let lock = match request
+            .file_manager()
+            .downgrade_open(fh_id, self.open_stateid.other, self.share_access, self.share_deny)
+            .await
+        {
+            Ok(lock) => lock,
+            Err(e) => {
+                error!("OPEN_DOWNGRADE: {:?}", e);
+                return NfsOpResponse {
+                    request,
+                    result: None,
+                    status: e.nfs_error,
+                };
+            }
+        };
+        let mut request = request;
+        // Cached copies of the filehandle carry the old reservation.
+        request.drop_filehandle_from_cache(fh_id);
 
         NfsOpResponse {
             request,
             result: Some(NfsResOp4::OpopenDowngrade(OpenDowngrade4res::Resok4(
                 OpenDowngrade4resok {
                     open_stateid: Stateid4 {
-                        seqid: new_seqid,
-                        other: lock_stateid,
+                        seqid: lock.seqid,
+                        other: lock.stateid,
                     },
                 },
             ))),
@@ -144,18 +152,76 @@ mod tests {
         };
         let response = open_args.execute(request).await;
         assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        let opened = open_stateid(&response);
 
-        // OPEN sets the current fh to the opened file, which has locks.
-        // The filehandle should already have locks from the OPEN create.
-        // Now downgrade from BOTH to READ.
-        let downgrade_args = make_downgrade_args(2, 1, 0); // share_access=1 (READ)
+        // Downgrade from BOTH to READ: the stateid's seqid goes up by one.
+        let mut downgrade_args = make_downgrade_args(2, 1, 0);
+        downgrade_args.open_stateid = opened.clone();
         let response = downgrade_args.execute(response.request).await;
         assert_eq!(response.status, NfsStat4::Nfs4Ok);
-        match response.result {
-            Some(NfsResOp4::OpopenDowngrade(OpenDowngrade4res::Resok4(resok))) => {
-                assert_eq!(resok.open_stateid.seqid, 3); // seqid incremented
-            }
+        let downgraded = match response.result {
+            Some(NfsResOp4::OpopenDowngrade(OpenDowngrade4res::Resok4(ref resok))) => resok.open_stateid.clone(),
             _ => panic!("Expected OPEN_DOWNGRADE Resok4"),
+        };
+        assert_eq!(downgraded.other, opened.other);
+        assert_eq!(downgraded.seqid, opened.seqid + 1);
+
+        // Back up to WRITE is not a downgrade.
+        let mut up = make_downgrade_args(3, 2, 0);
+        up.open_stateid = downgraded;
+        let response = up.execute(response.request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4errInval);
+    }
+
+    fn open_stateid(response: &crate::server::response::NfsOpResponse<'_>) -> Stateid4 {
+        match &response.result {
+            Some(NfsResOp4::Opopen(Open4res::Resok4(resok))) => resok.stateid.clone(),
+            other => panic!("Expected OPEN Resok4, got {:?}", other),
         }
+    }
+
+    /// Finding 60ad262caa93: after a downgrade from deny WRITE to deny NONE,
+    /// another open-owner may open for writing; before it, it may not.
+    #[tokio::test]
+    async fn test_open_downgrade_releases_deny() {
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let root = request.current_filehandle().unwrap().clone();
+        let open = |owner: &[u8], access: u32, deny: u32| Open4args {
+            seqid: 1,
+            share_access: access,
+            share_deny: deny,
+            owner: OpenOwner4 { clientid: 1, owner: owner.to_vec() },
+            openhow: OpenFlag4::How(CreateHow4::UNCHECKED4(Fattr4 {
+                attrmask: Attrlist4(vec![]),
+                attr_vals: Attrlist4(vec![]),
+            })),
+            claim: OpenClaim4::ClaimNull("dg_deny.txt".to_string()),
+        };
+        let response = open(b"a", 1, 2).execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        let a = open_stateid(&response);
+        let mut request = response.request;
+
+        request.set_filehandle(root.clone());
+        let response = open(b"b", 2, 0).execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4errShareDenied);
+        let mut request = response.request;
+
+        // Back on the file: downgrade a's deny WRITE to NONE.
+        let fh = request
+            .file_manager()
+            .get_filehandle_for_path("/dg_deny.txt".to_string())
+            .await
+            .unwrap();
+        request.set_filehandle(fh);
+        let mut dg = make_downgrade_args(2, 1, 0);
+        dg.open_stateid = a;
+        let response = dg.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        let mut request = response.request;
+
+        request.set_filehandle(root);
+        let response = open(b"b", 2, 0).execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
     }
 }

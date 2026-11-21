@@ -27,6 +27,7 @@ pub enum FileManagerMessage {
     GetFilehandleAttrs(GetFilehandleAttrsRequest),
     CreateFile(CreateFileRequest),
     CreateOpenState(CreateOpenStateRequest),
+    DowngradeOpen(DowngradeOpenRequest),
     RemoveFile(RemoveFileRequest),
     TouchFile(TouchFileRequest),
     UpdateFilehandle(Filehandle),
@@ -67,17 +68,29 @@ pub struct CreateFileRequest {
     pub share_access: u32,
     pub share_deny: u32,
     pub verifier: Option<[u8; 8]>,
-    pub respond_to: oneshot::Sender<Option<Filehandle>>,
+    /// The file with its open stateid in `locks[0]`, or why the OPEN fails
+    /// (`NFS4ERR_SHARE_DENIED`, ...).
+    pub respond_to: oneshot::Sender<Result<Filehandle, NfsStat4>>,
 }
 
-/// Request to create open state on an existing file (CLAIM_PREVIOUS reclaim).
+/// Request to create open state on an existing file (OPEN without create,
+/// CLAIM_PREVIOUS reclaim).
 pub struct CreateOpenStateRequest {
     pub path: VfsPath,
     pub client_id: u64,
     pub owner: Vec<u8>,
     pub share_access: u32,
     pub share_deny: u32,
-    pub respond_to: oneshot::Sender<Option<LockingState>>,
+    pub respond_to: oneshot::Sender<Result<LockingState, NfsStat4>>,
+}
+
+/// OPEN_DOWNGRADE of the open stateid `stateid` on `filehandle_id`.
+pub struct DowngradeOpenRequest {
+    pub filehandle_id: NfsFh4,
+    pub stateid: [u8; 12],
+    pub share_access: u32,
+    pub share_deny: u32,
+    pub respond_to: oneshot::Sender<Result<LockingState, NfsStat4>>,
 }
 
 /// Atomic change-info returned by directory-modifying ops so the client
@@ -482,22 +495,17 @@ impl FileManagerHandle {
             return Err(FileManagerError { nfs_error: NfsStat4::Nfs4errServerfault });
         }
         match rx.await {
-            Ok(fh) => {
-                if let Some(fh) = fh {
-                    return Ok(fh);
-                }
-                Err(FileManagerError {
-                    nfs_error: NfsStat4::Nfs4errNoent,
-                })
-            }
+            Ok(result) => result.map_err(|nfs_error| FileManagerError { nfs_error }),
             Err(_) => Err(FileManagerError {
                 nfs_error: NfsStat4::Nfs4errServerfault,
             }),
         }
     }
 
-    /// Create open state on an existing file (for CLAIM_PREVIOUS reclaim).
-    /// Returns the LockingState with stateid for the reclaimed open.
+    /// Open state on an existing file (OPEN without create, CLAIM_PREVIOUS
+    /// reclaim): the share reservation, checked against the other
+    /// open-owners' (`NFS4ERR_SHARE_DENIED`), or merged into this
+    /// open-owner's existing one.
     pub async fn create_open_state(
         &self,
         path: VfsPath,
@@ -520,10 +528,37 @@ impl FileManagerHandle {
             return Err(FileManagerError { nfs_error: NfsStat4::Nfs4errServerfault });
         }
         match rx.await {
-            Ok(Some(lock)) => Ok(lock),
-            Ok(None) => Err(FileManagerError {
-                nfs_error: NfsStat4::Nfs4errStale,
+            Ok(result) => result.map_err(|nfs_error| FileManagerError { nfs_error }),
+            Err(_) => Err(FileManagerError {
+                nfs_error: NfsStat4::Nfs4errServerfault,
             }),
+        }
+    }
+
+    /// OPEN_DOWNGRADE: narrow the open stateid `stateid` on `filehandle_id`
+    /// to `access`/`deny` (a subset of what it holds, else NFS4ERR_INVAL;
+    /// unknown stateid → NFS4ERR_BAD_STATEID).
+    pub async fn downgrade_open(
+        &self,
+        filehandle_id: NfsFh4,
+        stateid: [u8; 12],
+        access: u32,
+        deny: u32,
+    ) -> Result<LockingState, FileManagerError> {
+        let (tx, rx) = oneshot::channel();
+        let req = DowngradeOpenRequest {
+            filehandle_id,
+            stateid,
+            share_access: access,
+            share_deny: deny,
+            respond_to: tx,
+        };
+        if let Err(e) = self.sender.send(FileManagerMessage::DowngradeOpen(req)).await {
+            error!("filemanager actor gone: {}", e);
+            return Err(FileManagerError { nfs_error: NfsStat4::Nfs4errServerfault });
+        }
+        match rx.await {
+            Ok(result) => result.map_err(|nfs_error| FileManagerError { nfs_error }),
             Err(_) => Err(FileManagerError {
                 nfs_error: NfsStat4::Nfs4errServerfault,
             }),

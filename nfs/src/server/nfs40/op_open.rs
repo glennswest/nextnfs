@@ -211,7 +211,27 @@ async fn open_for_writing<'a>(
             }
         }
     };
-    if !created {
+    // EXCLUSIVE4 (finding 696ec94aaf26, #140): the verifier is kept in the
+    // new file's atime/mtime, as knfsd does. An existing name is this
+    // client's retry only when it carries the same verifier: then the OPEN
+    // succeeds again (the file is not touched); otherwise NFS4ERR_EXIST.
+    let mut exclusive_retry = false;
+    if let Some(v) = verifier {
+        if fm.vfs_only() {
+            // The in-memory test tree keeps no times: any existing name is
+            // NFS4ERR_EXIST.
+            if !created {
+                fail!(NfsStat4::Nfs4errExist);
+            }
+        } else if !created {
+            match fm.beneath().symlink_metadata(&fh_path) {
+                Ok(m) if m.is_file() && verifier_matches(&m, &v) => exclusive_retry = true,
+                Ok(_) => fail!(NfsStat4::Nfs4errExist),
+                Err(e) => fail!(io_status(&e)),
+            }
+        }
+    }
+    if !created && !exclusive_retry {
         if guarded {
             fail!(NfsStat4::Nfs4errExist);
         }
@@ -237,9 +257,11 @@ async fn open_for_writing<'a>(
         .await
     {
         Ok(filehandle) => filehandle,
+        // NFS4ERR_SHARE_DENIED when another open-owner's reservation
+        // conflicts (finding 60ad262caa93).
         Err(e) => {
-            error!("Err {:?}", e);
-            fail!(NfsStat4::Nfs4errServerfault);
+            debug!("OPEN {:?}: {:?}", fh_path, e);
+            fail!(e.nfs_error);
         }
     };
 
@@ -250,7 +272,22 @@ async fn open_for_writing<'a>(
     // we expect this filehandle to have one lock (for the shared reservation)
     let lock = filehandle.locks[0].clone();
 
-    let attrset = if created {
+    let attrset = if let (Some(v), false) = (verifier, fm.vfs_only()) {
+        if created {
+            // Owner and mode first (#127): neither changes the times.
+            createattrs::finish_new_object(&mut request, &caller, &attrs).await;
+            let (atime, mtime) = verifier_times(&v);
+            if let Err(e) = fm.beneath().set_times(&fh_path, Some(atime), Some(mtime)) {
+                error!("OPEN EXCLUSIVE4 {:?}: storing the verifier: {}", fh_path, e);
+                let _ = fm.beneath().remove_file(&fh_path);
+                fail!(io_status(&e));
+            }
+            createattrs::refresh_current(&mut request).await;
+        }
+        // RFC 7530 §16.16.5: the attributes that hold the verifier; the
+        // client sets them afterwards with SETATTR.
+        Attrlist4::<FileAttr>::new(Some(vec![FileAttr::TimeAccess, FileAttr::TimeModify]))
+    } else if created {
         // Owner, exact mode, size (#127); the filehandle keeps its locks.
         createattrs::finish_new_object(&mut request, &caller, &attrs).await
     } else if attrs.size == Some(0) && !fm.vfs_only() {
@@ -294,6 +331,21 @@ async fn open_for_writing<'a>(
     }
 }
 
+/// The EXCLUSIVE4 verifier as file times: its first four bytes are the
+/// atime seconds, the last four the mtime seconds (top bit cleared, so the
+/// times stay positive), nanoseconds zero.
+fn verifier_times(v: &[u8; 8]) -> (std::time::SystemTime, std::time::SystemTime) {
+    let secs = |b: &[u8]| u64::from(u32::from_be_bytes([b[0], b[1], b[2], b[3]]) & 0x7fff_ffff);
+    let t = |s| std::time::UNIX_EPOCH + std::time::Duration::from_secs(s);
+    (t(secs(&v[0..4])), t(secs(&v[4..8])))
+}
+
+/// Whether the file's times are the ones `verifier_times` stores for `v`.
+fn verifier_matches(m: &std::fs::Metadata, v: &[u8; 8]) -> bool {
+    let (atime, mtime) = verifier_times(v);
+    m.accessed().ok() == Some(atime) && m.modified().ok() == Some(mtime)
+}
+
 #[async_trait]
 impl NfsOperation for Open4args {
     async fn execute<'a>(&self, request: NfsRequest<'a>) -> NfsOpResponse<'a> {
@@ -302,6 +354,17 @@ impl NfsOperation for Open4args {
             "Operation 18: OPEN - Open a Regular File {:?}, with request {:?}",
             self, request
         );
+        // share_access must ask for read and/or write (v4.1 want bits above
+        // them are not access), share_deny be NONE..BOTH (RFC 7530
+        // §16.16.5): refused before anything is created.
+        if self.share_access & 0x3 == 0 || self.share_deny > 0x3 {
+            return NfsOpResponse {
+                request,
+                result: None,
+                status: NfsStat4::Nfs4errInval,
+            };
+        }
+
         // CLAIM_PREVIOUS — Reclaim open state from a previous server instance.
         // Current filehandle is the FILE (not directory), so handle before dir check.
         if let OpenClaim4::ClaimPrevious(_delegation_type) = &self.claim {
@@ -766,5 +829,99 @@ mod tests {
             }
             other => panic!("Expected Opopen Resok4, got {:?}", other),
         }
+    }
+
+    // --- finding 60ad262caa93: share reservations are enforced ---
+
+    fn share_open(owner: &[u8], access: u32, deny: u32, how: OpenFlag4) -> Open4args {
+        Open4args {
+            seqid: 1,
+            share_access: access,
+            share_deny: deny,
+            owner: OpenOwner4 { clientid: 1, owner: owner.to_vec() },
+            openhow: how,
+            claim: OpenClaim4::ClaimNull("shared.txt".to_string()),
+        }
+    }
+
+    fn unchecked() -> OpenFlag4 {
+        OpenFlag4::How(CreateHow4::UNCHECKED4(Fattr4 {
+            attrmask: Attrlist4(vec![]),
+            attr_vals: Attrlist4(vec![]),
+        }))
+    }
+
+    async fn open_at_root<'a>(
+        mut request: NfsRequest<'a>,
+        root: &Filehandle,
+        args: Open4args,
+    ) -> (NfsRequest<'a>, NfsStat4, Option<Stateid4>) {
+        request.set_filehandle(root.clone());
+        let response = args.execute(request).await;
+        let stateid = match &response.result {
+            Some(NfsResOp4::Opopen(Open4res::Resok4(resok))) => Some(resok.stateid.clone()),
+            _ => None,
+        };
+        (response.request, response.status, stateid)
+    }
+
+    #[tokio::test]
+    async fn test_open_share_deny_is_enforced() {
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let root = request.current_filehandle().unwrap().clone();
+
+        // a: read, deny write.
+        let (request, status, a) = open_at_root(request, &root, share_open(b"a", 1, 2, unchecked())).await;
+        assert_eq!(status, NfsStat4::Nfs4Ok);
+        let a = a.unwrap();
+
+        // b may not write (a denies it), with or without create.
+        let (request, status, _) = open_at_root(request, &root, share_open(b"b", 2, 0, unchecked())).await;
+        assert_eq!(status, NfsStat4::Nfs4errShareDenied);
+        let (request, status, _) =
+            open_at_root(request, &root, share_open(b"b", 3, 0, OpenFlag4::Open4Nocreate)).await;
+        assert_eq!(status, NfsStat4::Nfs4errShareDenied);
+        // b may read.
+        let (request, status, b) =
+            open_at_root(request, &root, share_open(b"b", 1, 0, OpenFlag4::Open4Nocreate)).await;
+        assert_eq!(status, NfsStat4::Nfs4Ok);
+        assert_ne!(b.unwrap().other, a.other);
+        // c may not deny read: a and b read.
+        let (request, status, _) =
+            open_at_root(request, &root, share_open(b"c", 1, 1, OpenFlag4::Open4Nocreate)).await;
+        assert_eq!(status, NfsStat4::Nfs4errShareDenied);
+
+        // a's own second OPEN is not refused by a's deny: the same stateid,
+        // seqid one up, access now both.
+        let (request, status, a2) = open_at_root(request, &root, share_open(b"a", 3, 0, unchecked())).await;
+        assert_eq!(status, NfsStat4::Nfs4Ok);
+        let a2 = a2.unwrap();
+        assert_eq!(a2.other, a.other);
+        assert_eq!(a2.seqid, a.seqid + 1);
+
+        // After a's CLOSE (one CLOSE for the merged open), c may write.
+        let mut request = request;
+        let fh = request
+            .file_manager()
+            .get_filehandle_for_path("/shared.txt".to_string())
+            .await
+            .unwrap();
+        request.set_filehandle(fh);
+        let close = nextnfs_proto::nfs4_proto::Close4args { seqid: 2, open_stateid: a2 };
+        let response = close.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        let (_request, status, _) =
+            open_at_root(response.request, &root, share_open(b"c", 2, 0, OpenFlag4::Open4Nocreate)).await;
+        assert_eq!(status, NfsStat4::Nfs4Ok);
+    }
+
+    #[tokio::test]
+    async fn test_open_share_values_out_of_range_are_inval() {
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let root = request.current_filehandle().unwrap().clone();
+        let (request, status, _) = open_at_root(request, &root, share_open(b"a", 0, 0, unchecked())).await;
+        assert_eq!(status, NfsStat4::Nfs4errInval);
+        let (_request, status, _) = open_at_root(request, &root, share_open(b"a", 1, 4, unchecked())).await;
+        assert_eq!(status, NfsStat4::Nfs4errInval);
     }
 }

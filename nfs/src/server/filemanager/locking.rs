@@ -30,6 +30,19 @@ pub struct LockingState {
     pub nfs_lock_type: Option<NfsLockType4>,
 }
 
+/// OPEN4_SHARE_ACCESS_READ | OPEN4_SHARE_ACCESS_WRITE; NFSv4.1 puts
+/// delegation-want flags above these bits (RFC 8881 §18.16.3).
+pub const SHARE_ACCESS_MASK: u32 = 0x3;
+/// OPEN4_SHARE_DENY_BOTH, the widest deny mode.
+pub const SHARE_DENY_MAX: u32 = 0x3;
+
+/// Whether an open asking `access`/`deny` conflicts with another open-owner's
+/// reservation `held_access`/`held_deny` (RFC 7530 §9.9): the new access is
+/// denied by the held deny, or the new deny covers access already held.
+pub fn share_conflict(access: u32, deny: u32, held_access: u32, held_deny: u32) -> bool {
+    (access & held_deny) != 0 || (deny & held_access) != 0
+}
+
 impl LockingState {
     pub fn new_shared_reservation(
         filehandle_id: NfsFh4,
@@ -152,6 +165,20 @@ mod tests {
             offset,
             length,
         )
+    }
+
+    #[test]
+    fn test_share_conflict_matrix() {
+        // access READ, deny NONE vs a holder with deny WRITE: no conflict.
+        assert!(!share_conflict(1, 0, 1, 2));
+        // access WRITE vs a holder's deny WRITE: conflict.
+        assert!(share_conflict(2, 0, 1, 2));
+        // deny READ vs a holder that reads: conflict.
+        assert!(share_conflict(1, 1, 1, 0));
+        // deny WRITE vs a reader-only holder: no conflict.
+        assert!(!share_conflict(1, 2, 1, 0));
+        // deny BOTH vs anyone holding access: conflict.
+        assert!(share_conflict(1, 3, 2, 0));
     }
 
     #[test]

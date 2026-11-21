@@ -11,6 +11,7 @@ use nextnfs_proto::nfs4_proto::{
 mod filehandle;
 pub use filehandle::Filehandle;
 pub use filehandle::RealMeta;
+pub use filehandle::id_names;
 pub use handle::FileManagerHandle;
 pub use handle::{LockResult, QuotaInfo, TestLockResult, UnlockResult};
 mod caching;
@@ -20,6 +21,13 @@ mod locking;
 use filehandle::FilehandleDb;
 use handle::{DirChangeInfo, FileManagerMessage, WriteCacheHandle};
 use locking::{LockType, LockingState, LockingStateDb};
+
+/// What a handle's stored path holds now (`FileManager::identity_at`).
+enum Identity {
+    Same,
+    Other,
+    Missing,
+}
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 use vfs::VfsPath;
@@ -143,38 +151,28 @@ impl FileManager {
                     .send(self.filehandle_attrs(&req.attrs_request, &req.filehandle_id));
             }
             FileManagerMessage::CreateFile(req) => {
-                let fh = self.create_file(&req.path);
-                if let Some(mut fh) = fh {
-                    let stateid = self.get_new_lockingstate_id();
-                    let lock = LockingState::new_shared_reservation(
-                        fh.id,
-                        stateid,
-                        req.client_id,
-                        req.owner,
-                        req.share_access,
-                        req.share_deny,
-                    );
-                    self.lockdb.insert(lock.clone());
-                    fh.locks = vec![lock];
-                    let _ = req.respond_to.send(Some(fh));
-                } else {
-                    let _ = req.respond_to.send(None);
-                }
+                let result = match self.create_file(&req.path) {
+                    Some(mut fh) => self
+                        .open_reservation(&fh.id, req.client_id, req.owner, req.share_access, req.share_deny)
+                        .map(|lock| {
+                            fh.locks = vec![lock];
+                            fh
+                        }),
+                    None => Err(NfsStat4::Nfs4errNoent),
+                };
+                let _ = req.respond_to.send(result);
             }
             FileManagerMessage::CreateOpenState(req) => {
-                // CLAIM_PREVIOUS: create open lock state on an existing file
+                // OPEN of an existing file (CLAIM_NULL without create,
+                // CLAIM_PREVIOUS reclaim).
                 let fh = self.get_filehandle(&req.path);
-                let stateid = self.get_new_lockingstate_id();
-                let lock = LockingState::new_shared_reservation(
-                    fh.id,
-                    stateid,
-                    req.client_id,
-                    req.owner,
-                    req.share_access,
-                    req.share_deny,
-                );
-                self.lockdb.insert(lock.clone());
-                let _ = req.respond_to.send(Some(lock));
+                let result =
+                    self.open_reservation(&fh.id, req.client_id, req.owner, req.share_access, req.share_deny);
+                let _ = req.respond_to.send(result);
+            }
+            FileManagerMessage::DowngradeOpen(req) => {
+                let result = self.downgrade_open(&req.filehandle_id, &req.stateid, req.share_access, req.share_deny);
+                let _ = req.respond_to.send(result);
             }
             FileManagerMessage::LockFile(req) => {
                 let result = self.handle_lock(
@@ -405,7 +403,9 @@ impl FileManager {
             let name = name.to_string_lossy().to_string();
             let Ok(candidate) = parent_vfs.join(&name) else { continue };
             if let Ok(meta) = self.beneath.symlink_metadata(candidate.as_str()) {
-                if meta.ino() == target_ino {
+                // dev too: the same object, not one with the same inode
+                // number on another filesystem mounted below.
+                if meta.ino() == target_ino && Some(meta.dev()) == fh.id[2..10].try_into().ok().map(u64::from_be_bytes) {
                     return Some(candidate);
                 }
             }
@@ -648,6 +648,96 @@ impl FileManager {
         Some(fh)
     }
 
+    /// The share reservation of an OPEN (RFC 7530 §9.9, finding
+    /// 60ad262caa93), checked and recorded in one actor message so no other
+    /// OPEN can come in between. The new access must not be denied by any
+    /// other open-owner's deny mode, and the new deny must not cover access
+    /// another open-owner holds: else `NFS4ERR_SHARE_DENIED`. An open-owner
+    /// has one open stateid per file: a second OPEN by it adds its access and
+    /// deny to that reservation and bumps the stateid's seqid.
+    fn open_reservation(
+        &mut self,
+        fh_id: &NfsFh4,
+        client_id: u64,
+        owner: Vec<u8>,
+        share_access: u32,
+        share_deny: u32,
+    ) -> Result<LockingState, NfsStat4> {
+        let access = share_access & locking::SHARE_ACCESS_MASK;
+        if access == 0 || share_deny > locking::SHARE_DENY_MAX {
+            return Err(NfsStat4::Nfs4errInval);
+        }
+        let mut mine: Option<LockingState> = None;
+        for held in self.lockdb.get_by_filehandle_id(fh_id) {
+            if !matches!(held.lock_type, LockType::Open) {
+                continue;
+            }
+            if held.client_id == client_id && held.owner == owner {
+                mine = Some(held.clone());
+                continue;
+            }
+            if locking::share_conflict(
+                access,
+                share_deny,
+                held.share_access.unwrap_or(0),
+                held.share_deny.unwrap_or(0),
+            ) {
+                debug!(
+                    "OPEN share denied: access={} deny={} vs held access={:?} deny={:?}",
+                    access, share_deny, held.share_access, held.share_deny
+                );
+                return Err(NfsStat4::Nfs4errShareDenied);
+            }
+        }
+        let lock = match mine {
+            Some(mut lock) => {
+                self.lockdb.remove_by_stateid(&lock.stateid);
+                lock.share_access = Some(lock.share_access.unwrap_or(0) | access);
+                lock.share_deny = Some(lock.share_deny.unwrap_or(0) | share_deny);
+                lock.seqid = lock.seqid.wrapping_add(1);
+                lock
+            }
+            None => {
+                let stateid = self.get_new_lockingstate_id();
+                LockingState::new_shared_reservation(*fh_id, stateid, client_id, owner, access, share_deny)
+            }
+        };
+        self.lockdb.insert(lock.clone());
+        Ok(lock)
+    }
+
+    /// OPEN_DOWNGRADE (RFC 7530 §16.19): the open stateid's access and deny
+    /// become the given ones, which must be a non-empty subset of what it
+    /// holds (else `NFS4ERR_INVAL`); its seqid is bumped.
+    fn downgrade_open(
+        &mut self,
+        fh_id: &NfsFh4,
+        stateid: &[u8; 12],
+        share_access: u32,
+        share_deny: u32,
+    ) -> Result<LockingState, NfsStat4> {
+        let mut lock = match self.lockdb.get_by_stateid(stateid) {
+            Some(l) if matches!(l.lock_type, LockType::Open) && l.filehandle_id == *fh_id => l.clone(),
+            _ => return Err(NfsStat4::Nfs4errBadStateid),
+        };
+        let access = share_access & locking::SHARE_ACCESS_MASK;
+        let held_access = lock.share_access.unwrap_or(0);
+        let held_deny = lock.share_deny.unwrap_or(0);
+        if access == 0
+            || share_deny > locking::SHARE_DENY_MAX
+            || access & !held_access != 0
+            || share_deny & !held_deny != 0
+        {
+            return Err(NfsStat4::Nfs4errInval);
+        }
+        self.lockdb.remove_by_stateid(stateid);
+        lock.share_access = Some(access);
+        lock.share_deny = Some(share_deny);
+        lock.seqid = lock.seqid.wrapping_add(1);
+        self.lockdb.insert(lock.clone());
+        Ok(lock)
+    }
+
     fn get_new_lockingstate_id(&mut self) -> [u8; 12] {
         let mut id = vec![0_u8, 0_u8, 0_u8, 0_u8];
         id.extend(self.next_stateid_id.to_be_bytes().to_vec());
@@ -689,21 +779,46 @@ impl FileManager {
         id
     }
 
+    /// What is at `file` now, for the handle `id`: the object it names, some
+    /// other object (the path was replaced), or nothing.
+    fn identity_at(&self, id: &NfsFh4, file: &VfsPath) -> Identity {
+        if id[0] == 0x01 {
+            return match self.meta(file) {
+                Some(m) if id_names(id, &m) => Identity::Same,
+                Some(_) => Identity::Other,
+                None => Identity::Missing,
+            };
+        }
+        if self.path_exists(file) {
+            Identity::Same
+        } else {
+            Identity::Missing
+        }
+    }
+
     fn get_filehandle_by_id(&mut self, id: &NfsFh4) -> Option<Filehandle> {
         let fh = self.fhdb.get_by_id(id);
         if let Some(fh) = fh {
             // Keep the entry if:
             // - It's a pending silly-rename delete (server-side), OR
-            // - The path still exists on disk, OR
-            // - The file has active open locks (client-side silly-rename:
-            //   the kernel renamed the file to .nfs*, so the old VfsPath is
-            //   stale, but the file is still open and readable via the handle)
-            if self.pending_deletes.contains(id)
-                || self.path_exists(&fh.file)
-                || !self.lockdb.get_by_filehandle_id(id).is_empty()
-            {
+            // - Its path still holds the object the handle names (an
+            //   inode-based handle is compared by dev:ino, finding
+            //   9c0c932c5136: a replacement at the same path is not it), OR
+            // - The path is gone but the file has active open locks
+            //   (client-side silly-rename: the kernel renamed the file to
+            //   .nfs*, so the old VfsPath is stale, but the file is still
+            //   open and readable via the handle)
+            if self.pending_deletes.contains(id) {
                 return Some(fh.clone());
             }
+            match self.identity_at(id, &fh.file) {
+                Identity::Same => return Some(fh.clone()),
+                Identity::Missing if !self.lockdb.get_by_filehandle_id(id).is_empty() => {
+                    return Some(fh.clone())
+                }
+                Identity::Missing | Identity::Other => {}
+            }
+            let fh = fh.clone();
 
             // Path is stale. For inode-based handles, try to locate the file
             // at a new path by scanning the parent directory for a matching
@@ -749,15 +864,20 @@ impl FileManager {
 
     pub fn get_filehandle_by_path(&mut self, path: &String) -> Option<Filehandle> {
         if let Some(fh) = self.fhdb.get_by_path(path).cloned() {
-            if self.path_exists(&fh.file) {
-                return Some(fh);
-            }
-            // Path is stale but keep the entry if it's still logically valid:
-            // pending server-side silly-rename or active open locks.
-            if self.pending_deletes.contains(&fh.id)
-                || !self.lockdb.get_by_filehandle_id(&fh.id).is_empty()
-            {
-                return Some(fh);
+            match self.identity_at(&fh.id, &fh.file) {
+                Identity::Same => return Some(fh),
+                // Path is gone but the entry is still logically valid:
+                // pending server-side silly-rename or active open locks.
+                Identity::Missing
+                    if self.pending_deletes.contains(&fh.id)
+                        || !self.lockdb.get_by_filehandle_id(&fh.id).is_empty() =>
+                {
+                    return Some(fh)
+                }
+                // Another object is at the path now: this entry (and its
+                // id) is not it, whatever opens it has (finding
+                // 9c0c932c5136). The new object gets its own handle.
+                Identity::Missing | Identity::Other => {}
             }
             debug!("get_filehandle_by_path: evicting stale entry for path {:?}", path);
             self.fhdb.remove_by_id(&fh.id);

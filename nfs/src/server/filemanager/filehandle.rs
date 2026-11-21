@@ -39,6 +39,20 @@ pub struct Filehandle {
     pub version: u64,
 }
 
+/// Whether the handle id names the object `meta` describes (finding
+/// 9c0c932c5136). An inode-based id (version byte 0x01) carries the
+/// object's dev:ino; a path that now holds another object (replaced by a
+/// rename over it, or removed and created again) no longer matches, so the
+/// handle is not resolved to it. A volatile id carries no identity: true.
+pub fn id_names(id: &NfsFh4, meta: &RealMeta) -> bool {
+    if id[0] != 0x01 {
+        return true;
+    }
+    let dev = u64::from_be_bytes(id[2..10].try_into().expect("8 bytes"));
+    let ino = u64::from_be_bytes(id[10..18].try_into().expect("8 bytes"));
+    meta.dev == dev && meta.ino == ino
+}
+
 /// Metadata from a real stat() call
 #[derive(Debug, Clone)]
 pub struct RealMeta {

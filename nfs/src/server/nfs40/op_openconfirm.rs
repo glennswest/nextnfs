@@ -27,7 +27,15 @@ impl NfsOperation for OpenConfirm4args {
             }
         };
 
-        let lock = match fh.locks.first() {
+        // The open being confirmed, not whichever lock comes first: the
+        // file can carry other open-owners' reservations and byte-range
+        // locks too.
+        let lock = match fh
+            .locks
+            .iter()
+            .find(|l| l.stateid == self.open_stateid.other)
+            .or_else(|| fh.locks.first())
+        {
             Some(lock) => lock.clone(),
             None => {
                 error!("OPEN_CONFIRM: no locks on filehandle");

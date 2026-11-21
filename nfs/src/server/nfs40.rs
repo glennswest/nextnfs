@@ -4037,6 +4037,122 @@ mod tests {
         }
     }
 
+    fn exclusive_open(name: &str, verifier: [u8; 8]) -> NfsArgOp {
+        NfsArgOp::Opopen(Open4args {
+            seqid: 1,
+            share_access: 3,
+            share_deny: 0,
+            owner: OpenOwner4 { clientid: 1, owner: b"excl".to_vec() },
+            openhow: OpenFlag4::How(CreateHow4::EXCLUSIVE4(verifier)),
+            claim: OpenClaim4::ClaimNull(name.to_string()),
+        })
+    }
+
+    fn open_resok(resarray: &[NfsResOp4]) -> Open4resok {
+        match resarray.last() {
+            Some(NfsResOp4::Opopen(Open4res::Resok4(resok))) => resok.clone(),
+            other => panic!("expected OPEN resok, got {:?}", other),
+        }
+    }
+
+    /// Finding 696ec94aaf26 / #140: EXCLUSIVE4 keeps its verifier (in the
+    /// file's atime/mtime) and says so in attrset; a retry with the same
+    /// verifier succeeds without touching the file; any other existing name
+    /// is NFS4ERR_EXIST and keeps its data.
+    #[tokio::test]
+    async fn test_open_exclusive4_verifier_and_retry() {
+        let export = tempfile::tempdir().unwrap();
+        let path = export.path().join("x");
+        std::fs::write(export.path().join("old"), b"keep").unwrap();
+        let v = [0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0];
+        let server = NFS40Server::new();
+        let mut request = request_on_export_squash(false, export.path(), SquashMode::None).await;
+
+        let msg = make_compound(vec![NfsArgOp::Opputrootfh(()), exclusive_open("x", v)]);
+        let (r, reply) = server.compound(msg, request).await;
+        request = r;
+        let (status, resarray) = compound_result(reply);
+        assert_eq!(status, NfsStat4::Nfs4Ok);
+        let first = open_resok(&resarray);
+        assert_eq!(first.attrset.0, vec![FileAttr::TimeAccess, FileAttr::TimeModify]);
+        let m = std::fs::metadata(&path).unwrap();
+        use std::os::unix::fs::MetadataExt;
+        assert_eq!(m.atime() as u32, 0x1234_5678);
+        assert_eq!(m.mtime() as u32, 0x1abc_def0); // top bit cleared
+
+        // The client's data arrives; the times stay the verifier's (as if the
+        // reply was lost before the client's SETATTR of them).
+        let (atime, mtime) = (m.accessed().unwrap(), m.modified().unwrap());
+        std::fs::write(&path, b"data").unwrap();
+        let f = std::fs::File::options().write(true).open(&path).unwrap();
+        f.set_times(std::fs::FileTimes::new().set_accessed(atime).set_modified(mtime)).unwrap();
+        drop(f);
+
+        // Retry: same verifier → success, same open, data untouched.
+        let msg = make_compound(vec![NfsArgOp::Opputrootfh(()), exclusive_open("x", v)]);
+        let (r, reply) = server.compound(msg, request).await;
+        request = r;
+        let (status, resarray) = compound_result(reply);
+        assert_eq!(status, NfsStat4::Nfs4Ok);
+        assert_eq!(open_resok(&resarray).stateid.other, first.stateid.other);
+        assert_eq!(std::fs::read(&path).unwrap(), b"data");
+
+        // Another verifier, or a file that was never an exclusive create.
+        let mut w = v;
+        w[7] ^= 1;
+        for (name, verifier) in [("x", w), ("old", v)] {
+            let msg = make_compound(vec![NfsArgOp::Opputrootfh(()), exclusive_open(name, verifier)]);
+            let (r, reply) = server.compound(msg, request).await;
+            request = r;
+            let (status, _) = compound_result(reply);
+            assert_eq!(status, NfsStat4::Nfs4errExist, "{}", name);
+        }
+        assert_eq!(std::fs::read(&path).unwrap(), b"data");
+        assert_eq!(std::fs::read(export.path().join("old")).unwrap(), b"keep");
+    }
+
+    /// Finding 9c0c932c5136: a handle names an object, not a path. After
+    /// another file is renamed over `f`, the old handle (cached on the
+    /// connection, known to the file manager, with an open on it) is
+    /// NFS4ERR_STALE: a WRITE through it never reaches the new file, and
+    /// the new file gets a handle of its own.
+    #[tokio::test]
+    async fn test_handle_of_replaced_path_is_stale() {
+        let export = tempfile::tempdir().unwrap();
+        let f = export.path().join("f");
+        std::fs::write(&f, b"old").unwrap();
+        let mut request = request_on_export_squash(false, export.path(), SquashMode::None).await;
+        request.filehandle_cache = Some(Box::leak(Box::new(std::collections::HashMap::new())));
+        let fm = request.file_manager();
+        let fh = fm.get_filehandle_for_path("/f".to_string()).await.unwrap();
+        fm.create_open_state(fh.file.clone(), 1, b"opener".to_vec(), 3, 0).await.unwrap();
+        let mut id = fh.id;
+        op_pseudo::stamp_export_id(&mut id, request.current_export_id().unwrap());
+
+        // Through the old handle while it is the file: fine (and cached).
+        let server = NFS40Server::new();
+        let msg = make_compound(vec![NfsArgOp::Opputfh(PutFh4args { object: id }), write_op()]);
+        let (r, reply) = server.compound(msg, request).await;
+        request = r;
+        assert_eq!(compound_result(reply).0, NfsStat4::Nfs4Ok);
+        assert_eq!(std::fs::read(&f).unwrap(), b"xld");
+
+        // A new file is published at the same path.
+        std::fs::write(export.path().join("g"), b"new").unwrap();
+        std::fs::rename(export.path().join("g"), &f).unwrap();
+
+        let msg = make_compound(vec![NfsArgOp::Opputfh(PutFh4args { object: id }), write_op()]);
+        let (r, reply) = server.compound(msg, request).await;
+        request = r;
+        assert_eq!(compound_result(reply).0, NfsStat4::Nfs4errStale);
+        assert_eq!(std::fs::read(&f).unwrap(), b"new");
+
+        let fm = request.file_manager();
+        assert!(fm.get_filehandle_for_id(fh.id).await.is_err());
+        let fresh = fm.get_filehandle_for_path("/f".to_string()).await.unwrap();
+        assert_ne!(fresh.id, fh.id);
+    }
+
     /// Finding 4bb3de8fbdd6: a stable WRITE at EOF used O_APPEND when the
     /// offset equalled a stat of the length, so another writer extending the
     /// file in between moved the bytes to a later offset. Each round, a
