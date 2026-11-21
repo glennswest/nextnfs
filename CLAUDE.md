@@ -327,9 +327,10 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       slot (P3, ~60 builds ahead; second one exit 75, then hung, stormcentral#1640);
       two more on 4502937 got an empty job id + 404: stormcentral's DB is in
       the I/O error of stormcentral#1638 (`propose --after` refused with the
-      same 500). Next, once #1638 is fixed: run it again, then close #142
-      and request the image.
-- [ ] 2026-11-21 — #129 (P1, review finding 1cc239368b2c on 8a66330, before
+      same 500). Done: verified by #129's build on 6d48640 (green, 669
+      tests); its first build found GETATTR-without-filehandle STALE (#143,
+      fixed cdbe806). #142 closed; image requested.
+- [x] 2026-11-21 — #129 (P1, review finding 1cc239368b2c on 8a66330, before
       #122): multi-component names past a directory's search check. The
       dispatcher's `perm::check_confined` (#122, 0168750) already refuses
       `/`, `.`, `..`, NUL and empty names for LOOKUP/CREATE/REMOVE/RENAME/
@@ -345,4 +346,7 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       (#143, fixed cdbe806). Build on cdbe806: 669 tests green, clippy
       `ptr_arg` on op_open's `file: &String` (#144; the new
       `component_path(path, file)` call made it a plain slice), now `&str`.
-      Next: sc-build test + clippy, then close #129, #143, #144, #142.
+      Done: `sc-build 'cargo test --workspace --locked && cargo clippy
+      --workspace --all-targets --locked -- -D warnings'` on 6d48640 green
+      (669 tests, 0 warnings, job afafaef97a); #129, #142 closed (#143,
+      #144 closed by the build); image requested.
