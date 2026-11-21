@@ -425,4 +425,5 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       now `_needs_sequence`. nfstest v4.1 already conforms.
       Done: f2c98de; `sc-build 'cargo test --workspace --locked && cargo
       clippy --workspace --all-targets --locked -- -D warnings'` green (692
-      tests, 0 warnings, job f5b4e61a87); #134 closed; image requested.
+      tests, 0 warnings, job f5b4e61a87); #134 closed; golden-nextnfs-33899f78a596 (also
+      carries #133's three fixes), release request stormcos#1506.
