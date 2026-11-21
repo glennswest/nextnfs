@@ -210,6 +210,7 @@ pub enum NfsStat4 {
     Nfs4errRetryUncachedRep = 10068,  /* retry & rep. uncached    */
     Nfs4errOpNotInSession = 10071,    /* op requires session      */
     Nfs4errSeqFalseRetry = 10076,     /* false retry on slot      */
+    Nfs4errNotOnlyOp = 10081,         /* sessionless op not alone */
 }
 
 pub struct FileAttrFlags {}

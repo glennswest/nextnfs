@@ -55,6 +55,41 @@ const OP_SECINFO_NO_NAME: u32 = 52;
 /// NFS4ERR_DENIED (the conflicting lock), SETCLIENTID NFS4ERR_CLID_INUSE
 /// (the client address), and SETATTR, whose `attrsset` follows the status
 /// whatever it is (empty when the handler gave none).
+/// Where an NFSv4.1 COMPOUND breaks the SEQUENCE placement rules (RFC 8881
+/// §2.6.3.1.1, §18.46.3; finding 739140171b7d): the index of the op that
+/// fails and its status, or None. SEQUENCE must be the first op and only
+/// there (a later one: NFS4ERR_SEQUENCE_POS). Without it, the COMPOUND must
+/// be one session-less op alone (EXCHANGE_ID, CREATE_SESSION,
+/// DESTROY_SESSION, BIND_CONN_TO_SESSION, DESTROY_CLIENTID; with more ops:
+/// NFS4ERR_NOT_ONLY_OP), else the first op is NFS4ERR_OP_NOT_IN_SESSION. In
+/// NFSv4.0 SEQUENCE does not exist: NFS4ERR_OP_ILLEGAL.
+pub(crate) fn sequence_placement_error(minor_version: u32, opcodes: &[u32]) -> Option<(usize, NfsStat4)> {
+    const SEQUENCE: u32 = 53;
+    if minor_version == 0 {
+        return opcodes
+            .iter()
+            .position(|&op| op == SEQUENCE)
+            .map(|i| (i, NfsStat4::Nfs4errOpIllegal));
+    }
+    let first = *opcodes.first()?;
+    if first == SEQUENCE {
+        return opcodes
+            .iter()
+            .skip(1)
+            .position(|&op| op == SEQUENCE)
+            .map(|i| (i + 1, NfsStat4::Nfs4errSequencePos));
+    }
+    // BIND_CONN_TO_SESSION 41, EXCHANGE_ID 42, CREATE_SESSION 43,
+    // DESTROY_SESSION 44, DESTROY_CLIENTID 57.
+    if matches!(first, 41..=44 | 57) {
+        if opcodes.len() > 1 {
+            return Some((0, NfsStat4::Nfs4errNotOnlyOp));
+        }
+        return None;
+    }
+    Some((0, NfsStat4::Nfs4errOpNotInSession))
+}
+
 pub(crate) fn failed_result(op: u32, status: NfsStat4, result: Option<NfsResOp4>) -> NfsResOp4 {
     match result {
         Some(r @ NfsResOp4::Oplock(Lock4res::Denied(_)))
@@ -612,9 +647,34 @@ impl NFS40Server {
                 let mut resarray = Vec::with_capacity(args.argarray.len());
                 let op_count = args.argarray.len();
                 let opcodes: Vec<u32> = args.argarray.iter().map(op_code).collect();
+                let placement = sequence_placement_error(args.minor_version, &opcodes);
                 for (op_idx, arg) in args.argarray.into_iter().enumerate() {
                     let operation = op_name(&arg);
                     debug!(op = operation, idx = op_idx, total = op_count, "compound: dispatching op");
+
+                    // SEQUENCE placement (finding 739140171b7d): the op that
+                    // breaks it fails and the COMPOUND stops there; the ops
+                    // before it (a first SEQUENCE among them) have run.
+                    if let Some((bad_idx, status)) = placement.clone() {
+                        if bad_idx == op_idx {
+                            debug!(op = operation, idx = op_idx, ?status, "compound: SEQUENCE placement");
+                            // An op the minor version does not have is
+                            // answered as OP_ILLEGAL (RFC 7530 §16.2.3).
+                            let op = if status == NfsStat4::Nfs4errOpIllegal { 10044 } else { opcodes[op_idx] };
+                            resarray.push(failed_result(op, status.clone(), None));
+                            return (
+                                request,
+                                ReplyBody::MsgAccepted(AcceptedReply {
+                                    verf: OpaqueAuth::AuthNull(Vec::<u8>::new()),
+                                    reply_data: AcceptBody::Success(Compound4res {
+                                        status,
+                                        tag: reply_tag.clone(),
+                                        resarray,
+                                    }),
+                                }),
+                            );
+                        }
+                    }
 
                     // QoS rate limit check — if rate exceeded, return NFS4ERR_DELAY.
                     // READ (requested count) and WRITE (data length) are also
@@ -1176,6 +1236,64 @@ mod tests {
         msg
     }
 
+    #[test]
+    fn test_sequence_placement_rules() {
+        use NfsStat4::*;
+        let p = sequence_placement_error;
+        // v4.1: SEQUENCE first, alone or with ops.
+        assert_eq!(p(1, &[53]), None);
+        assert_eq!(p(1, &[53, 24, 10]), None);
+        assert_eq!(p(1, &[53, 42]), None); // session-less op after SEQUENCE
+        // A second SEQUENCE fails where it is.
+        assert_eq!(p(1, &[53, 24, 53]), Some((2, Nfs4errSequencePos)));
+        // No SEQUENCE first.
+        assert_eq!(p(1, &[24, 53]), Some((0, Nfs4errOpNotInSession)));
+        assert_eq!(p(1, &[24]), Some((0, Nfs4errOpNotInSession)));
+        // Session-less ops alone are fine, with company they are not.
+        for op in [41, 42, 43, 44, 57] {
+            assert_eq!(p(1, &[op]), None, "op {}", op);
+            assert_eq!(p(1, &[op, 24]), Some((0, Nfs4errNotOnlyOp)), "op {}", op);
+        }
+        assert_eq!(p(1, &[]), None);
+        // v4.0 has no SEQUENCE.
+        assert_eq!(p(0, &[24, 10]), None);
+        assert_eq!(p(0, &[24, 53]), Some((1, Nfs4errOpIllegal)));
+    }
+
+    /// Finding 739140171b7d end to end: a second SEQUENCE in a COMPOUND
+    /// fails with NFS4ERR_SEQUENCE_POS after the ops before it ran, and the
+    /// first SEQUENCE's slot keeps that reply: the retry gets it again and
+    /// REMOVE does not run twice.
+    #[tokio::test]
+    async fn test_second_sequence_is_sequence_pos() {
+        let dir = tempfile::tempdir().unwrap();
+        let (request, sid) = v41_request(dir.path()).await;
+        let server = NFS40Server::new();
+        let second = NfsArgOp::Opsequence(Sequence4args {
+            sa_sessionid: sid,
+            sa_sequenceid: 2,
+            sa_slotid: 0,
+            sa_highest_slotid: 0,
+            sa_cachethis: true,
+        });
+        let msg = v41_compound("pos", sid, 1, true, vec![remove_f(), second.clone()]);
+        let (request, reply) = server.compound(msg, request).await;
+        let res = compound_res(reply);
+        assert_eq!(res.status, NfsStat4::Nfs4errSequencePos);
+        assert_eq!(res.resarray.len(), 3);
+        assert_eq!(res.resarray[2], NfsResOp4::OpError { op: 53, status: NfsStat4::Nfs4errSequencePos });
+        assert!(!dir.path().join("f").exists());
+
+        // The retry: the same reply from the slot's cache.
+        std::fs::write(dir.path().join("f"), b"y").unwrap();
+        let msg = v41_compound("pos", sid, 1, true, vec![remove_f(), second]);
+        let (_request, reply) = server.compound(msg, request).await;
+        let retry = compound_res(reply);
+        assert_eq!(retry.status, NfsStat4::Nfs4errSequencePos);
+        assert_eq!(retry.resarray, res.resarray);
+        assert!(dir.path().join("f").exists(), "the retry ran REMOVE again");
+    }
+
     fn remove_f() -> NfsArgOp {
         NfsArgOp::Opremove(Remove4args { target: "f".to_string() })
     }
@@ -1448,7 +1566,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_compound_minor_version_1_accepted() {
+    async fn test_compound_minor_version_1_needs_sequence() {
         let server = NFS40Server::new();
         let request = create_nfs40_server(None).await;
         let msg = CallBody {
@@ -1461,16 +1579,23 @@ mod tests {
             gss: None,
             args: Some(Compound4args {
                 tag: "test".to_string(),
-                minor_version: 1, // v4.1 — should be accepted
-                argarray: vec![NfsArgOp::Opputrootfh(())],
+                // v4.1 is accepted, but its ops need a session: without
+                // SEQUENCE first, PUTROOTFH is NFS4ERR_OP_NOT_IN_SESSION
+                // (finding 739140171b7d) and does not run.
+                minor_version: 1,
+                argarray: vec![NfsArgOp::Opputrootfh(()), NfsArgOp::Opgetfh(())],
             }),
         };
-        let (_request, reply) = server.compound(msg, request).await;
+        let (request, reply) = server.compound(msg, request).await;
+        assert!(request.current_filehandle().is_none());
         match reply {
             ReplyBody::MsgAccepted(accepted) => match accepted.reply_data {
                 AcceptBody::Success(res) => {
-                    assert_eq!(res.status, NfsStat4::Nfs4Ok);
-                    assert_eq!(res.resarray.len(), 1);
+                    assert_eq!(res.status, NfsStat4::Nfs4errOpNotInSession);
+                    assert_eq!(
+                        res.resarray,
+                        vec![NfsResOp4::OpError { op: 24, status: NfsStat4::Nfs4errOpNotInSession }]
+                    );
                 }
                 _ => panic!("Expected Success"),
             },
