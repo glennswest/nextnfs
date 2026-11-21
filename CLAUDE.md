@@ -349,4 +349,5 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       Done: `sc-build 'cargo test --workspace --locked && cargo clippy
       --workspace --all-targets --locked -- -D warnings'` on 6d48640 green
       (669 tests, 0 warnings, job afafaef97a); #129, #142 closed (#143,
-      #144 closed by the build); image requested.
+      #144 closed by the build); golden-nextnfs-93bf37f484bd, release
+      request stormcos#1506.
