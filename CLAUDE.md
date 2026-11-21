@@ -292,3 +292,10 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       themselves; the dispatcher's `chown_new_object` goes. UNCHECKED4 on
       an existing file no longer truncates it (O_TRUNC did) unless size 0
       is asked; GUARDED4 implemented (EXIST); existing dir → ISDIR.
+      Status 2026-11-20: code, tests, docs, CHANGELOG pushed (cdfbb19;
+      ed1f56e fixes a duplicate test helper that failed cdfbb19's build,
+      #141). Next: `sc-build 'cargo test --workspace --locked && cargo
+      clippy --workspace --all-targets --locked -- -D warnings'` on ed1f56e
+      (the first attempt sat ~3h in the build queue and was stopped locally
+      for low memory before it got a VM), then close #127 and #141, request
+      the image. EXCLUSIVE4 verifier gap filed as #140.
