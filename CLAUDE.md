@@ -468,7 +468,7 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       --workspace --all-targets --locked -- -D warnings'` green (698 tests,
       0 warnings, job c528b2846c); #137 closed; golden-nextnfs-36cdebdd949f,
       release request stormcos#1506.
-- [ ] 2026-11-21 — #138 (P1, 4 major review findings on proto/src/lib.rs,
+- [x] 2026-11-21 — #138 (P1, 4 major review findings on proto/src/lib.rs,
       the RPC record decoder). aef45710c6c5 + 10c9e05809be: completed
       fragments kept in the codec (`record`) between decode calls;
       incomplete fragment left in src. 789be13b2b2a + 3043a1c9219e:
@@ -479,4 +479,6 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       Build on 22bf462 (job b5fff96239): all new tests ok except
       `test_decode_record_of_exactly_max_is_accepted`, whose assertion was
       wrong (all-zero record is a valid CALL, not a ParseError; #147).
-      Next: sc-build on the fix, close #138 + #147, request the image.
+      Done: 4906e6f; `sc-build 'cargo test --workspace --locked && cargo
+      clippy --workspace --all-targets --locked -- -D warnings'` green (704
+      tests, 0 warnings, job 9157ae9252); #138, #147 closed; image requested.
