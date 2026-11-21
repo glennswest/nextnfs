@@ -457,3 +457,11 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       STALE. Done: 1438a74; `sc-build 'cargo test --workspace --locked &&
       cargo clippy --workspace --all-targets --locked -- -D warnings'` green
       (696 tests, 0 warnings, job d1efaa142b); #136 closed; image requested.
+- [ ] 2026-11-21 — #137 (P1, review finding 6a43b20deb30 on src/web.rs):
+      export names/paths interpolated raw into the web UI's HTML and into
+      an inline `onclick` JS string. Fix: `esc()` on every name/path
+      (dashboard, exports, stats), Remove button via `data-remove-export` +
+      delegated listener, Add via addEventListener (no inline handlers),
+      status via textContent, DELETE URL `encodeURIComponent`. Tests:
+      `web::tests::export_names_and_paths_are_escaped`, `esc_*`. Next:
+      sc-build test + clippy, close #137, request the image.

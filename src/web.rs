@@ -68,6 +68,29 @@ const STYLE: &str = r#"
 </style>
 "#;
 
+/// HTML-escapes `s` for element text and quoted attribute values (#137,
+/// finding 6a43b20deb30): export names and paths come from the config file
+/// or `POST /api/v1/exports` and must never become markup or script.
+fn esc(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// An export's name and path, escaped for HTML.
+fn esc_export(e: &ExportInfo) -> (String, String) {
+    (esc(&e.name), esc(&e.path.display().to_string()))
+}
+
 fn nav(active: &str) -> String {
     let pages = [("/", "Dashboard"), ("/ui/exports", "Exports"), ("/ui/stats", "Stats")];
     let mut html = String::from(r#"<div class="nav">"#);
@@ -137,12 +160,10 @@ pub fn render_dashboard(exports: &[ExportInfo]) -> String {
             } else {
                 r#"<span class="badge badge-rw">RW</span>"#
             };
+            let (name, path) = esc_export(e);
             html.push_str(&format!(
                 r#"<tr><td>{}</td><td class="mono">{}</td><td>{}</td><td>{}</td></tr>"#,
-                e.name,
-                e.path.display(),
-                badge,
-                e.export_id
+                name, path, badge, e.export_id
             ));
         }
         html.push_str("</table>");
@@ -170,7 +191,7 @@ pub fn render_exports(exports: &[ExportInfo], writable: bool) -> String {
         html.push_str(r#"<div class="form-row"><input type="text" id="exp-name" placeholder="Export name" style="width:160px">"#);
         html.push_str(r#"<input type="text" id="exp-path" placeholder="/path/to/share" style="width:280px">"#);
         html.push_str(r#"<label><input type="checkbox" id="exp-ro"> Read-only</label>"#);
-        html.push_str(r#"<button onclick="addExport()">Add</button></div>"#);
+        html.push_str(r#"<button id="exp-add">Add</button></div>"#);
         html.push_str(r#"<div id="status"></div></div>"#);
     }
 
@@ -190,18 +211,21 @@ pub fn render_exports(exports: &[ExportInfo], writable: bool) -> String {
             } else {
                 r#"<span class="badge badge-rw">RW</span>"#
             };
+            let (name, path) = esc_export(e);
+            // The name goes to the script through a data attribute (read
+            // back as a string by `dataset`), never into JavaScript source.
             let remove = if writable {
                 format!(
-                    r#"<td><button class="btn-danger btn-sm" onclick="removeExport('{}')">Remove</button></td>"#,
-                    e.name
+                    r#"<td><button class="btn-danger btn-sm" data-remove-export="{}">Remove</button></td>"#,
+                    name
                 )
             } else {
                 String::new()
             };
             html.push_str(&format!(
                 r#"<tr><td>{name}</td><td class="mono">{path}</td><td>{badge}</td><td>{id}</td>{remove}</tr>"#,
-                name = e.name,
-                path = e.path.display(),
+                name = name,
+                path = path,
                 badge = badge,
                 id = e.export_id,
                 remove = remove
@@ -222,30 +246,40 @@ function authHeaders(extra) {
     const t = document.getElementById('api-token').value;
     return Object.assign({'Authorization': 'Bearer ' + t}, extra || {});
 }
+function setStatus(ok, text) {
+    const span = document.createElement('span');
+    span.className = ok ? 'status-ok' : 'status-err';
+    span.textContent = String(text);
+    document.getElementById('status').replaceChildren(span);
+}
 async function addExport() {
     const name = document.getElementById('exp-name').value;
     const path = document.getElementById('exp-path').value;
     const ro = document.getElementById('exp-ro').checked;
-    const st = document.getElementById('status');
-    if (!name || !path) { st.innerHTML='<span class="status-err">Name and path required</span>'; return; }
+    if (!name || !path) { setStatus(false, 'Name and path required'); return; }
     try {
         const r = await fetch('/api/v1/exports', {
             method: 'POST', headers: authHeaders({'Content-Type':'application/json'}),
             body: JSON.stringify({name, path, read_only: ro})
         });
         const d = await r.json();
-        if (r.ok) { st.innerHTML='<span class="status-ok">Export added</span>'; setTimeout(()=>location.reload(),500); }
-        else { st.innerHTML='<span class="status-err">'+d.error+'</span>'; }
-    } catch(e) { st.innerHTML='<span class="status-err">'+e+'</span>'; }
+        if (r.ok) { setStatus(true, 'Export added'); setTimeout(()=>location.reload(),500); }
+        else { setStatus(false, d.error); }
+    } catch(e) { setStatus(false, e); }
 }
 async function removeExport(name) {
     if (!confirm('Remove export "'+name+'"?')) return;
     try {
-        const r = await fetch('/api/v1/exports/'+name, {method:'DELETE', headers: authHeaders()});
+        const r = await fetch('/api/v1/exports/'+encodeURIComponent(name), {method:'DELETE', headers: authHeaders()});
         if (r.ok) location.reload();
         else { const d = await r.json(); alert(d.error); }
     } catch(e) { alert(e); }
 }
+document.getElementById('exp-add').addEventListener('click', addExport);
+document.addEventListener('click', ev => {
+    const b = ev.target.closest('button[data-remove-export]');
+    if (b) removeExport(b.dataset.removeExport);
+});
 </script>"#);
     html.push_str(foot());
     html
@@ -261,10 +295,11 @@ pub fn render_stats(exports: &[ExportInfo]) -> String {
     } else {
         for e in exports {
             let s = e.stats.snapshot();
-            html.push_str(&format!(r#"<div class="card"><h2>{}</h2>"#, e.name));
+            let (name, path) = esc_export(e);
+            html.push_str(&format!(r#"<div class="card"><h2>{}</h2>"#, name));
             html.push_str(&format!(
                 r#"<div style="font-size:0.85em;color:var(--dim);margin-bottom:8px" class="mono">{}</div>"#,
-                e.path.display()
+                path
             ));
             html.push_str(r#"<div class="stat-grid">"#);
             html.push_str(&stat_box(&format_count(s.reads), "Reads"));
@@ -320,7 +355,67 @@ mod tests {
         assert!(!ro.contains("addExport") && !ro.contains("removeExport"));
         assert!(ro.contains("api_token_file"));
         let rw = render_exports(&[], true);
-        assert!(rw.contains("addExport()") && rw.contains("api-token"));
+        assert!(rw.contains("addExport") && rw.contains("api-token"));
         assert!(rw.contains("'Bearer '"));
+    }
+
+    fn export(name: &str, path: &str) -> ExportInfo {
+        use nextnfs_server::export_manager::{
+            AccessConfig, AccessControl, ExportStats, QosConfig, RateLimiter,
+        };
+        ExportInfo {
+            export_id: 1,
+            name: name.to_string(),
+            path: path.into(),
+            read_only: false,
+            stats: ExportStats::new(),
+            rate_limiter: std::sync::Arc::new(tokio::sync::Mutex::new(RateLimiter::new(
+                QosConfig::default(),
+            ))),
+            access_control: AccessControl::new(AccessConfig::default()),
+        }
+    }
+
+    const EVIL_NAME: &str = r#"x');alert(1);//"><script>alert(2)</script><img src=x onerror=alert(3)>"#;
+    const EVIL_PATH: &str = r#"/srv/<script>alert(4)</script>"'&"#;
+
+    /// #137, finding 6a43b20deb30: a crafted export name or path is shown
+    /// as text on every page, never as markup or script, and the page has
+    /// no inline event handlers the name could break out of.
+    #[test]
+    fn export_names_and_paths_are_escaped() {
+        let exports = [export(EVIL_NAME, EVIL_PATH)];
+        let pages = [
+            ("dashboard", render_dashboard(&exports)),
+            ("exports ro", render_exports(&exports, false)),
+            ("exports rw", render_exports(&exports, true)),
+            ("stats", render_stats(&exports)),
+        ];
+        let name = "x&#39;);alert(1);//&quot;&gt;&lt;script&gt;alert(2)&lt;/script&gt;\
+                    &lt;img src=x onerror=alert(3)&gt;";
+        let path = "/srv/&lt;script&gt;alert(4)&lt;/script&gt;&quot;&#39;&amp;";
+        for (page, html) in &pages {
+            for bad in ["<script>alert", "<img", "');alert", "\"'&"] {
+                assert!(!html.contains(bad), "{page}: raw {bad:?} in {html}");
+            }
+            assert!(html.contains(name), "{page}: escaped name missing");
+            assert!(html.contains(path), "{page}: escaped path missing");
+            assert!(!html.contains("onclick="), "{page}: inline handler");
+            assert!(!html.contains(" onerror=alert(3)>"), "{page}");
+        }
+        // The remove control carries the (escaped) name as data, and the
+        // script reads it with `dataset` and URL-encodes it for DELETE.
+        let rw = &pages[2].1;
+        assert!(rw.contains(&format!(r#"data-remove-export="{name}""#)));
+        assert!(rw.contains("b.dataset.removeExport"));
+        assert!(rw.contains("encodeURIComponent(name)"));
+        assert!(!rw.contains("innerHTML"));
+    }
+
+    #[test]
+    fn esc_escapes_the_five_html_specials_only() {
+        assert_eq!(esc(r#"a&b<c>d"e'f"#), "a&amp;b&lt;c&gt;d&quot;e&#39;f");
+        assert_eq!(esc("plain/name-1_ü"), "plain/name-1_ü");
+        assert_eq!(esc("&amp;"), "&amp;amp;");
     }
 }
