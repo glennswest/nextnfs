@@ -396,4 +396,5 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       corrected. COPY has the same O_APPEND+seek pattern: #145.
       Done: 746c042; `sc-build 'cargo test --workspace --locked && cargo
       clippy --workspace --all-targets --locked -- -D warnings'` green
-      (684 tests, 0 warnings, job 63e70ec348); #132 closed; image requested.
+      (684 tests, 0 warnings, job 63e70ec348); #132 closed; golden-nextnfs-52265f817560,
+      release request stormcos#1506.
