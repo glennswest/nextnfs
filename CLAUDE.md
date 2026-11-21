@@ -428,7 +428,7 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       clippy --workspace --all-targets --locked -- -D warnings'` green (692
       tests, 0 warnings, job f5b4e61a87); #134 closed; golden-nextnfs-33899f78a596 (also
       carries #133's three fixes), release request stormcos#1506.
-- [ ] 2026-11-21 — #135 (P1, review finding 77bd1161399f on 8a66330):
+- [x] 2026-11-21 — #135 (P1, review finding 77bd1161399f on 8a66330):
       the per-export quota counted WRITE traffic, never freed, started at
       0 — and nothing could configure it (no config key/CLI/API; default 0
       = unlimited), so it was a stub. Removed per the no-stubs rule
@@ -438,3 +438,7 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       root (were a fixed 1 TiB minus traffic, files = bytes/4096);
       stable WRITE errors via `io_status` (NOSPC/DQUOT/ISDIR, was IO).
       Breaking (library API, supported_attrs) → next minor.
+      Done: 0841810; `sc-build 'cargo test --workspace --locked && cargo
+      clippy --workspace --all-targets --locked -- -D warnings'` green (690
+      tests = 692 − 3 quota tests + 1, 0 warnings, job 1b79c8b3af); #135
+      closed; image requested.
