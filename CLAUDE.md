@@ -313,3 +313,12 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       && cargo clippy --workspace --all-targets --locked -- -D warnings'` on
       it green (660 tests, 0 warnings; also verifies #127). #128 and #127
       closed (#141 closed by the build); image requested.
+- [x] 2026-11-21 — #142 (P3, 3 minor review findings). 3d2b666851f1:
+      `TestManager::run_with_progress` takes the web API's run id (report,
+      RunFinished, active run all one id). 1e45f4ce40e3: SECINFO and
+      SECINFO_NO_NAME unset the current filehandle on success;
+      `NfsRequest::is_pseudo_root` needs a filehandle, so GETATTR after
+      them at the pseudo-root is NOFILEHANDLE too. 4d86693f316f:
+      SECINFO_NO_NAME PARENT — pseudo-root → NOENT, export root with >1
+      export → pseudo-root flavours (`exports_secinfo_flavors`), else the
+      export's. Next: sc-build test+clippy, close #142, request the image.

@@ -19,24 +19,27 @@ impl TestManager {
 
     /// Run all matching tests and return the complete run result.
     pub async fn run(&self) -> anyhow::Result<RunResult> {
-        self.run_inner(None, None).await
+        self.run_inner(uuid::Uuid::new_v4().to_string(), None, None).await
     }
 
-    /// Run all matching tests with progress events sent via broadcast channel.
+    /// Run all matching tests as run `run_id` (the id the web API returned
+    /// and put in the active run, so the report and RunFinished carry the
+    /// same one, #142), with progress events sent via broadcast channel.
     pub async fn run_with_progress(
         &self,
+        run_id: String,
         tx: broadcast::Sender<ProgressEvent>,
         active_run: Arc<RwLock<Option<crate::web::ActiveRun>>>,
     ) -> anyhow::Result<RunResult> {
-        self.run_inner(Some(tx), Some(active_run)).await
+        self.run_inner(run_id, Some(tx), Some(active_run)).await
     }
 
     async fn run_inner(
         &self,
+        run_id: String,
         tx: Option<broadcast::Sender<ProgressEvent>>,
         active_run: Option<Arc<RwLock<Option<crate::web::ActiveRun>>>>,
     ) -> anyhow::Result<RunResult> {
-        let run_id = uuid::Uuid::new_v4().to_string();
         let started_at = Utc::now();
         let run_start = Instant::now();
 

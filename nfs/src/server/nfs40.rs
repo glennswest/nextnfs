@@ -3232,6 +3232,78 @@ mod tests {
         );
     }
 
+    // --- #142: SECINFO consumes the handle; SECINFO_NO_NAME PARENT ---
+
+    fn getattr_type_op() -> NfsArgOp {
+        NfsArgOp::Opgetattr(Getattr4args { attr_request: Attrlist4(vec![FileAttr::Type]) })
+    }
+
+    #[tokio::test]
+    async fn test_secinfo_then_getattr_is_nofilehandle() {
+        let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        // Inside an export, and at the pseudo-root.
+        for ops in [
+            vec![NfsArgOp::Opputrootfh(()), lookup_op("open"), NfsArgOp::OpSecinfo(SecInfo4args { name: "x".to_string() }), getattr_type_op()],
+            vec![NfsArgOp::Opputrootfh(()), NfsArgOp::OpSecinfo(SecInfo4args { name: "open".to_string() }), getattr_type_op()],
+            vec![
+                NfsArgOp::Opputrootfh(()),
+                NfsArgOp::OpsecinfoNoName(SecinfoNoName4args { sina_style: SecinfoStyle4::SecinfoStyle4CurrentFh }),
+                getattr_type_op(),
+            ],
+        ] {
+            let n = ops.len();
+            let request = sec_export_request(a.path(), b.path()).await;
+            let (_request, reply) = NFS40Server::new().compound(make_compound(ops), request).await;
+            let (status, resarray) = compound_result(reply);
+            assert_eq!(status, NfsStat4::Nfs4errNofilehandle, "{:?}", resarray);
+            assert_eq!(resarray.len(), n, "{:?}", resarray);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_secinfo_no_name_parent_of_export_root_is_pseudo_root() {
+        use crate::server::export_manager::SecFlavor;
+        let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let parent = |style| NfsArgOp::OpsecinfoNoName(SecinfoNoName4args { sina_style: style });
+
+        // krb (krb5i only) export root: CURRENT_FH is the export's own
+        // flavours, PARENT the pseudo-root's (sys and krb5i).
+        for (style, want) in [
+            (SecinfoStyle4::SecinfoStyle4CurrentFh, vec![krb5i_secinfo()]),
+            (SecinfoStyle4::SecinfoStyle4Parent, vec![SeCinfo4::AuthSys, krb5i_secinfo()]),
+        ] {
+            let mut request = sec_export_request(a.path(), b.path()).await;
+            request.set_sec_flavor(SecFlavor::Krb5i);
+            let msg = make_compound(vec![NfsArgOp::Opputrootfh(()), lookup_op("krb"), parent(style)]);
+            let (_request, reply) = NFS40Server::new().compound(msg, request).await;
+            let (status, resarray) = compound_result(reply);
+            assert_eq!(status, NfsStat4::Nfs4Ok, "{:?}", resarray);
+            assert_eq!(resarray[2], NfsResOp4::OpsecinfoNoName(SecinfoNoName4res::Resok4(want)));
+        }
+
+        // Below the export root the parent is in the same export.
+        std::fs::create_dir(b.path().join("sub")).unwrap();
+        std::fs::set_permissions(b.path().join("sub"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut request = sec_export_request(a.path(), b.path()).await;
+        request.set_sec_flavor(SecFlavor::Krb5i);
+        let msg = make_compound(vec![
+            NfsArgOp::Opputrootfh(()),
+            lookup_op("krb"),
+            lookup_op("sub"),
+            parent(SecinfoStyle4::SecinfoStyle4Parent),
+        ]);
+        let (_request, reply) = NFS40Server::new().compound(msg, request).await;
+        let (status, resarray) = compound_result(reply);
+        assert_eq!(status, NfsStat4::Nfs4Ok, "{:?}", resarray);
+        assert_eq!(resarray[3], NfsResOp4::OpsecinfoNoName(SecinfoNoName4res::Resok4(vec![krb5i_secinfo()])));
+
+        // The pseudo-root has no parent.
+        let request = sec_export_request(a.path(), b.path()).await;
+        let msg = make_compound(vec![NfsArgOp::Opputrootfh(()), parent(SecinfoStyle4::SecinfoStyle4Parent)]);
+        let (_request, reply) = NFS40Server::new().compound(msg, request).await;
+        assert_eq!(compound_result(reply).0, NfsStat4::Nfs4errNoent);
+    }
+
     #[test]
     fn test_secinfo4_krb5_wire_format() {
         // flavor 6, sec_oid4 (11 bytes + 1 pad), qop 0, service 2.

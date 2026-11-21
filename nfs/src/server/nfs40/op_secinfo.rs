@@ -14,7 +14,7 @@ use nextnfs_proto::nfs4_proto::*;
 
 #[async_trait]
 impl NfsOperation for SecInfo4args {
-    async fn execute<'a>(&self, request: NfsRequest<'a>) -> NfsOpResponse<'a> {
+    async fn execute<'a>(&self, mut request: NfsRequest<'a>) -> NfsOpResponse<'a> {
         debug!("SECINFO name={}", self.name);
 
         // Current filehandle must be a directory
@@ -42,6 +42,7 @@ impl NfsOperation for SecInfo4args {
         // Per RFC 7530 S16.31.4, the current filehandle is consumed (set to absent)
         // after SECINFO completes.
         let flavors = request.secinfo_flavors(Some(&self.name)).await;
+        request.unset_filehandle();
         NfsOpResponse {
             request,
             result: Some(NfsResOp4::OpSecinfo(SecInfo4res::Resok4(flavors))),

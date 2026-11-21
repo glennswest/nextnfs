@@ -127,7 +127,9 @@ pub async fn start_run(
 
     // Spawn test execution task
     tokio::spawn(async move {
-        let result = manager.run_with_progress(tx.clone(), active_run.clone()).await;
+        let result = manager
+            .run_with_progress(run_id_clone.clone(), tx.clone(), active_run.clone())
+            .await;
 
         match result {
             Ok(run_result) => {
@@ -234,5 +236,54 @@ pub async fn status(State(state): State<Arc<AppState>>) -> Json<StatusResponse> 
             total_tests: None,
             completed: None,
         }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::sync::{broadcast, RwLock};
+
+    /// #142 (finding 3d2b666851f1): the id start_run returns is the one the
+    /// RunFinished event and the saved report carry.
+    #[tokio::test]
+    async fn test_started_run_keeps_its_id() {
+        let data_dir = std::env::temp_dir().join(format!("nextnfstest-runid-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&data_dir).unwrap();
+        let (tx, mut rx) = broadcast::channel(16);
+        let state = Arc::new(AppState {
+            data_dir: data_dir.clone(),
+            active_run: Arc::new(RwLock::new(None)),
+            progress_tx: tx,
+            base_path: String::new(),
+        });
+        // No test matches, and nothing listens on port 1: the run ends at once.
+        let req = RunRequest {
+            server: "127.0.0.1".to_string(),
+            port: Some(1),
+            export: None,
+            version: None,
+            layer: None,
+            tag: None,
+            test_id: Some("NO-SUCH-TEST".to_string()),
+            uid: None,
+            gid: None,
+        };
+        let Json(started) = start_run(State(state.clone()), Json(req)).await.unwrap();
+
+        let finished_id = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            loop {
+                if let ProgressEvent::RunFinished { run_id, .. } = rx.recv().await.unwrap() {
+                    break run_id;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(finished_id, started.run_id);
+
+        let Json(report) = get_run(State(state.clone()), Path(started.run_id.clone())).await.unwrap();
+        assert_eq!(report.run_id, started.run_id);
+        std::fs::remove_dir_all(&data_dir).unwrap();
     }
 }

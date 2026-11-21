@@ -176,8 +176,10 @@ impl<'a> NfsRequest<'a> {
     }
 
     /// Check if the current filehandle is the pseudo-root.
+    /// False once the handle is consumed (SECINFO, #142): the export id
+    /// stays, but there is no current filehandle.
     pub fn is_pseudo_root(&self) -> bool {
-        self.current_export_id == Some(op_pseudo::PSEUDO_ROOT_EXPORT_ID)
+        self.filehandle.is_some() && self.current_export_id == Some(op_pseudo::PSEUDO_ROOT_EXPORT_ID)
     }
 
     pub fn current_export_id(&self) -> Option<u8> {
@@ -261,26 +263,32 @@ impl<'a> NfsRequest<'a> {
     /// `name` when the current filehandle is the pseudo-root (#106). At the
     /// pseudo-root without a name: every flavour any export accepts.
     pub async fn secinfo_flavors(&self, name: Option<&str>) -> Vec<nextnfs_proto::nfs4_proto::SeCinfo4> {
+        match self.access_control.as_ref() {
+            Some(ac) => ac.sec_flavors().into_iter().map(super::export_manager::SecFlavor::secinfo).collect(),
+            None => self.exports_secinfo_flavors(name).await,
+        }
+    }
+
+    /// The pseudo-root's SECINFO answer whatever the current export is:
+    /// the flavours of the export `name`, or with no name every flavour any
+    /// export accepts (AUTH_SYS when there is no export). SECINFO_NO_NAME
+    /// PARENT from an export root answers this (#142).
+    pub async fn exports_secinfo_flavors(&self, name: Option<&str>) -> Vec<nextnfs_proto::nfs4_proto::SeCinfo4> {
         use super::export_manager::SecFlavor;
-        let flavors: Vec<SecFlavor> = if let Some(ac) = self.access_control.as_ref() {
-            ac.sec_flavors()
-        } else {
-            let mut exports = self.export_manager.list_exports().await;
-            exports.sort_by_key(|e| e.export_id);
-            let mut all: Vec<SecFlavor> = Vec::new();
-            for e in exports.iter().filter(|e| name.is_none() || name == Some(e.name.as_str())) {
-                for f in e.access_control.sec_flavors() {
-                    if !all.contains(&f) {
-                        all.push(f);
-                    }
+        let mut exports = self.export_manager.list_exports().await;
+        exports.sort_by_key(|e| e.export_id);
+        let mut all: Vec<SecFlavor> = Vec::new();
+        for e in exports.iter().filter(|e| name.is_none() || name == Some(e.name.as_str())) {
+            for f in e.access_control.sec_flavors() {
+                if !all.contains(&f) {
+                    all.push(f);
                 }
             }
-            if all.is_empty() {
-                all.push(SecFlavor::Sys);
-            }
-            all
-        };
-        flavors.into_iter().map(SecFlavor::secinfo).collect()
+        }
+        if all.is_empty() {
+            all.push(SecFlavor::Sys);
+        }
+        all.into_iter().map(SecFlavor::secinfo).collect()
     }
 
     /// Check if the client is using RPCSEC_GSS authentication.
