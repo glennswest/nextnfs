@@ -476,4 +476,7 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       checked_add before buffering, Err (connection closed) when over.
       Tests: separate reads (header and body split), byte-at-a-time three
       records, cumulative limit, exactly-max accepted, EOF drops partial.
-      Next: sc-build test + clippy, close #138, request the image.
+      Build on 22bf462 (job b5fff96239): all new tests ok except
+      `test_decode_record_of_exactly_max_is_accepted`, whose assertion was
+      wrong (all-zero record is a valid CALL, not a ParseError; #147).
+      Next: sc-build on the fix, close #138 + #147, request the image.

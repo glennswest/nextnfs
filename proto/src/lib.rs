@@ -570,8 +570,9 @@ mod codec_tests {
         assert!(codec.record.is_empty());
     }
 
-    /// A record of exactly MAX_RECORD bytes across fragments is accepted
-    /// (here garbage, so a ParseError message, not a connection error).
+    /// A record of exactly MAX_RECORD bytes across fragments is accepted:
+    /// decode yields a message (all zeros parse as a call with xid 0),
+    /// not a connection error.
     #[test]
     fn test_decode_record_of_exactly_max_is_accepted() {
         const MIB: usize = 1024 * 1024;
@@ -583,8 +584,8 @@ mod codec_tests {
             buf.extend_from_slice(&vec![0u8; MIB]);
         }
         let msg = codec.decode(&mut buf).unwrap().expect("a message");
-        assert!(matches!(msg.body, rpc_proto::MsgType::ParseError(_)));
-        assert!(codec.record.is_empty());
+        assert_eq!(msg.xid, 0);
+        assert!(codec.record.is_empty() && buf.is_empty());
     }
 
     /// A fragment one byte over what is left of the limit after a partial
