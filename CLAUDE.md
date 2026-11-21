@@ -324,5 +324,8 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       export's. Code + CHANGELOG pushed (fd9f10e). Not yet built: two
       `sc-build 'cargo test --workspace --locked && cargo clippy --workspace
       --all-targets --locked -- -D warnings'` attempts on fd9f10e got no VM
-      slot (P3, ~60 builds ahead; second one exit 75). Next: run it again,
-      then close #142 and request the image.
+      slot (P3, ~60 builds ahead; second one exit 75, then hung, stormcentral#1640);
+      two more on 4502937 got an empty job id + 404: stormcentral's DB is in
+      the I/O error of stormcentral#1638 (`propose --after` refused with the
+      same 500). Next, once #1638 is fixed: run it again, then close #142
+      and request the image.
