@@ -466,4 +466,5 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       `web::tests::export_names_and_paths_are_escaped`, `esc_*`. Done:
       388b2b8; `sc-build 'cargo test --workspace --locked && cargo clippy
       --workspace --all-targets --locked -- -D warnings'` green (698 tests,
-      0 warnings, job c528b2846c); #137 closed; image requested.
+      0 warnings, job c528b2846c); #137 closed; golden-nextnfs-36cdebdd949f,
+      release request stormcos#1506.
