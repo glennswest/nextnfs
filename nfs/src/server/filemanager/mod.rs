@@ -13,7 +13,7 @@ pub use filehandle::Filehandle;
 pub use filehandle::RealMeta;
 pub use filehandle::id_names;
 pub use handle::FileManagerHandle;
-pub use handle::{LockResult, TestLockResult, UnlockResult};
+pub use handle::{LockResult, TestLockResult, UnlockResult, WriteCacheError};
 mod caching;
 mod handle;
 mod locking;

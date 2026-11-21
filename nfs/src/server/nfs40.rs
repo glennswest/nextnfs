@@ -4954,4 +4954,105 @@ mod tests {
             NfsResOp4::Opsetattr(SetAttr4res { status: NfsStat4::Nfs4errDelay, attrsset: Attrlist4(vec![]) })
         );
     }
+
+    fn unstable(offset: u64, data: &[u8]) -> Write4args {
+        Write4args {
+            stateid: Stateid4 { seqid: 0, other: [0; 12] },
+            offset,
+            stable: StableHow4::Unstable4,
+            data: data.to_vec(),
+        }
+    }
+
+    fn write_verf(resp: &crate::server::response::NfsOpResponse<'_>) -> [u8; 8] {
+        match &resp.result {
+            Some(NfsResOp4::Opwrite(Write4res::Resok4(r))) => r.writeverf,
+            other => panic!("expected WRITE resok, got {:?}", other),
+        }
+    }
+
+    /// #136 (finding 8e411131c3ba): an unstable WRITE was acknowledged
+    /// once queued, whatever pwrite did. Now its outcome comes back: a
+    /// pwrite that fails (offset past off_t: EINVAL) is the WRITE's error,
+    /// and nothing is written. A good one on the same file is OK, and the
+    /// COMMIT after it carries the same verifier.
+    #[tokio::test]
+    async fn test_unstable_write_failure_is_not_acknowledged() {
+        use crate::server::operation::NfsOperation;
+        let export = tempfile::tempdir().unwrap();
+        let f = export.path().join("f");
+        std::fs::write(&f, b"").unwrap();
+        let mut request = request_on_export_squash(false, export.path(), SquashMode::None).await;
+        let fh = request.file_manager().get_filehandle_for_path("/f".to_string()).await.unwrap();
+
+        request.set_filehandle(fh.clone());
+        let resp = unstable(u64::MAX - 1, b"lost").execute(request).await;
+        assert_eq!(resp.status, NfsStat4::Nfs4errIo);
+        assert!(resp.result.is_none());
+        let mut request = resp.request;
+        assert_eq!(std::fs::read(&f).unwrap(), b"");
+
+        request.set_filehandle(fh.clone());
+        let resp = unstable(0, b"kept").execute(request).await;
+        assert_eq!(resp.status, NfsStat4::Nfs4Ok);
+        let verf = write_verf(&resp);
+        let mut request = resp.request;
+        assert_eq!(std::fs::read(&f).unwrap(), b"kept");
+
+        request.set_filehandle(fh);
+        let resp = Commit4args { offset: 0, count: 0 }.execute(request).await;
+        assert_eq!(resp.status, NfsStat4::Nfs4Ok);
+        match resp.result {
+            Some(NfsResOp4::Opcommit(Commit4res::Resok4(r))) => assert_eq!(r.writeverf, verf),
+            other => panic!("expected COMMIT resok, got {:?}", other),
+        }
+    }
+
+    /// #136: the write cache opened its file with O_CREAT, so an unstable
+    /// WRITE through a handle whose file was removed made a new empty file
+    /// and wrote into it, OK; and COMMIT said OK. On a real export the
+    /// cache never creates the file: WRITE and COMMIT are STALE, and the
+    /// file stays gone.
+    #[tokio::test]
+    async fn test_unstable_write_and_commit_of_removed_file_are_stale() {
+        use crate::server::operation::NfsOperation;
+        let export = tempfile::tempdir().unwrap();
+        let f = export.path().join("f");
+        std::fs::write(&f, b"x").unwrap();
+        let mut request = request_on_export_squash(false, export.path(), SquashMode::None).await;
+        let fh = request.file_manager().get_filehandle_for_path("/f".to_string()).await.unwrap();
+        std::fs::remove_file(&f).unwrap();
+
+        request.set_filehandle(fh.clone());
+        let resp = unstable(0, b"data").execute(request).await;
+        assert_eq!(resp.status, NfsStat4::Nfs4errStale);
+        let mut request = resp.request;
+        assert!(!f.exists());
+
+        request.set_filehandle(fh);
+        let resp = Commit4args { offset: 0, count: 0 }.execute(request).await;
+        assert_eq!(resp.status, NfsStat4::Nfs4errStale);
+        assert!(!f.exists());
+    }
+
+    /// #136: the statuses a failed write-cache step maps to. WRITE keeps
+    /// the errno's (NOSPC, DQUOT, FBIG); COMMIT, which RFC 8881 gives no
+    /// NOSPC, says IO for them; a gone file is STALE; a dead actor
+    /// SERVERFAULT.
+    #[test]
+    fn test_write_cache_error_statuses() {
+        use crate::server::filemanager::WriteCacheError as E;
+        let io = |n| E::Io(std::io::Error::from_raw_os_error(n));
+        assert_eq!(io(libc::ENOSPC).write_status(), NfsStat4::Nfs4errNospc);
+        assert_eq!(io(libc::EDQUOT).write_status(), NfsStat4::Nfs4errDquot);
+        assert_eq!(io(libc::EFBIG).write_status(), NfsStat4::Nfs4errFbig);
+        assert_eq!(io(libc::EIO).write_status(), NfsStat4::Nfs4errIo);
+        assert_eq!(E::Gone.write_status(), NfsStat4::Nfs4errStale);
+        assert_eq!(E::ActorGone.write_status(), NfsStat4::Nfs4errServerfault);
+        assert_eq!(io(libc::ENOSPC).commit_status(), NfsStat4::Nfs4errIo);
+        assert_eq!(io(libc::EIO).commit_status(), NfsStat4::Nfs4errIo);
+        assert_eq!(io(libc::EISDIR).commit_status(), NfsStat4::Nfs4errIsdir);
+        assert_eq!(E::Gone.commit_status(), NfsStat4::Nfs4errStale);
+        assert_eq!(E::ActorGone.commit_status(), NfsStat4::Nfs4errServerfault);
+    }
 }

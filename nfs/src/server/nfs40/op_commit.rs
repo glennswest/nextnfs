@@ -1,15 +1,12 @@
 use async_trait::async_trait;
 use tracing::{debug, error};
 
-use crate::server::{operation::NfsOperation, request::NfsRequest, response::NfsOpResponse};
+use crate::server::{
+    filemanager::FileManagerHandle, operation::NfsOperation, request::NfsRequest,
+    response::NfsOpResponse,
+};
 
 use nextnfs_proto::nfs4_proto::{Commit4args, Commit4res, Commit4resok, NfsResOp4, NfsStat4};
-
-fn verifier_from_boot(boot_time: &u64) -> [u8; 8] {
-    let mut verifier = [0; 8];
-    verifier.copy_from_slice(boot_time.to_be_bytes().as_ref());
-    verifier
-}
 
 #[async_trait]
 impl NfsOperation for Commit4args {
@@ -48,7 +45,22 @@ impl NfsOperation for Commit4args {
                 };
             }
         };
-        write_cache.commit().await;
+        // NFS4_OK only once the fsync succeeded (#136, finding
+        // 8e411131c3ba). A failed one is the COMMIT's error; the cache keeps
+        // its state and the write verifier has changed, so the client's
+        // unstable WRITEs are not vouched for by a later COMMIT.
+        let epoch = match write_cache.commit().await {
+            Ok(epoch) => epoch,
+            Err(e) => {
+                error!("COMMIT: {:?}", e);
+                request.drop_filehandle_from_cache(filehandle.id);
+                return NfsOpResponse {
+                    request,
+                    result: None,
+                    status: e.commit_status(),
+                };
+            }
+        };
 
         request
             .file_manager()
@@ -60,7 +72,7 @@ impl NfsOperation for Commit4args {
         NfsOpResponse {
             request,
             result: Some(NfsResOp4::Opcommit(Commit4res::Resok4(Commit4resok {
-                writeverf: verifier_from_boot(&boot_time),
+                writeverf: FileManagerHandle::write_verifier(boot_time, epoch),
             }))),
             status: NfsStat4::Nfs4Ok,
         }
@@ -87,8 +99,11 @@ mod tests {
     #[test]
     fn test_verifier_from_boot() {
         let boot_time: u64 = 0x0102030405060708;
-        let verifier = verifier_from_boot(&boot_time);
+        let verifier = FileManagerHandle::write_verifier(boot_time, 0);
         assert_eq!(verifier, [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]);
+        // A later write epoch changes the verifier (#136).
+        let bumped = FileManagerHandle::write_verifier(boot_time, 1);
+        assert_eq!(bumped, [0x01, 0x02, 0x03, 0x05, 0x05, 0x06, 0x07, 0x08]);
     }
 
     #[tokio::test]
@@ -115,7 +130,7 @@ mod tests {
 
     #[test]
     fn test_verifier_from_boot_zero() {
-        let verifier = verifier_from_boot(&0);
+        let verifier = FileManagerHandle::write_verifier(0, 0);
         assert_eq!(verifier, [0u8; 8]);
     }
 }

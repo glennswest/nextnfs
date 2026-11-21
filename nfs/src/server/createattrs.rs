@@ -139,6 +139,7 @@ pub fn io_status(e: &io::Error) -> NfsStat4 {
         Some(libc::EROFS) => NfsStat4::Nfs4errRofs,
         Some(libc::ENAMETOOLONG) => NfsStat4::Nfs4errNametoolong,
         Some(libc::EXDEV) => NfsStat4::Nfs4errXdev,
+        Some(libc::EFBIG) => NfsStat4::Nfs4errFbig,
         _ => NfsStat4::Nfs4errIo,
     }
 }

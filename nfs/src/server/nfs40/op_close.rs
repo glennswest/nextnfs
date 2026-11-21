@@ -28,7 +28,11 @@ impl NfsOperation for Close4args {
         // Flush write cache before closing to ensure data durability
         if current_filehandle.write_cache.is_some() {
             if let Ok(wc) = request.file_manager().get_write_cache_handle(current_filehandle.clone()).await {
-                wc.commit().await;
+                // CLOSE has no status for a failed flush; the failure stays
+                // in the cache and the client's COMMIT reports it (#136).
+                if let Err(e) = wc.flush().await {
+                    error!("CLOSE: flush failed, kept for COMMIT: {:?}", e);
+                }
             }
             // Refresh fhdb entry from disk so GETATTR sees updated size/mtime
             request

@@ -442,3 +442,16 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       clippy --workspace --all-targets --locked -- -D warnings'` green (690
       tests = 692 − 3 quota tests + 1, 0 warnings, job 1b79c8b3af); #135
       closed; golden-nextnfs-accebe0eec60, release request stormcos#1506.
+- [ ] 2026-11-21 — #136 (P1, review finding 8e411131c3ba on 8a66330):
+      unstable WRITE answered once queued (failed pwrite only logged);
+      COMMIT logged a failed fsync, cleared dirty, dropped the cache and
+      said OK with the same verifier. Now write/commit results come back
+      through the cache actor (`WriteCacheError`, write_status/
+      commit_status); a failed fsync keeps cache + dirty and bumps the
+      per-export write epoch (verifier = boot_time + epoch<<32), so a
+      later COMMIT cannot vouch for WRITEs answered before; CLOSE's flush
+      keeps its failure for the next COMMIT; COMMIT always fsyncs; on a
+      real export the cache opens without O_CREAT (removed file → STALE).
+      Tests: pipe fd as the failing file (pwrite ESPIPE, fsync EINVAL),
+      unstable WRITE at an off_t-overflow offset → IO, removed file →
+      STALE. Next: sc-build, close, image.

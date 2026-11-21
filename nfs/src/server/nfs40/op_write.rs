@@ -5,15 +5,12 @@ use std::sync::atomic::Ordering;
 use async_trait::async_trait;
 use tracing::{debug, error};
 
-use crate::server::{operation::NfsOperation, request::NfsRequest, response::NfsOpResponse};
+use crate::server::{
+    filemanager::FileManagerHandle, operation::NfsOperation, request::NfsRequest,
+    response::NfsOpResponse,
+};
 
 use nextnfs_proto::nfs4_proto::{NfsResOp4, NfsStat4, StableHow4, Write4args, Write4res, Write4resok};
-
-fn verifier_from_boot(boot_time: &u64) -> [u8; 8] {
-    let mut verifier = [0; 8];
-    verifier.copy_from_slice(boot_time.to_be_bytes().as_ref());
-    verifier
-}
 
 #[async_trait]
 impl NfsOperation for Write4args {
@@ -38,6 +35,9 @@ impl NfsOperation for Write4args {
 
         let mut stable = StableHow4::Unstable4;
         let mut count: u32 = self.data.len() as u32;
+        // The write epoch this WRITE's verifier is made from: the one its
+        // bytes were written under (#136).
+        let mut epoch = request.file_manager().write_epoch();
         if self.stable == StableHow4::Unstable4 {
             // write to cache
             let write_cache = match &filehandle.write_cache {
@@ -63,9 +63,20 @@ impl NfsOperation for Write4args {
                 }
             };
 
-            write_cache
-                .write_bytes(self.offset, self.data.clone())
-                .await;
+            // Answered once the bytes are in the file, or the write failed:
+            // a failed unstable WRITE is never acknowledged (#136, finding
+            // 8e411131c3ba).
+            match write_cache.write_bytes(self.offset, self.data.clone()).await {
+                Ok(e) => epoch = e,
+                Err(e) => {
+                    error!("WRITE: unstable write failed: {:?}", e);
+                    return NfsOpResponse {
+                        request,
+                        result: None,
+                        status: e.write_status(),
+                    };
+                }
+            }
         } else {
             // Synchronous write: always a positional write (pwrite) at the
             // offset the client sent, at EOF too. NFS WRITE has no append
@@ -154,7 +165,7 @@ impl NfsOperation for Write4args {
             result: Some(NfsResOp4::Opwrite(Write4res::Resok4(Write4resok {
                 count,
                 committed: stable,
-                writeverf: verifier_from_boot(&boot_time),
+                writeverf: FileManagerHandle::write_verifier(boot_time, epoch),
             }))),
             status: NfsStat4::Nfs4Ok,
         }

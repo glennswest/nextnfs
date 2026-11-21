@@ -3,6 +3,7 @@ use tracing::{debug, error, warn};
 use vfs::VfsPath;
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::Arc;
 
 use crate::server::beneath::ExportRoot;
@@ -286,6 +287,10 @@ pub struct FileManagerHandle {
     hard_link_support: bool,
     symlink_support: bool,
     unique_handles: bool,
+    /// Bumped whenever an fsync of unstable data fails (#136): the write
+    /// verifier changes, so a client whose unstable WRITEs carried the old
+    /// one sends them again instead of taking a later COMMIT's word.
+    write_epoch: Arc<AtomicU64>,
 }
 
 impl FileManagerHandle {
@@ -316,7 +321,25 @@ impl FileManagerHandle {
             hard_link_support: true,
             symlink_support: true,
             unique_handles: true,
+            write_epoch: Arc::new(AtomicU64::new(0)),
         }
+    }
+
+    /// The current write epoch (0 until an fsync of unstable data fails).
+    pub fn write_epoch(&self) -> u64 {
+        self.write_epoch.load(AtomicOrdering::SeqCst)
+    }
+
+    /// A failed fsync may have lost unstable data: change the verifier.
+    pub fn bump_write_epoch(&self) -> u64 {
+        self.write_epoch.fetch_add(1, AtomicOrdering::SeqCst) + 1
+    }
+
+    /// The WRITE/COMMIT verifier for `boot_time` under write epoch `epoch`:
+    /// the boot time's big-endian bytes, epoch added from bit 32 up (epoch 0
+    /// is the boot time alone).
+    pub fn write_verifier(boot_time: u64, epoch: u64) -> [u8; 8] {
+        boot_time.wrapping_add(epoch.wrapping_shl(32)).to_be_bytes()
     }
 
     /// Get the export root path for constructing real filesystem paths.
@@ -1291,7 +1314,7 @@ impl FileManagerHandle {
 
 pub enum WriteCacheMessage {
     Write(WriteBytesRequest),
-    Commit(Option<oneshot::Sender<()>>),
+    Commit(CommitRequest),
 }
 
 pub struct WriteBytesRequest {
@@ -1299,6 +1322,55 @@ pub struct WriteBytesRequest {
     pub offset: u64,
     // bytes to insert
     pub data: Vec<u8>,
+    /// The write's outcome, sent once the bytes are in the file (page
+    /// cache) or the write failed (#136, finding 8e411131c3ba).
+    pub respond_to: Option<oneshot::Sender<Result<u64, WriteCacheError>>>,
+}
+
+pub struct CommitRequest {
+    /// COMMIT reports (and so clears) a failure kept from an earlier flush;
+    /// CLOSE's flush does not, so the client's COMMIT still sees it.
+    pub report_pending: bool,
+    pub respond_to: Option<oneshot::Sender<Result<u64, WriteCacheError>>>,
+}
+
+/// Why an unstable WRITE or a COMMIT through the write cache failed.
+#[derive(Debug)]
+pub enum WriteCacheError {
+    /// The write or fsync failed with this error.
+    Io(std::io::Error),
+    /// The file the cache was opened for is gone from beneath the export
+    /// root (the handle is stale).
+    Gone,
+    /// The cache actor is not running.
+    ActorGone,
+}
+
+impl WriteCacheError {
+    /// The status of a failed unstable WRITE: the errno's own (NOSPC,
+    /// DQUOT, FBIG, …), STALE for a file that is gone.
+    pub fn write_status(&self) -> NfsStat4 {
+        match self {
+            WriteCacheError::Io(e) if e.kind() == std::io::ErrorKind::NotFound => NfsStat4::Nfs4errStale,
+            WriteCacheError::Io(e) => crate::server::createattrs::io_status(e),
+            WriteCacheError::Gone => NfsStat4::Nfs4errStale,
+            WriteCacheError::ActorGone => NfsStat4::Nfs4errServerfault,
+        }
+    }
+
+    /// The status of a failed COMMIT, from the statuses RFC 8881 allows
+    /// COMMIT (no NOSPC there): ISDIR, STALE, else IO.
+    pub fn commit_status(&self) -> NfsStat4 {
+        match self {
+            WriteCacheError::Io(e) => match e.raw_os_error() {
+                Some(libc::EISDIR) => NfsStat4::Nfs4errIsdir,
+                Some(libc::ENOENT) => NfsStat4::Nfs4errStale,
+                _ => NfsStat4::Nfs4errIo,
+            },
+            WriteCacheError::Gone => NfsStat4::Nfs4errStale,
+            WriteCacheError::ActorGone => NfsStat4::Nfs4errServerfault,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1318,19 +1390,38 @@ impl WriteCacheHandle {
         Self { sender }
     }
 
-    pub async fn write_bytes(&self, offset: u64, data: Vec<u8>) {
-        if let Err(e) = self.sender.send(WriteCacheMessage::Write(WriteBytesRequest { offset, data })).await {
+    /// Write `data` at `offset`; Ok carries the write epoch the bytes were
+    /// written under (`FileManagerHandle::write_verifier`).
+    pub async fn write_bytes(&self, offset: u64, data: Vec<u8>) -> Result<u64, WriteCacheError> {
+        let (tx, rx) = oneshot::channel();
+        let msg = WriteCacheMessage::Write(WriteBytesRequest { offset, data, respond_to: Some(tx) });
+        if let Err(e) = self.sender.send(msg).await {
             error!("write cache actor gone: {}", e);
+            return Err(WriteCacheError::ActorGone);
         }
+        rx.await.unwrap_or(Err(WriteCacheError::ActorGone))
     }
 
-    pub async fn commit(&self) {
+    /// COMMIT: fsync the file. Ok carries the write epoch after it; an
+    /// fsync failure, or one kept from an earlier flush, is the Err.
+    pub async fn commit(&self) -> Result<u64, WriteCacheError> {
+        self.sync(true).await
+    }
+
+    /// CLOSE's flush: like `commit`, but a failure stays pending in the
+    /// cache for the next COMMIT, which reports it.
+    pub async fn flush(&self) -> Result<u64, WriteCacheError> {
+        self.sync(false).await
+    }
+
+    async fn sync(&self, report_pending: bool) -> Result<u64, WriteCacheError> {
         let (tx, rx) = oneshot::channel();
-        if let Err(e) = self.sender.send(WriteCacheMessage::Commit(Some(tx))).await {
+        let msg = WriteCacheMessage::Commit(CommitRequest { report_pending, respond_to: Some(tx) });
+        if let Err(e) = self.sender.send(msg).await {
             error!("write cache actor gone: {}", e);
-            return;
+            return Err(WriteCacheError::ActorGone);
         }
-        let _ = rx.await;
+        rx.await.unwrap_or(Err(WriteCacheError::ActorGone))
     }
 }
 
