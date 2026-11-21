@@ -442,7 +442,7 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       clippy --workspace --all-targets --locked -- -D warnings'` green (690
       tests = 692 − 3 quota tests + 1, 0 warnings, job 1b79c8b3af); #135
       closed; golden-nextnfs-accebe0eec60, release request stormcos#1506.
-- [ ] 2026-11-21 — #136 (P1, review finding 8e411131c3ba on 8a66330):
+- [x] 2026-11-21 — #136 (P1, review finding 8e411131c3ba on 8a66330):
       unstable WRITE answered once queued (failed pwrite only logged);
       COMMIT logged a failed fsync, cleared dirty, dropped the cache and
       said OK with the same verifier. Now write/commit results come back
@@ -454,4 +454,6 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       real export the cache opens without O_CREAT (removed file → STALE).
       Tests: pipe fd as the failing file (pwrite ESPIPE, fsync EINVAL),
       unstable WRITE at an off_t-overflow offset → IO, removed file →
-      STALE. Next: sc-build, close, image.
+      STALE. Done: 1438a74; `sc-build 'cargo test --workspace --locked &&
+      cargo clippy --workspace --all-targets --locked -- -D warnings'` green
+      (696 tests, 0 warnings, job d1efaa142b); #136 closed; image requested.
