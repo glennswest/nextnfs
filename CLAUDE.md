@@ -309,3 +309,8 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       record; CREATE_SESSION checks `csa_sequence` against it (last+1 → new,
       == last → the cached reply again, else SEQ_MISORDERED, unknown client
       → STALE_CLIENTID). DESTROY_CLIENTID drops the record.
+      Status 2026-11-21: code, tests, README, CHANGELOG pushed (37be878).
+      Next: `sc-build 'cargo test --workspace --locked && cargo clippy
+      --workspace --all-targets --locked -- -D warnings'` on 37be878 (also
+      covers #127/#141, ed1f56e is its ancestor); queued behind ~145 builds.
+      Then close #128 (and #127, #141), request the image.
