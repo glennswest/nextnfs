@@ -299,3 +299,13 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       (the first attempt sat ~3h in the build queue and was stopped locally
       for low memory before it got a VM), then close #127 and #141, request
       the image. EXCLUSIVE4 verifier gap filed as #140.
+- [ ] 2026-11-20 — #128 (P1, review finding 124a859a1973): NFSv4.1 session
+      IDs came from `sessions.len()` (reused after a DESTROY_SESSION,
+      racy between CREATE_SESSIONs) and could overwrite a live session.
+      Plan: session id = per-boot random 8 bytes ‖ atomic counter, inserted
+      under the same lock as the client check (never replaces an entry);
+      client ids = per-boot random high 32 bits ‖ counter (an id from before
+      a restart is unknown → STALE_CLIENTID); EXCHANGE_ID registers a client
+      record; CREATE_SESSION checks `csa_sequence` against it (last+1 → new,
+      == last → the cached reply again, else SEQ_MISORDERED, unknown client
+      → STALE_CLIENTID). DESTROY_CLIENTID drops the record.
