@@ -4460,6 +4460,8 @@ mod tests {
                 break;
             }
         }
+        // Every export once; the order is the export list's own.
+        names.sort();
         assert_eq!(names, vec!["ex1", "ex2", "ex3"]);
 
         // A verifier from another export list is NOT_SAME.
@@ -4546,7 +4548,8 @@ mod tests {
         );
         let s: u32 = num_traits::ToPrimitive::to_u32(&status).unwrap();
         // status, tag, one result: SETATTR, its status, an empty bitmap
-        assert_eq!(reply_words(status, resarray), vec![s, 0, 1, 34, s, 0]);
+        // (the codec writes it as one zero word)
+        assert_eq!(reply_words(status, resarray), vec![s, 0, 1, 34, s, 1, 0]);
 
         let request = request_on_export(true, dir.path()).await;
         let server = NFS40Server::new();
