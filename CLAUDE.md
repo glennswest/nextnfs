@@ -383,4 +383,5 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       the export list order), fixed b9d7c9d. Done: `sc-build 'cargo test
       --workspace --locked && cargo clippy --workspace --all-targets
       --locked -- -D warnings'` on b9d7c9d green (683 tests, 0 warnings,
-      job a822d8c195); #131 closed; image requested.
+      job a822d8c195); #131 closed; golden-nextnfs-7acf58209131, release
+      request stormcos#1506.
