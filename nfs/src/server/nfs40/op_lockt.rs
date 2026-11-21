@@ -39,17 +39,11 @@ impl NfsOperation for Lockt4args {
             .await;
 
         match result {
+            // No conflicting lock: LOCKT4res is the status alone (it sent a
+            // made-up LOCK4denied after NFS4_OK, #131).
             TestLockResult::Ok => NfsOpResponse {
                 request,
-                result: Some(NfsResOp4::Oplockt(Lockt4res::Denied(Lock4denied {
-                    offset: 0,
-                    length: 0,
-                    locktype: self.locktype.clone(),
-                    owner: LockOwner4 {
-                        clientid: self.owner.clientid,
-                        owner: self.owner.owner.clone(),
-                    },
-                }))),
+                result: Some(NfsResOp4::Oplockt(Lockt4res::Resok4(()))),
                 status: NfsStat4::Nfs4Ok,
             },
             TestLockResult::Denied {

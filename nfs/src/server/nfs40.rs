@@ -41,7 +41,44 @@ const OP_PUTPUBFH: u32 = 23;
 const OP_PUTROOTFH: u32 = 24;
 const OP_RESTOREFH: u32 = 31;
 const OP_SECINFO: u32 = 33;
+const OP_SETATTR: u32 = 34;
 const OP_SECINFO_NO_NAME: u32 = 52;
+
+/// The result a failed op puts in the COMPOUND reply (#131, finding
+/// 45e86120ffb7). Every op that runs contributes one, failed or not, and
+/// the reply stops after the first failure (RFC 7530 §15.2).
+///
+/// For most ops the result union is `default: void` on an error, so the
+/// result is the opcode and the status alone (`OpError`), whatever body the
+/// handler built (its success-only fields, such as REMOVE's `cinfo`, are
+/// not sent). The errors whose results carry a body keep it: LOCK and LOCKT
+/// NFS4ERR_DENIED (the conflicting lock), SETCLIENTID NFS4ERR_CLID_INUSE
+/// (the client address), and SETATTR, whose `attrsset` follows the status
+/// whatever it is (empty when the handler gave none).
+pub(crate) fn failed_result(op: u32, status: NfsStat4, result: Option<NfsResOp4>) -> NfsResOp4 {
+    match result {
+        Some(r @ NfsResOp4::Oplock(Lock4res::Denied(_)))
+        | Some(r @ NfsResOp4::Oplockt(Lockt4res::Denied(_)))
+            if status == NfsStat4::Nfs4errDenied =>
+        {
+            r
+        }
+        Some(r @ NfsResOp4::Opsetclientid(SetClientId4res::ClientUsing(_)))
+            if status == NfsStat4::Nfs4errClidInuse =>
+        {
+            r
+        }
+        Some(NfsResOp4::Opsetattr(res)) => NfsResOp4::Opsetattr(SetAttr4res {
+            status,
+            attrsset: res.attrsset,
+        }),
+        _ if op == OP_SETATTR => NfsResOp4::Opsetattr(SetAttr4res {
+            status,
+            attrsset: Attrlist4(vec![]),
+        }),
+        _ => NfsResOp4::OpError { op, status },
+    }
+}
 
 /// Ops that set the current filehandle to a (possibly) new object.
 fn moves_filehandle(opnum: u32) -> bool {
@@ -596,10 +633,7 @@ impl NFS40Server {
                     };
                     if rate_limited {
                         debug!(op = operation, bytes = op_bytes, "compound: QoS limit, NFS4ERR_DELAY");
-                        resarray.push(NfsResOp4::OpError {
-                            op: op_code(&arg),
-                            status: NfsStat4::Nfs4errDelay,
-                        });
+                        resarray.push(failed_result(op_code(&arg), NfsStat4::Nfs4errDelay, None));
                         return (
                             request,
                             ReplyBody::MsgAccepted(AcceptedReply {
@@ -636,6 +670,7 @@ impl NFS40Server {
                                 status = "Nfs4errGrace",
                                 "nfs_audit: operation denied during grace period"
                             );
+                            resarray.push(failed_result(op_code(&arg), NfsStat4::Nfs4errGrace, None));
                             return (
                                 request,
                                 ReplyBody::MsgAccepted(AcceptedReply {
@@ -663,10 +698,7 @@ impl NFS40Server {
                             export = ?request.current_export_id(),
                             "nfs_audit: security flavour not allowed on export"
                         );
-                        resarray.push(NfsResOp4::OpError {
-                            op: op_code(&arg),
-                            status: NfsStat4::Nfs4errWrongsec,
-                        });
+                        resarray.push(failed_result(op_code(&arg), NfsStat4::Nfs4errWrongsec, None));
                         return (
                             request,
                             ReplyBody::MsgAccepted(AcceptedReply {
@@ -690,10 +722,7 @@ impl NFS40Server {
                             export = ?request.current_export_id(),
                             "nfs_audit: operation denied on read-only export"
                         );
-                        resarray.push(NfsResOp4::OpError {
-                            op: op_code(&arg),
-                            status: NfsStat4::Nfs4errRofs,
-                        });
+                        resarray.push(failed_result(op_code(&arg), NfsStat4::Nfs4errRofs, None));
                         return (
                             request,
                             ReplyBody::MsgAccepted(AcceptedReply {
@@ -720,10 +749,7 @@ impl NFS40Server {
                             path = request.current_filehandle().map(|fh| fh.path.as_str()).unwrap_or("-"),
                             "nfs_audit: permission denied"
                         );
-                        resarray.push(NfsResOp4::OpError {
-                            op: op_code(&arg),
-                            status: status.clone(),
-                        });
+                        resarray.push(failed_result(op_code(&arg), status.clone(), None));
                         return (
                             request,
                             ReplyBody::MsgAccepted(AcceptedReply {
@@ -895,10 +921,11 @@ impl NFS40Server {
                                 resarray.extend(response.result);
                                 let status = match opcodes.get(op_idx + 1) {
                                     Some(&op) => {
-                                        resarray.push(NfsResOp4::OpError {
+                                        resarray.push(failed_result(
                                             op,
-                                            status: NfsStat4::Nfs4errRetryUncachedRep,
-                                        });
+                                            NfsStat4::Nfs4errRetryUncachedRep,
+                                            None,
+                                        ));
                                         NfsStat4::Nfs4errRetryUncachedRep
                                     }
                                     None => NfsStat4::Nfs4Ok,
@@ -944,11 +971,18 @@ impl NFS40Server {
                         stats.ops.fetch_add(1, Ordering::Relaxed);
                     }
 
-                    if let Some(res) = res {
-                        resarray.push(res);
-                    } else {
-                        request = response.request;
-                        break;
+                    // Every op that ran is in the reply (#131): a failed
+                    // op's result is made by `failed_result`, also when the
+                    // handler returned none; a success without a result is
+                    // a server bug, answered NFS4ERR_SERVERFAULT.
+                    match (last_status.clone(), res) {
+                        (NfsStat4::Nfs4Ok, Some(res)) => resarray.push(res),
+                        (NfsStat4::Nfs4Ok, None) => {
+                            info!(op = operation, "nfs_audit: op succeeded without a result");
+                            last_status = NfsStat4::Nfs4errServerfault;
+                            resarray.push(failed_result(opnum, NfsStat4::Nfs4errServerfault, None));
+                        }
+                        (status, res) => resarray.push(failed_result(opnum, status, res)),
                     }
                     match last_status {
                         NfsStat4::Nfs4Ok => {}
@@ -3102,12 +3136,8 @@ mod tests {
         let (status, resarray) = compound_result(reply);
         assert_eq!(status, NfsStat4::Nfs4errAccess);
         assert_eq!(resarray.len(), 2);
-        assert_eq!(
-            resarray[1],
-            NfsResOp4::Oplookup(Lookup4res {
-                status: NfsStat4::Nfs4errAccess
-            })
-        );
+        // A failed op's result is its opcode and status (#131).
+        assert_eq!(resarray[1], NfsResOp4::OpError { op: 15, status: NfsStat4::Nfs4errAccess });
     }
 
     // --- #106: per-export `sec` flavours (NFS4ERR_WRONGSEC, SECINFO) ---
@@ -4442,5 +4472,142 @@ mod tests {
         let msg = make_compound(vec![NfsArgOp::Opputrootfh(()), readdir_op(0, [0; 8], 20)]);
         let (_, reply) = server.compound(msg, request).await;
         assert_eq!(compound_result(reply).0, NfsStat4::Nfs4errToosmall);
+    }
+
+    // --- #131: every op that ran is in the reply, encoded as the RFC says ---
+
+    /// The reply's XDR words.
+    fn reply_words(status: NfsStat4, resarray: Vec<NfsResOp4>) -> Vec<u32> {
+        let res = Compound4res { status, tag: String::new(), resarray };
+        nextnfs_proto::xdr::to_bytes(&res)
+            .unwrap()
+            .chunks(4)
+            .map(|c| u32::from_be_bytes([c[0], c[1], c[2], c[3]]))
+            .collect()
+    }
+
+    fn setattr_mode_op() -> NfsArgOp {
+        setattr_op(vec![FileAttrValue::Mode(0o600)], vec![FileAttr::Mode])
+    }
+
+    #[tokio::test]
+    async fn test_failed_op_without_result_is_in_the_reply() {
+        // Finding 45e86120ffb7: READ without a filehandle returned no
+        // result, so the reply had a failed status and an empty array.
+        let dir = tempfile::tempdir().unwrap();
+        let read = NfsArgOp::Opread(Read4args {
+            stateid: Stateid4 { seqid: 0, other: [0; 12] },
+            offset: 0,
+            count: 1,
+        });
+        let (status, resarray) = run_own(dir.path(), vec![read]).await;
+        assert_ne!(status, NfsStat4::Nfs4Ok);
+        assert_eq!(resarray, vec![NfsResOp4::OpError { op: 25, status: status.clone() }]);
+        let code = reply_words(status.clone(), resarray);
+        let s: u32 = num_traits::ToPrimitive::to_u32(&status).unwrap();
+        // status, empty tag, one result: READ and its status, nothing else
+        assert_eq!(code, vec![s, 0, 1, 25, s]);
+    }
+
+    #[tokio::test]
+    async fn test_failed_open_follows_its_predecessors() {
+        let dir = tempfile::tempdir().unwrap();
+        let (status, resarray) = run_own(
+            dir.path(),
+            vec![NfsArgOp::Opputrootfh(()), open_name_op("missing", OpenFlag4::Open4Nocreate), NfsArgOp::Opgetfh(())],
+        )
+        .await;
+        assert_ne!(status, NfsStat4::Nfs4Ok);
+        assert_eq!(resarray.len(), 2, "PUTROOTFH, then OPEN's error; GETFH not run");
+        assert_eq!(resarray[1], NfsResOp4::OpError { op: 18, status: status.clone() });
+    }
+
+    #[tokio::test]
+    async fn test_failed_remove_sends_no_cinfo() {
+        // REMOVE4res is void on an error; the handler's change_info is not sent.
+        let dir = tempfile::tempdir().unwrap();
+        let remove = NfsArgOp::Opremove(Remove4args { target: "missing".to_string() });
+        let (status, resarray) = run_own(dir.path(), vec![NfsArgOp::Opputrootfh(()), remove]).await;
+        assert_ne!(status, NfsStat4::Nfs4Ok);
+        assert_eq!(resarray[1], NfsResOp4::OpError { op: 28, status: status.clone() });
+    }
+
+    #[tokio::test]
+    async fn test_failed_setattr_keeps_its_attrsset() {
+        // SETATTR4res has attrsset after the status whatever the status:
+        // without a filehandle (handler error) and on a read-only export
+        // (dispatcher refusal) alike.
+        let dir = tempfile::tempdir().unwrap();
+        let (status, resarray) = run_own(dir.path(), vec![setattr_mode_op()]).await;
+        assert_ne!(status, NfsStat4::Nfs4Ok);
+        assert_eq!(
+            resarray,
+            vec![NfsResOp4::Opsetattr(SetAttr4res { status: status.clone(), attrsset: Attrlist4(vec![]) })]
+        );
+        let s: u32 = num_traits::ToPrimitive::to_u32(&status).unwrap();
+        // status, tag, one result: SETATTR, its status, an empty bitmap
+        assert_eq!(reply_words(status, resarray), vec![s, 0, 1, 34, s, 0]);
+
+        let request = request_on_export(true, dir.path()).await;
+        let server = NFS40Server::new();
+        let (_r, reply) = server
+            .compound(make_compound(vec![NfsArgOp::Opputrootfh(()), setattr_mode_op()]), request)
+            .await;
+        let (status, resarray) = compound_result(reply);
+        assert_eq!(status, NfsStat4::Nfs4errRofs);
+        assert_eq!(
+            resarray[1],
+            NfsResOp4::Opsetattr(SetAttr4res { status: NfsStat4::Nfs4errRofs, attrsset: Attrlist4(vec![]) })
+        );
+    }
+
+    #[tokio::test]
+    async fn test_grace_refusal_is_in_the_reply() {
+        let dir = tempfile::tempdir().unwrap();
+        let request = request_on_export(false, dir.path()).await;
+        let server = NFS40Server::new();
+        server.in_grace.store(true, Ordering::Relaxed);
+        let remove = NfsArgOp::Opremove(Remove4args { target: "x".to_string() });
+        let (_r, reply) = server.compound(make_compound(vec![NfsArgOp::Opputrootfh(()), remove]), request).await;
+        let (status, resarray) = compound_result(reply);
+        assert_eq!(status, NfsStat4::Nfs4errGrace);
+        assert_eq!(resarray.len(), 2);
+        assert_eq!(resarray[1], NfsResOp4::OpError { op: 28, status: NfsStat4::Nfs4errGrace });
+    }
+
+    #[test]
+    fn test_failed_result_keeps_only_rfc_error_bodies() {
+        let denied = Lock4denied {
+            offset: 0,
+            length: 1,
+            locktype: NfsLockType4::WriteLt,
+            owner: LockOwner4 { clientid: 7, owner: b"o".to_vec() },
+        };
+        let lock = NfsResOp4::Oplock(Lock4res::Denied(denied.clone()));
+        assert_eq!(failed_result(12, NfsStat4::Nfs4errDenied, Some(lock.clone())), lock);
+        let lockt = NfsResOp4::Oplockt(Lockt4res::Denied(denied));
+        assert_eq!(failed_result(13, NfsStat4::Nfs4errDenied, Some(lockt.clone())), lockt);
+        // A body under another status is not sent.
+        assert_eq!(
+            failed_result(12, NfsStat4::Nfs4errIo, Some(lock)),
+            NfsResOp4::OpError { op: 12, status: NfsStat4::Nfs4errIo }
+        );
+        let remove = NfsResOp4::Opremove(Remove4res {
+            status: NfsStat4::Nfs4errNoent,
+            cinfo: ChangeInfo4 { atomic: false, before: 1, after: 2 },
+        });
+        assert_eq!(
+            failed_result(28, NfsStat4::Nfs4errNoent, Some(remove)),
+            NfsResOp4::OpError { op: 28, status: NfsStat4::Nfs4errNoent }
+        );
+        let set = NfsResOp4::Opsetattr(SetAttr4res {
+            status: NfsStat4::Nfs4errPerm,
+            attrsset: Attrlist4(vec![FileAttr::Size]),
+        });
+        assert_eq!(failed_result(34, NfsStat4::Nfs4errPerm, Some(set.clone())), set);
+        assert_eq!(
+            failed_result(34, NfsStat4::Nfs4errDelay, None),
+            NfsResOp4::Opsetattr(SetAttr4res { status: NfsStat4::Nfs4errDelay, attrsset: Attrlist4(vec![]) })
+        );
     }
 }

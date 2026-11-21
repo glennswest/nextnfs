@@ -33,6 +33,56 @@ macro_rules! xdr_discriminant_enum {
     };
 }
 
+/// Serde for a result union switched on `nfsstat4` whose arms carry a body:
+/// the tag is the arm's status (`= N`), then the body. serde's derive would
+/// tag an arm by its position, so LOCK's NFS4ERR_DENIED arm went out as 1
+/// and LOCKT's as 0 (NFS4_OK, with a body after it), #131.
+macro_rules! xdr_status_union {
+    ($t:ident { $($v:ident($body:ty) = $n:expr),+ $(,)? }) => {
+        impl serde::Serialize for $t {
+            fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+                use serde::ser::SerializeTuple;
+                let mut t = s.serialize_tuple(2)?;
+                match self {
+                    $($t::$v(body) => {
+                        let n: u32 = $n;
+                        t.serialize_element(&n)?;
+                        t.serialize_element(body)?;
+                    })+
+                }
+                t.end()
+            }
+        }
+        impl<'de> serde::Deserialize<'de> for $t {
+            fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+                struct V;
+                impl<'de> serde::de::Visitor<'de> for V {
+                    type Value = $t;
+                    fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                        f.write_str(stringify!($t))
+                    }
+                    fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<$t, A::Error> {
+                        let n: u32 = seq
+                            .next_element()?
+                            .ok_or_else(|| serde::de::Error::invalid_length(0, &self))?;
+                        $(if n == $n {
+                            return Ok($t::$v(
+                                seq.next_element::<$body>()?
+                                    .ok_or_else(|| serde::de::Error::invalid_length(1, &self))?,
+                            ));
+                        })+
+                        Err(serde::de::Error::custom(format!(
+                            "invalid {} status {n}",
+                            stringify!($t)
+                        )))
+                    }
+                }
+                d.deserialize_tuple(2, V)
+            }
+        }
+    };
+}
+
 /*
  * This code was derived from RFC 7531.
  * Yet, it has been modified to fit the needs of Serde and Bold.
@@ -900,12 +950,12 @@ pub struct Lock4resok {
     pub lock_stateid: Stateid4,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Lock4res {
     Resok4(Lock4resok),
     Denied(Lock4denied),
 }
+xdr_status_union!(Lock4res { Resok4(Lock4resok) = 0, Denied(Lock4denied) = 10010 });
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Lockt4args {
@@ -916,11 +966,14 @@ pub struct Lockt4args {
     pub owner: LockOwner4,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-
+/// LOCKT4res: void on NFS4_OK (no conflicting lock), the conflicting lock
+/// on NFS4ERR_DENIED.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Lockt4res {
+    Resok4(()),
     Denied(Lock4denied),
 }
+xdr_status_union!(Lockt4res { Resok4(()) = 0, Denied(Lock4denied) = 10010 });
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Locku4args {
@@ -1540,12 +1593,12 @@ pub struct SetClientId4resok {
     pub setclientid_confirm: [u8; 8],
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[repr(u32)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SetClientId4res {
-    Resok4(SetClientId4resok) = 0,
-    ClientUsing(ClientAddr4) = 1,
+    Resok4(SetClientId4resok),
+    ClientUsing(ClientAddr4),
 }
+xdr_status_union!(SetClientId4res { Resok4(SetClientId4resok) = 0, ClientUsing(ClientAddr4) = 10017 });
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SetClientIdConfirm4args {
@@ -2940,6 +2993,41 @@ mod tests {
             .collect();
         // status, tag length, resarray length, opcode, status
         assert_eq!(words, vec![30, 0, 1, 38, 30]);
+    }
+
+    /// Result unions switched on the status are tagged by the status (#131).
+    #[test]
+    fn test_status_union_tags() {
+        let denied = Lock4denied {
+            offset: 1,
+            length: 2,
+            locktype: NfsLockType4::WriteLt,
+            owner: LockOwner4 { clientid: 3, owner: vec![] },
+        };
+        // opcode, NFS4ERR_DENIED, offset (2 words), length (2), locktype, clientid (2), owner len
+        let denied_words = [10010, 0, 1, 0, 2, 2, 0, 3, 0];
+        let mut want = vec![12];
+        want.extend(denied_words);
+        assert_eq!(to_bytes(&NfsResOp4::Oplock(Lock4res::Denied(denied.clone()))).unwrap(), be(&want));
+        let mut want = vec![13];
+        want.extend(denied_words);
+        assert_eq!(to_bytes(&NfsResOp4::Oplockt(Lockt4res::Denied(denied.clone()))).unwrap(), be(&want));
+        // LOCKT with no conflict: NFS4_OK and nothing after it.
+        assert_eq!(to_bytes(&NfsResOp4::Oplockt(Lockt4res::Resok4(()))).unwrap(), be(&[13, 0]));
+        // LOCK granted: NFS4_OK, then the stateid.
+        let ok = Lock4res::Resok4(Lock4resok { lock_stateid: Stateid4 { seqid: 5, other: [0; 12] } });
+        assert_eq!(to_bytes(&ok).unwrap(), be(&[0, 5, 0, 0, 0]));
+        let inuse = SetClientId4res::ClientUsing(ClientAddr4 { rnetid: String::new(), raddr: String::new() });
+        assert_eq!(to_bytes(&inuse).unwrap(), be(&[10017, 0, 0]));
+        let resok = SetClientId4res::Resok4(SetClientId4resok { clientid: 9, setclientid_confirm: [0; 8] });
+        assert_eq!(to_bytes(&resok).unwrap(), be(&[0, 0, 9, 0, 0]));
+
+        // They decode back the same way.
+        assert_eq!(from_bytes::<_, Lock4res>(to_bytes(&Lock4res::Denied(denied.clone())).unwrap()).unwrap(), Lock4res::Denied(denied.clone()));
+        assert_eq!(from_bytes::<_, Lock4res>(to_bytes(&ok).unwrap()).unwrap(), ok);
+        assert_eq!(from_bytes::<_, Lockt4res>(be(&[0])).unwrap(), Lockt4res::Resok4(()));
+        assert_eq!(from_bytes::<_, SetClientId4res>(be(&[10017, 0, 0])).unwrap(), inuse);
+        assert!(from_bytes::<_, Lock4res>(be(&[1])).is_err(), "position tags are not accepted");
     }
 
     #[test]

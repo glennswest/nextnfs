@@ -368,3 +368,14 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       --all-targets --locked -- -D warnings'` green (676 tests, 0 warnings,
       job 350ff983b5); #130 closed; golden-nextnfs-63427c090188, release
       request stormcos#1506.
+- [ ] 2026-11-21 — #131 (P1, review finding 45e86120ffb7 on 8a66330):
+      COMPOUND left out a failed op whose handler returned no result (and
+      the grace refusal), so the reply's status had no matching result.
+      Now `nfs40::failed_result(op, status, result)` makes every failed
+      op's result: OpError (op + status) for void-on-error unions, LOCK/
+      LOCKT DENIED and SETCLIENTID CLID_INUSE keep their body, SETATTR
+      always has attrsset; all dispatcher refusals go through it; success
+      without a result → SERVERFAULT. Found on the way: LOCK/LOCKT/
+      SETCLIENTID unions tagged by position (DENIED sent as 1 / 0) — new
+      `xdr_status_union!` in proto; LOCKT OK sent a bogus LOCK4denied
+      (now `Lockt4res::Resok4(())`). Next: sc-build test + clippy, close.
