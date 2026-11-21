@@ -321,4 +321,8 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       them at the pseudo-root is NOFILEHANDLE too. 4d86693f316f:
       SECINFO_NO_NAME PARENT — pseudo-root → NOENT, export root with >1
       export → pseudo-root flavours (`exports_secinfo_flavors`), else the
-      export's. Next: sc-build test+clippy, close #142, request the image.
+      export's. Code + CHANGELOG pushed (fd9f10e). Not yet built: two
+      `sc-build 'cargo test --workspace --locked && cargo clippy --workspace
+      --all-targets --locked -- -D warnings'` attempts on fd9f10e got no VM
+      slot (P3, ~60 builds ahead; second one exit 75). Next: run it again,
+      then close #142 and request the image.
