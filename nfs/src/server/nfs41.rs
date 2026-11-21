@@ -16,11 +16,13 @@
 //! trunking) and failover (client-ID trunking). The server tracks bound
 //! connections per session for auditing and cleanup.
 
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use nextnfs_proto::nfs4_proto::Compound4res;
+use nextnfs_proto::nfs4_proto::{Compound4res, CreateSession4resok, NfsStat4};
 
 /// Unique session identifier (16 bytes per RFC 5661 §2.10.3.1).
 pub type SessionId = [u8; 16];
@@ -179,67 +181,157 @@ impl Default for ChannelAttrs {
     }
 }
 
-/// Session manager — tracks all active sessions.
+/// Session manager — tracks the NFSv4.1 clients and their sessions.
 ///
-/// Thread-safe via `Arc<RwLock<>>`.  In a full implementation this would
-/// be instantiated by an NFS41Server and consulted on every SEQUENCE op.
+/// Session ids are `boot ‖ counter`: 8 bytes chosen at random when the
+/// manager is made (each server start) and a counter that only goes up, so
+/// an id is never handed out twice — not after a DESTROY_SESSION, not to two
+/// CREATE_SESSIONs at once, not across a restart (#128). Client ids are made
+/// the same way (random high 32 bits, counter low), so a client id from
+/// before a restart is unknown afterwards (NFS4ERR_STALE_CLIENTID).
 #[derive(Debug, Clone)]
 pub struct SessionManager {
+    /// Lock order: `clients` before `sessions`.
+    clients: Arc<RwLock<HashMap<u64, ClientRecord>>>,
     sessions: Arc<RwLock<HashMap<SessionId, Session>>>,
-    next_client_id: Arc<RwLock<u64>>,
+    boot: [u8; 8],
+    client_prefix: u64,
+    next_client_id: Arc<AtomicU32>,
+    next_session: Arc<AtomicU64>,
 }
+
+/// A client registered by EXCHANGE_ID: its CREATE_SESSION sequence
+/// (RFC 8881 §18.36.4) and the reply to the last CREATE_SESSION, for a retry.
+#[derive(Debug, Clone, Default)]
+struct ClientRecord {
+    /// Last `csa_sequence` accepted; EXCHANGE_ID returns
+    /// `eir_sequenceid` = this + 1.
+    sequence_id: u32,
+    last_reply: Option<CreateSession4resok>,
+}
+
+/// `eir_sequenceid` EXCHANGE_ID gives a new client: its first CREATE_SESSION
+/// carries this `csa_sequence`.
+pub const FIRST_CREATE_SESSION_SEQUENCE: u32 = 1;
 
 impl SessionManager {
     pub fn new() -> Self {
+        let mut boot: [u8; 8] = rand::random();
+        if boot == [0; 8] {
+            boot[0] = 1;
+        }
+        let client_prefix = u64::from(rand::random::<u32>().max(1)) << 32;
         Self {
+            clients: Arc::new(RwLock::new(HashMap::new())),
             sessions: Arc::new(RwLock::new(HashMap::new())),
-            next_client_id: Arc::new(RwLock::new(1)),
+            boot,
+            client_prefix,
+            next_client_id: Arc::new(AtomicU32::new(1)),
+            next_session: Arc::new(AtomicU64::new(1)),
         }
     }
 
-    /// Allocate a new client ID (EXCHANGE_ID).
+    /// Allocate a new client ID and register the client (EXCHANGE_ID). Its
+    /// first CREATE_SESSION carries [`FIRST_CREATE_SESSION_SEQUENCE`].
     pub async fn allocate_client_id(&self) -> u64 {
-        let mut id = self.next_client_id.write().await;
-        let client_id = *id;
-        *id += 1;
+        let client_id =
+            self.client_prefix | u64::from(self.next_client_id.fetch_add(1, Ordering::Relaxed));
+        let record = ClientRecord {
+            sequence_id: FIRST_CREATE_SESSION_SEQUENCE.wrapping_sub(1),
+            last_reply: None,
+        };
+        self.clients.write().await.insert(client_id, record);
         client_id
     }
 
-    /// Create a new session (CREATE_SESSION) with default channel attributes.
+    /// A session id never handed out before by this manager (or, but for an
+    /// 8-byte random collision, by an earlier server start).
+    fn new_session_id(&self) -> SessionId {
+        let mut id = [0u8; 16];
+        id[..8].copy_from_slice(&self.boot);
+        id[8..].copy_from_slice(&self.next_session.fetch_add(1, Ordering::Relaxed).to_be_bytes());
+        id
+    }
+
+    /// Insert `session` under a fresh id; never replaces a live session.
+    fn insert_new(&self, sessions: &mut HashMap<SessionId, Session>, mut session: Session) -> Session {
+        loop {
+            match sessions.entry(session.id) {
+                Entry::Vacant(v) => {
+                    v.insert(session.clone());
+                    return session;
+                }
+                Entry::Occupied(_) => session.id = self.new_session_id(),
+            }
+        }
+    }
+
+    fn new_session(&self, client_id: u64, max_slots: u32, fore_channel_attrs: ChannelAttrs) -> Session {
+        Session {
+            id: self.new_session_id(),
+            client_id,
+            slots: (0..max_slots).map(|_| SlotState::default()).collect(),
+            fore_channel_attrs,
+            bound_connections: HashSet::new(),
+        }
+    }
+
+    /// Create a new session with default channel attributes, without the
+    /// client and sequence checks of [`Self::create_session_for_client`].
     pub async fn create_session(&self, client_id: u64, max_slots: u32) -> Session {
         self.create_session_with(client_id, max_slots, ChannelAttrs::default())
             .await
     }
 
-    /// Create a new session with the negotiated fore-channel attributes.
+    /// Create a new session with the negotiated fore-channel attributes,
+    /// without the client and sequence checks of
+    /// [`Self::create_session_for_client`].
     pub async fn create_session_with(
         &self,
         client_id: u64,
         max_slots: u32,
         fore_channel_attrs: ChannelAttrs,
     ) -> Session {
-        let mut rng_bytes = [0u8; 16];
-        // Simple session ID from client_id + counter
-        rng_bytes[..8].copy_from_slice(&client_id.to_be_bytes());
-        let counter = {
-            let sessions = self.sessions.read().await;
-            sessions.len() as u64
-        };
-        rng_bytes[8..16].copy_from_slice(&counter.to_be_bytes());
-
-        let session = Session {
-            id: rng_bytes,
-            client_id,
-            slots: (0..max_slots)
-                .map(|_| SlotState::default())
-                .collect(),
-            fore_channel_attrs,
-            bound_connections: HashSet::new(),
-        };
-
+        let session = self.new_session(client_id, max_slots, fore_channel_attrs);
         let mut sessions = self.sessions.write().await;
-        sessions.insert(session.id, session.clone());
-        session
+        self.insert_new(&mut sessions, session)
+    }
+
+    /// CREATE_SESSION (RFC 8881 §18.36.4), checked against the client record
+    /// as one step: an unknown client is NFS4ERR_STALE_CLIENTID;
+    /// `csa_sequence` = last + 1 creates a session and `reply` builds the
+    /// answer, which is kept; = last is a retry and gets the kept answer
+    /// again (the same session, no second one); anything else is
+    /// NFS4ERR_SEQ_MISORDERED.
+    pub async fn create_session_for_client(
+        &self,
+        client_id: u64,
+        csa_sequence: u32,
+        max_slots: u32,
+        fore_channel_attrs: ChannelAttrs,
+        reply: impl FnOnce(&Session) -> CreateSession4resok,
+    ) -> Result<CreateSession4resok, NfsStat4> {
+        let mut clients = self.clients.write().await;
+        let Some(client) = clients.get_mut(&client_id) else {
+            return Err(NfsStat4::Nfs4errStaleClientid);
+        };
+        if csa_sequence == client.sequence_id {
+            if let Some(cached) = &client.last_reply {
+                return Ok(cached.clone());
+            }
+        }
+        if csa_sequence != client.sequence_id.wrapping_add(1) {
+            return Err(NfsStat4::Nfs4errSeqMisordered);
+        }
+        let session = self.new_session(client_id, max_slots, fore_channel_attrs);
+        let session = {
+            let mut sessions = self.sessions.write().await;
+            self.insert_new(&mut sessions, session)
+        };
+        let res = reply(&session);
+        client.sequence_id = csa_sequence;
+        client.last_reply = Some(res.clone());
+        Ok(res)
     }
 
     /// Look up a session by ID (SEQUENCE).
@@ -346,8 +438,10 @@ impl SessionManager {
             .unwrap_or(0)
     }
 
-    /// Destroy all sessions for a client (DESTROY_CLIENTID).
+    /// Destroy a client and all its sessions (DESTROY_CLIENTID).
     pub async fn destroy_client(&self, client_id: u64) -> usize {
+        let mut clients = self.clients.write().await;
+        clients.remove(&client_id);
         let mut sessions = self.sessions.write().await;
         let before = sessions.len();
         sessions.retain(|_, s| s.client_id != client_id);
@@ -371,7 +465,7 @@ mod tests {
 
         // EXCHANGE_ID
         let cid = mgr.allocate_client_id().await;
-        assert_eq!(cid, 1);
+        assert_eq!(cid as u32, 1);
 
         // CREATE_SESSION
         let session = mgr.create_session(cid, 4).await;
@@ -490,9 +584,11 @@ mod tests {
         let id1 = mgr.allocate_client_id().await;
         let id2 = mgr.allocate_client_id().await;
         let id3 = mgr.allocate_client_id().await;
-        assert_eq!(id1, 1);
-        assert_eq!(id2, 2);
-        assert_eq!(id3, 3);
+        assert_eq!(id1 as u32, 1);
+        assert_eq!(id2, id1 + 1);
+        assert_eq!(id3, id1 + 2);
+        // The high half is the per-start prefix, never 0.
+        assert_ne!(id1 >> 32, 0);
     }
 
     #[tokio::test]
@@ -543,7 +639,7 @@ mod tests {
     async fn test_session_manager_default() {
         let mgr = SessionManager::default();
         let cid = mgr.allocate_client_id().await;
-        assert_eq!(cid, 1);
+        assert_eq!(cid as u32, 1);
     }
 
     #[tokio::test]
@@ -593,5 +689,160 @@ mod tests {
 
         mgr.destroy_client(cid1).await;
         assert!(mgr.get_session(&s2.id).await.is_some());
+    }
+
+    /// #128 (finding 124a859a1973): ids came from `sessions.len()`, so
+    /// A, B; destroy A; C got B's id and replaced B, resetting its slots.
+    #[tokio::test]
+    async fn test_session_id_not_reused_after_destroy() {
+        let mgr = SessionManager::new();
+        let cid = mgr.allocate_client_id().await;
+        let a = mgr.create_session(cid, 2).await;
+        let b = mgr.create_session(cid, 2).await;
+        let SlotCheck::New(claim) = mgr.begin_slot(&b.id, 0, 1, true).await else { panic!() };
+        claim.finish(&reply("b"), false).await;
+
+        assert!(mgr.destroy_session(&a.id).await);
+        let c = mgr.create_session(cid, 2).await;
+        assert_ne!(c.id, a.id);
+        assert_ne!(c.id, b.id);
+        // B is untouched: its slot still holds seqid 1 and the cached reply.
+        match mgr.begin_slot(&b.id, 0, 1, true).await {
+            SlotCheck::Replay(r) => assert_eq!(r.tag, "b"),
+            other => panic!("B's slot was reset: {other:?}"),
+        }
+        assert_eq!(mgr.get_session(&c.id).await.unwrap().id, c.id);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_concurrent_create_session_unique() {
+        let mgr = SessionManager::new();
+        let cid = mgr.allocate_client_id().await;
+        let tasks: Vec<_> = (0..64)
+            .map(|_| {
+                let mgr = mgr.clone();
+                tokio::spawn(async move { mgr.create_session(cid, 1).await.id })
+            })
+            .collect();
+        let mut ids = HashSet::new();
+        for t in tasks {
+            assert!(ids.insert(t.await.unwrap()), "duplicate session id");
+        }
+        assert_eq!(mgr.sessions.read().await.len(), 64);
+    }
+
+    /// A restart is a new manager: its session and client ids differ from
+    /// the old ones, so an old id is BADSESSION / STALE_CLIENTID.
+    #[tokio::test]
+    async fn test_ids_unique_across_restart() {
+        let before = SessionManager::new();
+        let cid = before.allocate_client_id().await;
+        let old = before.create_session(cid, 1).await;
+
+        let after = SessionManager::new();
+        let cid2 = after.allocate_client_id().await;
+        let new = after.create_session(cid2, 1).await;
+        assert_ne!(old.id, new.id);
+        assert_ne!(cid, cid2);
+        assert!(matches!(after.begin_slot(&old.id, 0, 1, false).await, SlotCheck::BadSession));
+        let r = after
+            .create_session_for_client(cid, 1, 1, ChannelAttrs::default(), |s| resok(s, 1))
+            .await;
+        assert_eq!(r, Err(NfsStat4::Nfs4errStaleClientid));
+    }
+
+    fn resok(s: &Session, seq: u32) -> CreateSession4resok {
+        let chan = nextnfs_proto::nfs4_proto::ChannelAttrs4 {
+            ca_headerpadsize: 0,
+            ca_maxrequestsize: 0,
+            ca_maxresponsesize: 0,
+            ca_maxresponsesize_cached: 0,
+            ca_maxoperations: 0,
+            ca_maxrequests: s.slots.len() as u32,
+            ca_rdma_ird: vec![],
+        };
+        CreateSession4resok {
+            csr_sessionid: s.id,
+            csr_sequenceid: seq,
+            csr_flags: 0,
+            csr_fore_chan_attrs: chan.clone(),
+            csr_back_chan_attrs: chan,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_create_session_sequence_and_replay() {
+        let mgr = SessionManager::new();
+        let cid = mgr.allocate_client_id().await;
+        let attrs = ChannelAttrs::default;
+
+        // Before any CREATE_SESSION only the first sequence is accepted.
+        assert_eq!(
+            mgr.create_session_for_client(cid, 2, 1, attrs(), |s| resok(s, 2)).await,
+            Err(NfsStat4::Nfs4errSeqMisordered)
+        );
+        assert_eq!(
+            mgr.create_session_for_client(cid, 0, 1, attrs(), |s| resok(s, 0)).await,
+            Err(NfsStat4::Nfs4errSeqMisordered)
+        );
+        let first = mgr
+            .create_session_for_client(cid, FIRST_CREATE_SESSION_SEQUENCE, 1, attrs(), |s| resok(s, 1))
+            .await
+            .unwrap();
+
+        // A retry gets the same reply and makes no second session.
+        let again = mgr
+            .create_session_for_client(cid, 1, 1, attrs(), |_| panic!("retry executed again"))
+            .await
+            .unwrap();
+        assert_eq!(again, first);
+        assert_eq!(mgr.sessions.read().await.len(), 1);
+
+        // Next sequence makes a new session; skipping one is misordered.
+        let second = mgr
+            .create_session_for_client(cid, 2, 1, attrs(), |s| resok(s, 2))
+            .await
+            .unwrap();
+        assert_ne!(second.csr_sessionid, first.csr_sessionid);
+        assert_eq!(
+            mgr.create_session_for_client(cid, 4, 1, attrs(), |s| resok(s, 4)).await,
+            Err(NfsStat4::Nfs4errSeqMisordered)
+        );
+        assert_eq!(mgr.sessions.read().await.len(), 2);
+
+        // Unknown client, and a client gone by DESTROY_CLIENTID.
+        assert_eq!(
+            mgr.create_session_for_client(cid + 100, 1, 1, attrs(), |s| resok(s, 1)).await,
+            Err(NfsStat4::Nfs4errStaleClientid)
+        );
+        assert_eq!(mgr.destroy_client(cid).await, 2);
+        assert_eq!(
+            mgr.create_session_for_client(cid, 3, 1, attrs(), |s| resok(s, 3)).await,
+            Err(NfsStat4::Nfs4errStaleClientid)
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_concurrent_create_session_same_sequence_one_session() {
+        let mgr = SessionManager::new();
+        let cid = mgr.allocate_client_id().await;
+        let tasks: Vec<_> = (0..16)
+            .map(|_| {
+                let mgr = mgr.clone();
+                tokio::spawn(async move {
+                    mgr.create_session_for_client(cid, 1, 1, ChannelAttrs::default(), |s| resok(s, 1))
+                        .await
+                        .unwrap()
+                        .csr_sessionid
+                })
+            })
+            .collect();
+        let mut ids = HashSet::new();
+        for t in tasks {
+            ids.insert(t.await.unwrap());
+        }
+        // Every concurrent retry got the one session the first one made.
+        assert_eq!(ids.len(), 1);
+        assert_eq!(mgr.sessions.read().await.len(), 1);
     }
 }

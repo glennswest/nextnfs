@@ -57,10 +57,6 @@ impl NfsOperation for CreateSession4args {
             max_ops: fore_chan.ca_maxoperations,
             max_requests: max_slots,
         };
-        let session = sm
-            .create_session_with(self.csa_clientid, max_slots, attrs)
-            .await;
-
         // Back channel — minimal support (no callbacks yet)
         let back_chan = ChannelAttrs4 {
             ca_headerpadsize: 0,
@@ -72,20 +68,40 @@ impl NfsOperation for CreateSession4args {
             ca_rdma_ird: vec![],
         };
 
-        // Store session_id in request for subsequent operations
-        request.session_id = Some(session.id);
-
-        NfsOpResponse {
-            request,
-            result: Some(NfsResOp4::OpcreateSession(CreateSession4res::Resok4(
-                CreateSession4resok {
+        // The client record checks csa_sequence (RFC 8881 §18.36.4, #128):
+        // a retry gets the reply of the CREATE_SESSION it repeats.
+        let res = sm
+            .create_session_for_client(
+                self.csa_clientid,
+                self.csa_sequence,
+                max_slots,
+                attrs,
+                |session| CreateSession4resok {
                     csr_sessionid: session.id,
                     csr_sequenceid: self.csa_sequence,
                     csr_flags: self.csa_flags,
                     csr_fore_chan_attrs: fore_chan,
                     csr_back_chan_attrs: back_chan,
                 },
-            ))),
+            )
+            .await;
+        let res = match res {
+            Ok(res) => res,
+            Err(status) => {
+                debug!(
+                    "CREATE_SESSION: clientid={} sequence={} refused: {:?}",
+                    self.csa_clientid, self.csa_sequence, status
+                );
+                return NfsOpResponse { request, result: None, status };
+            }
+        };
+
+        // Store session_id in request for subsequent operations
+        request.session_id = Some(res.csr_sessionid);
+
+        NfsOpResponse {
+            request,
+            result: Some(NfsResOp4::OpcreateSession(CreateSession4res::Resok4(res))),
             status: NfsStat4::Nfs4Ok,
         }
     }
@@ -165,5 +181,68 @@ mod tests {
         } else {
             panic!("Expected CreateSession4resok");
         }
+    }
+
+    fn create_args(client_id: u64, seq: u32) -> CreateSession4args {
+        CreateSession4args {
+            csa_clientid: client_id,
+            csa_sequence: seq,
+            csa_flags: 0,
+            csa_fore_chan_attrs: default_channel_attrs(),
+            csa_back_chan_attrs: default_channel_attrs(),
+            csa_cb_program: 0,
+            csa_sec_parms: vec![CallbackSecParms4::AuthNone],
+        }
+    }
+
+    fn session_of(result: &Option<NfsResOp4>) -> [u8; 16] {
+        match result {
+            Some(NfsResOp4::OpcreateSession(CreateSession4res::Resok4(res))) => res.csr_sessionid,
+            other => panic!("Expected CreateSession4resok, got {other:?}"),
+        }
+    }
+
+    /// #128: a CREATE_SESSION retry gets the same session back; a skipped
+    /// sequence is SEQ_MISORDERED; a client id never given out is
+    /// STALE_CLIENTID.
+    #[tokio::test]
+    #[traced_test]
+    async fn test_create_session_replay_and_errors() {
+        let request = create_nfs40_server(None).await;
+        let exchange_args = ExchangeId4args {
+            eia_clientowner: ClientOwner4 {
+                co_verifier: [0u8; NFS4_VERIFIER_SIZE],
+                co_ownerid: b"replay-client".to_vec(),
+            },
+            eia_flags: 0,
+            eia_state_protect: StateProtect4a::SpNone,
+            eia_client_impl_id: vec![],
+        };
+        let response = exchange_args.execute(request).await;
+        let (client_id, seq) = match &response.result {
+            Some(NfsResOp4::OpexchangeId(ExchangeId4res::Resok4(res))) => {
+                (res.eir_clientid, res.eir_sequenceid)
+            }
+            _ => panic!("Expected ExchangeId4resok"),
+        };
+
+        let response = create_args(client_id, seq).execute(response.request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        let first = session_of(&response.result);
+
+        let response = create_args(client_id, seq).execute(response.request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        assert_eq!(session_of(&response.result), first, "retry made a new session");
+
+        let response = create_args(client_id, seq + 2).execute(response.request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4errSeqMisordered);
+        assert!(response.result.is_none());
+
+        let response = create_args(client_id, seq + 1).execute(response.request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        assert_ne!(session_of(&response.result), first);
+
+        let response = create_args(client_id ^ 0xffff, 1).execute(response.request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4errStaleClientid);
     }
 }

@@ -1,7 +1,10 @@
 use async_trait::async_trait;
 use tracing::debug;
 
-use crate::server::{operation::NfsOperation, request::NfsRequest, response::NfsOpResponse};
+use crate::server::{
+    nfs41::FIRST_CREATE_SESSION_SEQUENCE, operation::NfsOperation, request::NfsRequest,
+    response::NfsOpResponse,
+};
 use nextnfs_proto::nfs4_proto::{
     ExchangeId4args, ExchangeId4res, ExchangeId4resok, NfsImplId4, NfsResOp4, NfsStat4,
     Nfstime4, ServerOwner4, StateProtect4r,
@@ -36,7 +39,7 @@ impl NfsOperation for ExchangeId4args {
             result: Some(NfsResOp4::OpexchangeId(ExchangeId4res::Resok4(
                 ExchangeId4resok {
                     eir_clientid: client_id,
-                    eir_sequenceid: 1,
+                    eir_sequenceid: FIRST_CREATE_SESSION_SEQUENCE,
                     eir_flags: EXCHANGE_FLAGS,
                     eir_state_protect: StateProtect4r::SpNone,
                     eir_server_owner: ServerOwner4 {
