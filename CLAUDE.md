@@ -481,4 +481,5 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       wrong (all-zero record is a valid CALL, not a ParseError; #147).
       Done: 4906e6f; `sc-build 'cargo test --workspace --locked && cargo
       clippy --workspace --all-targets --locked -- -D warnings'` green (704
-      tests, 0 warnings, job 9157ae9252); #138, #147 closed; image requested.
+      tests, 0 warnings, job 9157ae9252); #138, #147 closed;
+      golden-nextnfs-de25839a5d3c, release request stormcos#1506.
