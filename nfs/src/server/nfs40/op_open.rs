@@ -20,7 +20,7 @@ use nextnfs_proto::nfs4_proto::{
 
 async fn open_for_reading<'a>(
     args: &Open4args,
-    file: &String,
+    file: &str,
     mut request: NfsRequest<'a>,
 ) -> NfsOpResponse<'a> {
     let filehandle = match request.current_filehandle() {
@@ -130,7 +130,7 @@ async fn open_for_reading<'a>(
 async fn open_for_writing<'a>(
     args: &Open4args,
     filehandle: &Filehandle,
-    file: &String,
+    file: &str,
     how: &CreateHow4,
     mut request: NfsRequest<'a>,
 ) -> NfsOpResponse<'a> {

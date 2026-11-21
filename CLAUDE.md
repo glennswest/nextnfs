@@ -342,5 +342,7 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       (job 85a4769a0c): all 5 #129 tests ok, but #142's
       `test_secinfo_then_getattr_is_nofilehandle` failed (fd9f10e was never
       built): GETATTR without a filehandle said STALE, not NOFILEHANDLE
-      (#143, fixed in the next commit). Next: sc-build test + clippy on it,
-      then close #129, #143 (and #142 if green).
+      (#143, fixed cdbe806). Build on cdbe806: 669 tests green, clippy
+      `ptr_arg` on op_open's `file: &String` (#144; the new
+      `component_path(path, file)` call made it a plain slice), now `&str`.
+      Next: sc-build test + clippy, then close #129, #143, #144, #142.
