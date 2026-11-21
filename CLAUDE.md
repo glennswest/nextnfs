@@ -414,7 +414,7 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       clippy --workspace --all-targets --locked -- -D warnings'` green (690
       tests, 0 warnings, job c2665f720a); #140 closed. #133 stays open for
       fdfec7e60065 — waiting on the owner's choice (options on the issue).
-- [ ] 2026-11-21 — #134 (P1, review finding 739140171b7d on 8a66330):
+- [x] 2026-11-21 — #134 (P1, review finding 739140171b7d on 8a66330):
       SEQUENCE validation + replay were done by #118 (`begin_slot`,
       SlotCheck); what was left is placement. `sequence_placement_error`
       in the COMPOUND loop: later SEQUENCE → SEQUENCE_POS (ops before it
@@ -423,3 +423,6 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       NOT_ONLY_OP (new NfsStat4 10081); SEQUENCE in v4.0 → OP_ILLEGAL.
       `test_compound_minor_version_1_accepted` asserted the old behaviour:
       now `_needs_sequence`. nfstest v4.1 already conforms.
+      Done: f2c98de; `sc-build 'cargo test --workspace --locked && cargo
+      clippy --workspace --all-targets --locked -- -D warnings'` green (692
+      tests, 0 warnings, job f5b4e61a87); #134 closed; image requested.
