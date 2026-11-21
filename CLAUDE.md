@@ -368,7 +368,7 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       --all-targets --locked -- -D warnings'` green (676 tests, 0 warnings,
       job 350ff983b5); #130 closed; golden-nextnfs-63427c090188, release
       request stormcos#1506.
-- [ ] 2026-11-21 — #131 (P1, review finding 45e86120ffb7 on 8a66330):
+- [x] 2026-11-21 — #131 (P1, review finding 45e86120ffb7 on 8a66330):
       COMPOUND left out a failed op whose handler returned no result (and
       the grace refusal), so the reply's status had no matching result.
       Now `nfs40::failed_result(op, status, result)` makes every failed
@@ -378,4 +378,9 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       without a result → SERVERFAULT. Found on the way: LOCK/LOCKT/
       SETCLIENTID unions tagged by position (DENIED sent as 1 / 0) — new
       `xdr_status_union!` in proto; LOCKT OK sent a bogus LOCK4denied
-      (now `Lockt4res::Resok4(())`). Next: sc-build test + clippy, close.
+      (now `Lockt4res::Resok4(())`). Build on 8889757: 2 test expectations
+      wrong (empty bitmap4 is one zero word; #130's pseudo-root test assumed
+      the export list order), fixed b9d7c9d. Done: `sc-build 'cargo test
+      --workspace --locked && cargo clippy --workspace --all-targets
+      --locked -- -D warnings'` on b9d7c9d green (683 tests, 0 warnings,
+      job a822d8c195); #131 closed; image requested.
