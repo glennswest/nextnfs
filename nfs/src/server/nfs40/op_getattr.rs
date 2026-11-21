@@ -42,14 +42,16 @@ impl NfsOperation for Getattr4args {
         let filehandle = request.current_filehandle();
         match filehandle {
             None => {
+                // No current filehandle: NFS4ERR_NOFILEHANDLE (RFC 7530 §16.7.5;
+                // it said STALE, #143).
                 error!("None filehandle");
                 NfsOpResponse {
                     request,
                     result: Some(NfsResOp4::Opgetattr(Getattr4resok {
                         obj_attributes: None,
-                        status: NfsStat4::Nfs4errStale,
+                        status: NfsStat4::Nfs4errNofilehandle,
                     })),
-                    status: NfsStat4::Nfs4errStale,
+                    status: NfsStat4::Nfs4errNofilehandle,
                 }
             }
             Some(filehandle) => {
@@ -122,7 +124,7 @@ mod tests {
             attr_request: Attrlist4(vec![FileAttr::Type]),
         };
         let response = args.execute(request).await;
-        assert_eq!(response.status, NfsStat4::Nfs4errStale);
+        assert_eq!(response.status, NfsStat4::Nfs4errNofilehandle);
     }
 
     #[tokio::test]
