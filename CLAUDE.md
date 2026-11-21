@@ -468,3 +468,12 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       --workspace --all-targets --locked -- -D warnings'` green (698 tests,
       0 warnings, job c528b2846c); #137 closed; golden-nextnfs-36cdebdd949f,
       release request stormcos#1506.
+- [ ] 2026-11-21 — #138 (P1, 4 major review findings on proto/src/lib.rs,
+      the RPC record decoder). aef45710c6c5 + 10c9e05809be: completed
+      fragments kept in the codec (`record`) between decode calls;
+      incomplete fragment left in src. 789be13b2b2a + 3043a1c9219e:
+      `MAX_RECORD` (8 MiB) checked on the cumulative record length with
+      checked_add before buffering, Err (connection closed) when over.
+      Tests: separate reads (header and body split), byte-at-a-time three
+      records, cumulative limit, exactly-max accepted, EOF drops partial.
+      Next: sc-build test + clippy, close #138, request the image.

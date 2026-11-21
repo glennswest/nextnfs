@@ -11,21 +11,40 @@ use tokio_util::codec::{Decoder, Encoder};
 
 use self::rpc_proto::{RpcCallMsg, RpcReplyMsg};
 
-#[derive(Debug)]
-pub struct XDRProtoCodec {}
-
-const MAX: usize = 8 * 1024 * 1024;
-
-impl Default for XDRProtoCodec {
-    fn default() -> Self {
-        Self::new()
-    }
+/// RPC-over-TCP record decoder/encoder (RFC 5531 §11 record marking).
+///
+/// A record is one or more fragments; only the last has bit 31 of its
+/// header set. Fragments of one record can arrive in different reads, so
+/// the fragments completed so far are kept in `record` between `decode`
+/// calls (#138, findings aef45710c6c5 / 10c9e05809be); an incomplete
+/// fragment stays in the input buffer, header included, until all of it
+/// is there.
+#[derive(Debug, Default)]
+pub struct XDRProtoCodec {
+    /// The current record's completed fragments, in order.
+    record: Vec<u8>,
 }
+
+/// The largest RPC record accepted: the sum of all of a record's
+/// fragments, not each fragment (#138, findings 789be13b2b2a /
+/// 3043a1c9219e). A record that would grow past it is an error, which
+/// ends the connection.
+pub const MAX_RECORD: usize = 8 * 1024 * 1024;
 
 impl XDRProtoCodec {
     pub fn new() -> XDRProtoCodec {
-        XDRProtoCodec {}
+        XDRProtoCodec::default()
     }
+}
+
+fn record_too_large(have: usize, fragment: usize) -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        format!(
+            "RPC record too large: {} bytes so far plus a {}-byte fragment exceeds {}",
+            have, fragment, MAX_RECORD
+        ),
+    )
 }
 
 impl Decoder for XDRProtoCodec {
@@ -33,51 +52,52 @@ impl Decoder for XDRProtoCodec {
     type Error = std::io::Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        let mut message_data = Vec::new();
-        let mut is_last = false;
-        while !is_last {
+        loop {
             if src.len() < 4 {
-                // Not enough data to read length marker.
+                // Not enough data to read the next fragment header.
                 return Ok(None);
             }
 
-            // Read the frame: https://datatracker.ietf.org/doc/html/rfc1057#section-10
+            // Read the frame: https://datatracker.ietf.org/doc/html/rfc5531#section-11
             let mut header_bytes = [0u8; 4];
             header_bytes.copy_from_slice(&src[..4]);
-
             let fragment_header = u32::from_be_bytes(header_bytes) as usize;
-            is_last = (fragment_header & (1 << 31)) > 0;
+            let is_last = (fragment_header & (1 << 31)) > 0;
             let length = fragment_header & ((1 << 31) - 1);
 
-            // Check that the length is not too large to avoid a denial of
-            // service attack where the server runs out of memory.
-            if length > MAX {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("Frame of length {} is too large.", length),
-                ));
+            // The whole record, not just this fragment, must fit the limit,
+            // checked before anything is buffered for it.
+            match self.record.len().checked_add(length) {
+                Some(total) if total <= MAX_RECORD => {}
+                _ => {
+                    let have = self.record.len();
+                    self.record = Vec::new();
+                    return Err(record_too_large(have, length));
+                }
             }
 
             if src.len() < 4 + length {
-                // The full string has not yet arrived.
+                // The fragment has not fully arrived; leave it (and its
+                // header) in `src` for the next call.
                 src.reserve(4 + length - src.len());
                 return Ok(None);
             }
-            let fragment = src[4..4 + length].to_vec();
+            self.record.extend_from_slice(&src[4..4 + length]);
             src.advance(4 + length);
 
-            message_data.extend_from_slice(&fragment[..]);
+            if is_last {
+                break;
+            }
         }
 
-        tracing::debug!(
-            total_len = message_data.len(),
-            is_last = is_last,
-            "RPC record assembled"
-        );
-        // Never return Err from decode — tokio-util's Framed terminates the
-        // stream after the first error (sets has_errored=true). Instead, wrap
-        // parse failures in MsgType::ParseError so the server can send
-        // GarbageArgs while keeping the TCP connection alive.
+        let message_data = std::mem::take(&mut self.record);
+        tracing::debug!(total_len = message_data.len(), "RPC record assembled");
+        // Never return Err from decode for a bad message — tokio-util's
+        // Framed terminates the stream after the first error (sets
+        // has_errored=true). Instead, wrap parse failures in
+        // MsgType::ParseError so the server can send GarbageArgs while
+        // keeping the TCP connection alive. (An oversized record is an
+        // Err: the connection is closed.)
         match RpcCallMsg::from_bytes(message_data) {
             Ok(msg) => Ok(Some(msg)),
             Err(e) => {
@@ -99,12 +119,14 @@ impl Decoder for XDRProtoCodec {
             None => {
                 // Client disconnected — any leftover bytes are from an
                 // incomplete record. This is normal for NFS client teardown.
-                if !buf.is_empty() {
+                if !buf.is_empty() || !self.record.is_empty() {
                     tracing::debug!(
                         remaining = buf.len(),
+                        assembled = self.record.len(),
                         "client disconnected with partial record, discarding"
                     );
                     buf.clear();
+                    self.record = Vec::new();
                 }
                 Ok(None)
             }
@@ -353,7 +375,7 @@ mod codec_tests {
     #[test]
     fn test_decode_oversized_frame_rejected() {
         let mut codec = make_codec();
-        // MAX is 8MB — try 9MB
+        // MAX_RECORD is 8 MiB — try 9 MiB
         let length = 9 * 1024 * 1024;
         let header = (length as u32 | (1 << 31)).to_be_bytes();
         let mut buf = BytesMut::new();
@@ -451,6 +473,142 @@ mod codec_tests {
         assert!(result.is_some());
         let msg = result.unwrap();
         assert_eq!(msg.xid, 1);
+    }
+
+    /// A valid RPC NULL call with the given xid (AUTH_NULL cred and verf).
+    fn null_call(xid: u32) -> Vec<u8> {
+        let mut b = Vec::new();
+        for w in [xid, 0, 2, 100003, 4, 0, 0, 0, 0, 0] {
+            b.extend_from_slice(&w.to_be_bytes());
+        }
+        b
+    }
+
+    /// `body` as a record of fragments split at `cuts`.
+    fn fragments(body: &[u8], cuts: &[usize]) -> Vec<u8> {
+        let mut out = Vec::new();
+        let mut bounds = vec![0];
+        bounds.extend_from_slice(cuts);
+        bounds.push(body.len());
+        for (i, w) in bounds.windows(2).enumerate() {
+            let last = i == bounds.len() - 2;
+            let len = (w[1] - w[0]) as u32 | if last { 1 << 31 } else { 0 };
+            out.extend_from_slice(&len.to_be_bytes());
+            out.extend_from_slice(&body[w[0]..w[1]]);
+        }
+        out
+    }
+
+    fn xid_of(msg: &RpcCallMsg) -> u32 {
+        match msg.body {
+            rpc_proto::MsgType::Call(_) => msg.xid,
+            ref other => panic!("expected a call, got {:?}", other),
+        }
+    }
+
+    /// #138, findings aef45710c6c5 / 10c9e05809be: the fragments of one
+    /// record arriving in separate reads — a complete first fragment, then
+    /// part of the next header, then part of its body, then the rest —
+    /// make one call with the right xid, nothing before it.
+    #[test]
+    fn test_decode_fragments_in_separate_reads() {
+        let wire = fragments(&null_call(7), &[20]);
+        // frag1 = 4 + 20 bytes; frag2 header at 24..28, body 28..
+        let reads: [&[u8]; 4] = [&wire[..24], &wire[24..26], &wire[26..32], &wire[32..]];
+        let mut codec = make_codec();
+        let mut buf = BytesMut::new();
+        for (i, r) in reads.iter().enumerate() {
+            buf.extend_from_slice(r);
+            let got = codec.decode(&mut buf).unwrap();
+            if i < reads.len() - 1 {
+                assert!(got.is_none(), "read {i} produced a message");
+            } else {
+                assert_eq!(xid_of(&got.expect("whole record")), 7);
+            }
+        }
+        assert!(buf.is_empty());
+    }
+
+    /// A stream of three records (one, three and two fragments, one of
+    /// them empty) fed one byte per read yields exactly those three calls.
+    #[test]
+    fn test_decode_byte_at_a_time_three_records() {
+        let mut wire = fragments(&null_call(1), &[]);
+        wire.extend(fragments(&null_call(2), &[4, 13]));
+        wire.extend(fragments(&null_call(3), &[0]));
+        let mut codec = make_codec();
+        let mut buf = BytesMut::new();
+        let mut xids = Vec::new();
+        for b in &wire {
+            buf.extend_from_slice(&[*b]);
+            while let Some(m) = codec.decode(&mut buf).unwrap() {
+                xids.push(xid_of(&m));
+            }
+        }
+        assert_eq!(xids, vec![1, 2, 3]);
+        assert!(buf.is_empty());
+    }
+
+    /// #138, findings 789be13b2b2a / 3043a1c9219e: the 8 MiB limit is on
+    /// the whole record. Eight 1 MiB non-final fragments fill it; a ninth
+    /// fragment header (one more byte) is refused before its body arrives,
+    /// and the assembled bytes are dropped.
+    #[test]
+    fn test_decode_record_limit_is_cumulative() {
+        const MIB: usize = 1024 * 1024;
+        let mut codec = make_codec();
+        let mut buf = BytesMut::new();
+        for _ in 0..8 {
+            buf.extend_from_slice(&(MIB as u32).to_be_bytes());
+            buf.extend_from_slice(&vec![0u8; MIB]);
+            assert!(codec.decode(&mut buf).unwrap().is_none());
+        }
+        assert_eq!(codec.record.len(), MAX_RECORD);
+        buf.extend_from_slice(&(1u32 | (1 << 31)).to_be_bytes());
+        let err = codec.decode(&mut buf).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(codec.record.is_empty());
+    }
+
+    /// A record of exactly MAX_RECORD bytes across fragments is accepted
+    /// (here garbage, so a ParseError message, not a connection error).
+    #[test]
+    fn test_decode_record_of_exactly_max_is_accepted() {
+        const MIB: usize = 1024 * 1024;
+        let mut codec = make_codec();
+        let mut buf = BytesMut::new();
+        for i in 0..8 {
+            let hdr = MIB as u32 | if i == 7 { 1 << 31 } else { 0 };
+            buf.extend_from_slice(&hdr.to_be_bytes());
+            buf.extend_from_slice(&vec![0u8; MIB]);
+        }
+        let msg = codec.decode(&mut buf).unwrap().expect("a message");
+        assert!(matches!(msg.body, rpc_proto::MsgType::ParseError(_)));
+        assert!(codec.record.is_empty());
+    }
+
+    /// A fragment one byte over what is left of the limit after a partial
+    /// record is refused from its header alone.
+    #[test]
+    fn test_decode_fragment_over_remaining_budget() {
+        let mut codec = make_codec();
+        let mut buf = BytesMut::new();
+        buf.extend_from_slice(&16u32.to_be_bytes());
+        buf.extend_from_slice(&[0u8; 16]);
+        assert!(codec.decode(&mut buf).unwrap().is_none());
+        let over = (MAX_RECORD - 16 + 1) as u32 | (1 << 31);
+        buf.extend_from_slice(&over.to_be_bytes());
+        assert!(codec.decode(&mut buf).is_err());
+    }
+
+    /// EOF with a partly assembled record drops it as well as the bytes.
+    #[test]
+    fn test_decode_eof_drops_assembled_fragments() {
+        let wire = fragments(&null_call(9), &[20]);
+        let mut codec = make_codec();
+        let mut buf = BytesMut::from(&wire[..26]);
+        assert!(codec.decode_eof(&mut buf).unwrap().is_none());
+        assert!(buf.is_empty() && codec.record.is_empty());
     }
 
     #[test]
