@@ -410,3 +410,7 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       replaced path; no descriptors are held for opens (STALE, not the
       original object). fdfec7e60065 (handles after restart): needs the
       owner's choice of design — not done; README claim corrected.
+      Build on 5bbd1ab: `sc-build 'cargo test --workspace --locked && cargo
+      clippy --workspace --all-targets --locked -- -D warnings'` green (690
+      tests, 0 warnings, job c2665f720a); #140 closed. #133 stays open for
+      fdfec7e60065 — waiting on the owner's choice (options on the issue).
