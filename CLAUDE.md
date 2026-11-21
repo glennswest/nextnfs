@@ -366,4 +366,5 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       TOOSMALL, pseudo-root paging/NOT_SAME/TOOSMALL. Done: b7f828f;
       `sc-build 'cargo test --workspace --locked && cargo clippy --workspace
       --all-targets --locked -- -D warnings'` green (676 tests, 0 warnings,
-      job 350ff983b5); #130 closed; image requested.
+      job 350ff983b5); #130 closed; golden-nextnfs-63427c090188, release
+      request stormcos#1506.
