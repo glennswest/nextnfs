@@ -4278,6 +4278,40 @@ mod tests {
         assert_ne!(fresh.id, fh.id);
     }
 
+    /// #135: a stable WRITE's failure carries the errno's status (it was
+    /// NFS4ERR_IO for everything but a missing file), so the filesystem's
+    /// ENOSPC / EDQUOT reach the client as NOSPC / DQUOT. A directory shows
+    /// the mapping without filling a disk: EISDIR → NFS4ERR_ISDIR.
+    #[tokio::test]
+    async fn test_stable_write_error_keeps_errno_status() {
+        use crate::server::operation::NfsOperation;
+        let export = tempfile::tempdir().unwrap();
+        std::fs::create_dir(export.path().join("d")).unwrap();
+        let mut request = request_on_export_squash(false, export.path(), SquashMode::None).await;
+        let fh = request
+            .file_manager()
+            .get_filehandle_for_path("/d".to_string())
+            .await
+            .unwrap();
+        request.set_filehandle(fh);
+        let args = Write4args {
+            stateid: Stateid4 { seqid: 0, other: [0; 12] },
+            offset: 0,
+            stable: StableHow4::FileSync4,
+            data: b"x".to_vec(),
+        };
+        let resp = args.execute(request).await;
+        assert_eq!(resp.status, NfsStat4::Nfs4errIsdir);
+        assert_eq!(
+            crate::server::createattrs::io_status(&std::io::Error::from_raw_os_error(libc::ENOSPC)),
+            NfsStat4::Nfs4errNospc
+        );
+        assert_eq!(
+            crate::server::createattrs::io_status(&std::io::Error::from_raw_os_error(libc::EDQUOT)),
+            NfsStat4::Nfs4errDquot
+        );
+    }
+
     /// Finding 4bb3de8fbdd6: a stable WRITE at EOF used O_APPEND when the
     /// offset equalled a stat of the length, so another writer extending the
     /// file in between moved the bytes to a later offset. Each round, a

@@ -12,7 +12,6 @@ use nextnfs_proto::nfs4_proto::{
     Fattr4, Getattr4args, Getattr4resok, NfsResOp4,
 };
 
-use crate::server::filemanager::QuotaInfo;
 
 #[async_trait]
 impl NfsOperation for Getattr4args {
@@ -55,22 +54,9 @@ impl NfsOperation for Getattr4args {
                 }
             }
             Some(filehandle) => {
-                let quota_info = request.quota_manager().map(|qm| {
-                    // 1TB default filesystem size
-                    const DEFAULT_SPACE_TOTAL: u64 = 1_099_511_627_776;
-                    let used = qm.bytes_used();
-                    QuotaInfo {
-                        quota_avail_hard: qm.quota_avail_hard(),
-                        quota_avail_soft: qm.quota_avail_soft(),
-                        quota_used: used,
-                        space_total: DEFAULT_SPACE_TOTAL,
-                        space_free: DEFAULT_SPACE_TOTAL.saturating_sub(used),
-                        space_avail: DEFAULT_SPACE_TOTAL.saturating_sub(used),
-                    }
-                });
                 let resp = request
                     .file_manager()
-                    .filehandle_attrs(&self.attr_request, filehandle, quota_info.as_ref());
+                    .filehandle_attrs(&self.attr_request, filehandle);
 
                 let (answer_attrs, attrs) = match resp {
                     Some(inner) => inner,
@@ -224,15 +210,18 @@ mod tests {
         }
     }
 
+    /// #135: there are no quotas, so the quota attributes are not supported:
+    /// asked for, they are left out of the reply (RFC 7530 §5.1), not made up.
     #[tokio::test]
     #[traced_test]
-    async fn test_getattr_quota_attrs() {
+    async fn test_getattr_quota_attrs_not_supported() {
         let request = create_nfs40_server_with_root_fh(None).await;
         let args = Getattr4args {
             attr_request: Attrlist4(vec![
                 FileAttr::QuotaAvailHard,
                 FileAttr::QuotaAvailSoft,
                 FileAttr::QuotaUsed,
+                FileAttr::Type,
             ]),
         };
         let response = args.execute(request).await;
@@ -241,20 +230,25 @@ mod tests {
             obj_attributes: Some(fattr), ..
         })) = response.result
         {
-            assert_eq!(fattr.attrmask.len(), 3);
-            assert_eq!(fattr.attr_vals.len(), 3);
-            // Default QuotaManager has 0 limits (unlimited) so avail=0, used=0
-            assert!(matches!(fattr.attr_vals.0[0], FileAttrValue::QuotaAvailHard(0)));
-            assert!(matches!(fattr.attr_vals.0[1], FileAttrValue::QuotaAvailSoft(0)));
-            assert!(matches!(fattr.attr_vals.0[2], FileAttrValue::QuotaUsed(0)));
+            assert_eq!(fattr.attrmask.0, vec![FileAttr::Type]);
         } else {
-            panic!("Expected Opgetattr with quota attributes");
+            panic!("Expected Opgetattr");
         }
     }
 
+    /// statvfs(2) of `path`: (bytes total, inodes total).
+    fn statvfs_totals(path: &str) -> (u64, u64) {
+        let c = std::ffi::CString::new(path).unwrap();
+        let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
+        assert_eq!(unsafe { libc::statvfs(c.as_ptr(), &mut st) }, 0);
+        (st.f_blocks as u64 * st.f_frsize as u64, st.f_files as u64)
+    }
+
+    /// #135: space_* are the export filesystem's (they were a made-up 1 TiB
+    /// minus the bytes ever written). The test helper's export root is /tmp.
     #[tokio::test]
     #[traced_test]
-    async fn test_getattr_space_attrs() {
+    async fn test_getattr_space_attrs_are_the_filesystems() {
         let request = create_nfs40_server_with_root_fh(None).await;
         let args = Getattr4args {
             attr_request: Attrlist4(vec![
@@ -265,16 +259,19 @@ mod tests {
         };
         let response = args.execute(request).await;
         assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        let (total, _) = statvfs_totals("/tmp");
         if let Some(NfsResOp4::Opgetattr(Getattr4resok {
             obj_attributes: Some(fattr), ..
         })) = response.result
         {
             assert_eq!(fattr.attrmask.len(), 3);
-            assert_eq!(fattr.attr_vals.len(), 3);
-            // No QuotaManager in test helper, so values default to 0
-            assert!(matches!(fattr.attr_vals.0[0], FileAttrValue::SpaceAvail(0)));
-            assert!(matches!(fattr.attr_vals.0[1], FileAttrValue::SpaceFree(0)));
-            assert!(matches!(fattr.attr_vals.0[2], FileAttrValue::SpaceTotal(0)));
+            let (avail, free, got_total) = match &fattr.attr_vals.0[..] {
+                [FileAttrValue::SpaceAvail(a), FileAttrValue::SpaceFree(f), FileAttrValue::SpaceTotal(t)] => (*a, *f, *t),
+                other => panic!("unexpected values {:?}", other),
+            };
+            assert!(total > 0);
+            assert_eq!(got_total, total);
+            assert!(free <= total && avail <= free, "avail {} free {} total {}", avail, free, total);
         } else {
             panic!("Expected Opgetattr with space attributes");
         }
@@ -282,7 +279,7 @@ mod tests {
 
     #[tokio::test]
     #[traced_test]
-    async fn test_getattr_supported_includes_quota() {
+    async fn test_getattr_supported_attrs_no_quota() {
         let request = create_nfs40_server_with_root_fh(None).await;
         let args = Getattr4args {
             attr_request: Attrlist4(vec![FileAttr::SupportedAttrs]),
@@ -294,9 +291,9 @@ mod tests {
         })) = response.result
         {
             if let FileAttrValue::SupportedAttrs(supported) = &fattr.attr_vals.0[0] {
-                assert!(supported.0.contains(&FileAttr::QuotaAvailHard));
-                assert!(supported.0.contains(&FileAttr::QuotaAvailSoft));
-                assert!(supported.0.contains(&FileAttr::QuotaUsed));
+                assert!(!supported.0.contains(&FileAttr::QuotaAvailHard));
+                assert!(!supported.0.contains(&FileAttr::QuotaAvailSoft));
+                assert!(!supported.0.contains(&FileAttr::QuotaUsed));
                 assert!(supported.0.contains(&FileAttr::SpaceAvail));
                 assert!(supported.0.contains(&FileAttr::SpaceFree));
                 assert!(supported.0.contains(&FileAttr::SpaceTotal));
@@ -308,6 +305,8 @@ mod tests {
         }
     }
 
+    /// #135: files_* are the filesystem's inode counts (they were the byte
+    /// counts divided by 4096).
     #[tokio::test]
     #[traced_test]
     async fn test_getattr_files_avail_free_total() {
@@ -321,11 +320,13 @@ mod tests {
         };
         let response = args.execute(request).await;
         assert_eq!(response.status, NfsStat4::Nfs4Ok);
+        let (_, files) = statvfs_totals("/tmp");
         if let Some(NfsResOp4::Opgetattr(Getattr4resok {
             obj_attributes: Some(fattr), ..
         })) = response.result
         {
             assert_eq!(fattr.attrmask.len(), 3);
+            assert!(fattr.attr_vals.0.contains(&FileAttrValue::FilesTotal(files)));
         } else {
             panic!("Expected Opgetattr with 3 file count attributes");
         }

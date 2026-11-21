@@ -13,7 +13,7 @@ pub use filehandle::Filehandle;
 pub use filehandle::RealMeta;
 pub use filehandle::id_names;
 pub use handle::FileManagerHandle;
-pub use handle::{LockResult, QuotaInfo, TestLockResult, UnlockResult};
+pub use handle::{LockResult, TestLockResult, UnlockResult};
 mod caching;
 mod handle;
 mod locking;
@@ -982,6 +982,15 @@ impl FileManager {
     ) -> Option<(Vec<FileAttr>, Vec<FileAttrValue>)> {
         let mut answer_attrs = Vec::new();
         let mut attrs = Vec::new();
+        // The filesystem's own space counts (#135); zeros if fstatvfs fails.
+        let space = if attr_request
+            .iter()
+            .any(|a| matches!(a, FileAttr::SpaceAvail | FileAttr::SpaceFree | FileAttr::SpaceTotal))
+        {
+            self.beneath.statvfs().unwrap_or_default()
+        } else {
+            Default::default()
+        };
 
         let fh = self.get_filehandle_by_id(filehandle_id);
         let fh = match fh {
@@ -1103,28 +1112,16 @@ impl FileManager {
                     attrs.push(FileAttrValue::OwnerGroup(fh.attr_owner_group.clone()));
                     answer_attrs.push(FileAttr::OwnerGroup);
                 }
-                FileAttr::QuotaAvailHard => {
-                    attrs.push(FileAttrValue::QuotaAvailHard(0));
-                    answer_attrs.push(FileAttr::QuotaAvailHard);
-                }
-                FileAttr::QuotaAvailSoft => {
-                    attrs.push(FileAttrValue::QuotaAvailSoft(0));
-                    answer_attrs.push(FileAttr::QuotaAvailSoft);
-                }
-                FileAttr::QuotaUsed => {
-                    attrs.push(FileAttrValue::QuotaUsed(0));
-                    answer_attrs.push(FileAttr::QuotaUsed);
-                }
                 FileAttr::SpaceAvail => {
-                    attrs.push(FileAttrValue::SpaceAvail(0));
+                    attrs.push(FileAttrValue::SpaceAvail(space.bytes_avail));
                     answer_attrs.push(FileAttr::SpaceAvail);
                 }
                 FileAttr::SpaceFree => {
-                    attrs.push(FileAttrValue::SpaceFree(0));
+                    attrs.push(FileAttrValue::SpaceFree(space.bytes_free));
                     answer_attrs.push(FileAttr::SpaceFree);
                 }
                 FileAttr::SpaceTotal => {
-                    attrs.push(FileAttrValue::SpaceTotal(0));
+                    attrs.push(FileAttrValue::SpaceTotal(space.bytes_total));
                     answer_attrs.push(FileAttr::SpaceTotal);
                 }
                 FileAttr::SpaceUsed => {
@@ -1339,9 +1336,6 @@ impl FileManager {
             FileAttr::Numlinks,
             FileAttr::Owner,
             FileAttr::OwnerGroup,
-            FileAttr::QuotaAvailHard,
-            FileAttr::QuotaAvailSoft,
-            FileAttr::QuotaUsed,
             FileAttr::SpaceAvail,
             FileAttr::SpaceFree,
             FileAttr::SpaceTotal,

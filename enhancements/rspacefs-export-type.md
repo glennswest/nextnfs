@@ -103,7 +103,7 @@ impl ExportManager {
         let export_id = self.next_export_id;
         self.next_export_id += 1;
         let file_manager = FileManagerHandle::new(vfs_root.clone(), Some(export_id as u64), upper_canon.clone());
-        // …rest is identical to add_export wiring (stats, rate limit, quota, access control, ExportInfo, insert)
+        // …rest is identical to add_export wiring (stats, rate limit, access control, ExportInfo, insert)
         // …
         Ok(info)
     }

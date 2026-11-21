@@ -28,19 +28,6 @@ impl NfsOperation for Allocate4args {
             }
         };
 
-        // Check quota before allocating
-        if let Some(qm) = request.quota_manager() {
-            if !qm.check_write(self.aa_length) {
-                return NfsOpResponse {
-                    request,
-                    result: Some(NfsResOp4::Opallocate(Allocate4res {
-                        ar_status: NfsStat4::Nfs4errDquot,
-                    })),
-                    status: NfsStat4::Nfs4errDquot,
-                };
-            }
-        }
-
         // Open file for writing to extend it if needed
         let mut wfile = match filehandle.file.append_file() {
             Ok(f) => f,
@@ -92,11 +79,6 @@ impl NfsOperation for Allocate4args {
                     };
                 }
                 remaining -= write_size;
-            }
-
-            // Track quota for newly allocated space
-            if let Some(qm) = request.quota_manager() {
-                qm.record_write(alloc_end - file_size);
             }
         }
 

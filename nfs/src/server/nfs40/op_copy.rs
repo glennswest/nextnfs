@@ -43,17 +43,6 @@ impl NfsOperation for Copy4args {
             }
         };
 
-        // Check quota before copy
-        if let Some(qm) = request.quota_manager() {
-            if !qm.check_write(self.ca_count) {
-                return NfsOpResponse {
-                    request,
-                    result: None,
-                    status: NfsStat4::Nfs4errDquot,
-                };
-            }
-        }
-
         // Open source for reading
         let mut src_file = match src_fh.file.open_file() {
             Ok(f) => f,
@@ -174,11 +163,6 @@ impl NfsOperation for Copy4args {
                 result: None,
                 status: NfsStat4::Nfs4errIo,
             };
-        }
-
-        // Track quota for copied bytes
-        if let Some(qm) = request.quota_manager() {
-            qm.record_write(total_copied);
         }
 
         NfsOpResponse {

@@ -8,7 +8,7 @@ use tokio::sync::Mutex;
 
 use super::{
     clientmanager::ClientManagerHandle,
-    export_manager::{AccessControl, ExportManagerHandle, ExportStats, QuotaManager, RateLimiter},
+    export_manager::{AccessControl, ExportManagerHandle, ExportStats, RateLimiter},
     filemanager::{FileManagerHandle, Filehandle},
     nfs40::op_pseudo,
     nfs41::{SequenceReplay, SessionManager, SlotClaim},
@@ -30,8 +30,6 @@ pub struct NfsRequest<'a> {
     export_stats: Option<Arc<ExportStats>>,
     // cached per-export rate limiter for QoS enforcement
     rate_limiter: Option<Arc<Mutex<RateLimiter>>>,
-    // cached per-export quota manager
-    quota_manager: Option<Arc<QuotaManager>>,
     // cached per-export access control
     access_control: Option<Arc<AccessControl>>,
     // current export is read-only (mutating ops get NFS4ERR_ROFS)
@@ -84,7 +82,6 @@ impl<'a> NfsRequest<'a> {
             cached_fmanager: default_fmanager,
             export_stats: None,
             rate_limiter: None,
-            quota_manager: None,
             access_control: None,
             read_only: false,
             current_export_id: None,
@@ -155,7 +152,6 @@ impl<'a> NfsRequest<'a> {
             self.cached_fmanager = None;
             self.export_stats = None;
             self.rate_limiter = None;
-            self.quota_manager = None;
             self.access_control = None;
             self.read_only = false;
             return;
@@ -164,7 +160,6 @@ impl<'a> NfsRequest<'a> {
             self.cached_fmanager = Some(fm);
             self.export_stats = Some(info.stats);
             self.rate_limiter = Some(info.rate_limiter);
-            self.quota_manager = Some(info.quota_manager);
             self.access_control = Some(info.access_control);
             self.read_only = info.read_only;
         }
@@ -194,11 +189,6 @@ impl<'a> NfsRequest<'a> {
     /// Get the cached per-export rate limiter for QoS enforcement.
     pub fn rate_limiter(&self) -> Option<&Arc<Mutex<RateLimiter>>> {
         self.rate_limiter.as_ref()
-    }
-
-    /// Get the cached per-export quota manager.
-    pub fn quota_manager(&self) -> Option<&Arc<QuotaManager>> {
-        self.quota_manager.as_ref()
     }
 
     /// Get the cached per-export access control.
@@ -426,12 +416,6 @@ impl<'a> NfsRequest<'a> {
     }
 
     pub async fn close(&self) {}
-
-    /// Set quota manager directly (for testing).
-    #[cfg(test)]
-    pub fn set_quota_manager(&mut self, qm: Arc<QuotaManager>) {
-        self.quota_manager = Some(qm);
-    }
 }
 
 #[cfg(test)]

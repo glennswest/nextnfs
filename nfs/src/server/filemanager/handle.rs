@@ -221,17 +221,6 @@ pub enum TestLockResult {
     },
 }
 
-/// Export-level quota and space info passed to filehandle_attrs for GETATTR.
-#[derive(Debug, Clone, Default)]
-pub struct QuotaInfo {
-    pub quota_avail_hard: u64,
-    pub quota_avail_soft: u64,
-    pub quota_used: u64,
-    pub space_avail: u64,
-    pub space_free: u64,
-    pub space_total: u64,
-}
-
 #[derive(Debug, Clone)]
 pub struct FileManagerError {
     pub nfs_error: NfsStat4,
@@ -829,8 +818,31 @@ impl FileManagerHandle {
         &mut self,
         attr_request: &Vec<FileAttr>,
         filehandle: &Filehandle,
-        quota_info: Option<&QuotaInfo>,
     ) -> Option<(Attrlist4<FileAttr>, Attrlist4<FileAttrValue>)> {
+        // space_* and files_* are the filesystem's own (#135): one fstatvfs
+        // of the export root, only when one of them is asked for.
+        let space = if attr_request.iter().any(|a| {
+            matches!(
+                a,
+                FileAttr::SpaceAvail
+                    | FileAttr::SpaceFree
+                    | FileAttr::SpaceTotal
+                    | FileAttr::FilesAvail
+                    | FileAttr::FilesFree
+                    | FileAttr::FilesTotal
+            )
+        }) {
+            match self.beneath.statvfs() {
+                Ok(space) => Some(space),
+                Err(e) => {
+                    error!("statvfs of the export root: {}", e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        let space = space.unwrap_or_default();
         // Refresh from real filesystem to pick up current size/mtime/etc.
         let real_path = self.real_path(filehandle.file.as_str());
         let input_fileid = filehandle.attr_fileid;
@@ -947,33 +959,18 @@ impl FileManagerHandle {
                     ));
                     answer_attrs.push(FileAttr::OwnerGroup);
                 }
-                FileAttr::QuotaAvailHard => {
-                    let val = quota_info.map_or(0, |q| q.quota_avail_hard);
-                    attrs.push(FileAttrValue::QuotaAvailHard(val));
-                    answer_attrs.push(FileAttr::QuotaAvailHard);
-                }
-                FileAttr::QuotaAvailSoft => {
-                    let val = quota_info.map_or(0, |q| q.quota_avail_soft);
-                    attrs.push(FileAttrValue::QuotaAvailSoft(val));
-                    answer_attrs.push(FileAttr::QuotaAvailSoft);
-                }
-                FileAttr::QuotaUsed => {
-                    let val = quota_info.map_or(0, |q| q.quota_used);
-                    attrs.push(FileAttrValue::QuotaUsed(val));
-                    answer_attrs.push(FileAttr::QuotaUsed);
-                }
                 FileAttr::SpaceAvail => {
-                    let val = quota_info.map_or(0, |q| q.space_avail);
+                    let val = space.bytes_avail;
                     attrs.push(FileAttrValue::SpaceAvail(val));
                     answer_attrs.push(FileAttr::SpaceAvail);
                 }
                 FileAttr::SpaceFree => {
-                    let val = quota_info.map_or(0, |q| q.space_free);
+                    let val = space.bytes_free;
                     attrs.push(FileAttrValue::SpaceFree(val));
                     answer_attrs.push(FileAttr::SpaceFree);
                 }
                 FileAttr::SpaceTotal => {
-                    let val = quota_info.map_or(0, |q| q.space_total);
+                    let val = space.bytes_total;
                     attrs.push(FileAttrValue::SpaceTotal(val));
                     answer_attrs.push(FileAttr::SpaceTotal);
                 }
@@ -1038,23 +1035,17 @@ impl FileManagerHandle {
                     answer_attrs.push(FileAttr::CasePreserving);
                 }
                 FileAttr::FilesAvail => {
-                    let val = quota_info.map_or(u64::MAX, |q| {
-                        if q.space_total == 0 { u64::MAX } else { q.space_avail / 4096 }
-                    });
+                    let val = space.files_avail;
                     attrs.push(FileAttrValue::FilesAvail(val));
                     answer_attrs.push(FileAttr::FilesAvail);
                 }
                 FileAttr::FilesFree => {
-                    let val = quota_info.map_or(u64::MAX, |q| {
-                        if q.space_total == 0 { u64::MAX } else { q.space_free / 4096 }
-                    });
+                    let val = space.files_free;
                     attrs.push(FileAttrValue::FilesFree(val));
                     answer_attrs.push(FileAttr::FilesFree);
                 }
                 FileAttr::FilesTotal => {
-                    let val = quota_info.map_or(u64::MAX, |q| {
-                        if q.space_total == 0 { u64::MAX } else { q.space_total / 4096 }
-                    });
+                    let val = space.files_total;
                     attrs.push(FileAttrValue::FilesTotal(val));
                     answer_attrs.push(FileAttr::FilesTotal);
                 }
@@ -1283,9 +1274,6 @@ impl FileManagerHandle {
             FileAttr::Numlinks,
             FileAttr::Owner,
             FileAttr::OwnerGroup,
-            FileAttr::QuotaAvailHard,
-            FileAttr::QuotaAvailSoft,
-            FileAttr::QuotaUsed,
             FileAttr::SpaceAvail,
             FileAttr::SpaceFree,
             FileAttr::SpaceTotal,

@@ -77,6 +77,17 @@ fn split(path: &str) -> io::Result<(&str, &str)> {
     Ok((if parent.is_empty() { "." } else { parent }, name))
 }
 
+/// What `ExportRoot::statvfs` reports.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FsSpace {
+    pub bytes_total: u64,
+    pub bytes_free: u64,
+    pub bytes_avail: u64,
+    pub files_total: u64,
+    pub files_free: u64,
+    pub files_avail: u64,
+}
+
 /// A directory fd on an export root that every path of the export is
 /// resolved beneath.
 #[derive(Debug)]
@@ -125,6 +136,24 @@ impl ExportRoot {
                 }
             }
         }
+    }
+
+    /// The space and inode counts of the filesystem the export is on
+    /// (fstatvfs of the root fd), as GETATTR reports them: bytes and inodes
+    /// in total, free, and available to an unprivileged user.
+    pub fn statvfs(&self) -> io::Result<FsSpace> {
+        let fd = self.root_fd()?;
+        let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
+        check(unsafe { libc::fstatvfs(fd, &mut st) })?;
+        let frsize = st.f_frsize as u64;
+        Ok(FsSpace {
+            bytes_total: (st.f_blocks as u64).saturating_mul(frsize),
+            bytes_free: (st.f_bfree as u64).saturating_mul(frsize),
+            bytes_avail: (st.f_bavail as u64).saturating_mul(frsize),
+            files_total: st.f_files as u64,
+            files_free: st.f_ffree as u64,
+            files_avail: st.f_favail as u64,
+        })
     }
 
     /// The export root's path (for messages and the API; never opened by it).
