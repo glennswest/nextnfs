@@ -385,7 +385,7 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       --locked -- -D warnings'` on b9d7c9d green (683 tests, 0 warnings,
       job a822d8c195); #131 closed; golden-nextnfs-7acf58209131, release
       request stormcos#1506.
-- [ ] 2026-11-21 — #132 (P1, review finding 4bb3de8fbdd6 on 8a66330):
+- [x] 2026-11-21 — #132 (P1, review finding 4bb3de8fbdd6 on 8a66330):
       a stable WRITE whose offset equalled a stat of the file length used
       O_APPEND, so a writer extending the file in between moved the bytes.
       Now every stable WRITE opens `O_WRONLY` beneath the root and
@@ -394,3 +394,6 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       FILE_SYNC WRITE both write one block at EOF, released by a barrier;
       the file grows by exactly one block, 300 rounds. README write claims
       corrected. COPY has the same O_APPEND+seek pattern: #145.
+      Done: 746c042; `sc-build 'cargo test --workspace --locked && cargo
+      clippy --workspace --all-targets --locked -- -D warnings'` green
+      (684 tests, 0 warnings, job 63e70ec348); #132 closed; image requested.
