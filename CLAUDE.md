@@ -329,3 +329,14 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       the I/O error of stormcentral#1638 (`propose --after` refused with the
       same 500). Next, once #1638 is fixed: run it again, then close #142
       and request the image.
+- [ ] 2026-11-21 — #129 (P1, review finding 1cc239368b2c on 8a66330, before
+      #122): multi-component names past a directory's search check. The
+      dispatcher's `perm::check_confined` (#122, 0168750) already refuses
+      `/`, `.`, `..`, NUL and empty names for LOOKUP/CREATE/REMOVE/RENAME/
+      LINK/OPEN/SECINFO before the permission checks; the ops themselves
+      still joined `dir/name`. Now LOOKUP (`perm::component_path`), OPEN,
+      CREATE, REMOVE, RENAME, LINK check the name too; tests for the
+      finding's case (OTHER, 0700 `private`, LOOKUP `private/file` →
+      BADNAME; one component at a time → ACCESS), OPEN, the mutations, and
+      each op called without the dispatcher. Next: sc-build test + clippy,
+      then close #129.

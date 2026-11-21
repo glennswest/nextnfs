@@ -8,6 +8,7 @@ use crate::server::{
         ChangeInfo4, Open4res, Open4resok, OpenDelegation4, OPEN4_RESULT_CONFIRM,
     },
     operation::NfsOperation,
+    perm,
     request::NfsRequest,
     response::NfsOpResponse,
 };
@@ -35,11 +36,14 @@ async fn open_for_reading<'a>(
     };
     let path = &filehandle.path;
 
-    let fh_path = {
-        if path == "/" {
-            format!("{}{}", path, file)
-        } else {
-            format!("{}/{}", path, file)
+    let fh_path = match perm::component_path(path, file) {
+        Ok(p) => p,
+        Err(status) => {
+            return NfsOpResponse {
+                request,
+                result: None,
+                status,
+            }
         }
     };
 
@@ -132,11 +136,14 @@ async fn open_for_writing<'a>(
 ) -> NfsOpResponse<'a> {
     let path = &filehandle.path;
 
-    let fh_path = {
-        if path == "/" {
-            format!("{}{}", path, file)
-        } else {
-            format!("{}/{}", path, file)
+    let fh_path = match perm::component_path(path, file) {
+        Ok(p) => p,
+        Err(status) => {
+            return NfsOpResponse {
+                request,
+                result: None,
+                status,
+            }
         }
     };
 
@@ -406,12 +413,13 @@ impl NfsOperation for Open4args {
         // If the component is of zero length, NFS4ERR_INVAL will be returned.
         // The component is also subject to the normal UTF-8, character support,
         // and name checks.  See Section 12.7 for further discussion.
-        if file.is_empty() {
-            error!("Empty file name");
+        // Also a single component, not `.`/`..` (#129): see `perm::check_name`.
+        if let Err(status) = perm::check_name(file) {
+            error!("OPEN: bad name {:?}", file);
             return NfsOpResponse {
                 request,
                 result: None,
-                status: NfsStat4::Nfs4errInval,
+                status,
             };
         }
 

@@ -4201,4 +4201,188 @@ mod tests {
         assert_eq!(status, NfsStat4::Nfs4errInval);
         assert!(!dir.path().join("d").exists());
     }
+
+    // --- #129: names are single components; a path never skips the search
+    // check of the directory it goes through ---
+
+    /// An export (0755) with `private` (0700, the test user's) holding a
+    /// world-readable `file`, and a world-readable `pub` at the root: OTHER
+    /// may search the root but not `private`.
+    fn private_dir_export() -> tempfile::TempDir {
+        let export = tempfile::tempdir().unwrap();
+        chmod(export.path(), 0o755);
+        std::fs::write(export.path().join("pub"), b"pub").unwrap();
+        chmod(&export.path().join("pub"), 0o644);
+        let private = export.path().join("private");
+        std::fs::create_dir(&private).unwrap();
+        std::fs::write(private.join("file"), b"private").unwrap();
+        chmod(&private.join("file"), 0o644);
+        chmod(&private, 0o700);
+        export
+    }
+
+    async fn run_other(dir: &std::path::Path, ops: Vec<NfsArgOp>) -> (NfsStat4, Vec<NfsResOp4>) {
+        run_as(dir, SquashMode::RootSquash, auth_sys(OTHER, OTHER), ops).await
+    }
+
+    fn open_name_op(name: &str, openhow: OpenFlag4) -> NfsArgOp {
+        let mut args = open_args(1, openhow);
+        args.claim = OpenClaim4::ClaimNull(name.to_string());
+        NfsArgOp::Opopen(args)
+    }
+
+    fn unchecked() -> OpenFlag4 {
+        OpenFlag4::How(CreateHow4::UNCHECKED4(Fattr4 {
+            attrmask: Attrlist4(vec![]),
+            attr_vals: Attrlist4(vec![]),
+        }))
+    }
+
+    #[tokio::test]
+    async fn test_name_component_by_component_lookup_is_denied() {
+        // The control: one component at a time, `private` is not searchable.
+        let export = private_dir_export();
+        let (status, resarray) = run_other(
+            export.path(),
+            vec![NfsArgOp::Opputrootfh(()), lookup_op("private"), lookup_op("file"), NfsArgOp::Opgetfh(())],
+        )
+        .await;
+        assert_eq!(status, NfsStat4::Nfs4errAccess);
+        assert_eq!(resarray.len(), 3);
+        assert_eq!(resarray[2], NfsResOp4::OpError { op: 15, status: NfsStat4::Nfs4errAccess });
+    }
+
+    #[tokio::test]
+    async fn test_name_lookup_path_past_unsearchable_dir_refused() {
+        // The finding: LOOKUP "private/file" from the searchable root got a
+        // handle to the file (and READ checks only the file).
+        let export = private_dir_export();
+        let (status, resarray) = run_other(
+            export.path(),
+            vec![NfsArgOp::Opputrootfh(()), lookup_op("private/file"), NfsArgOp::Opgetfh(())],
+        )
+        .await;
+        assert_eq!(status, NfsStat4::Nfs4errBadname);
+        assert_eq!(resarray.len(), 2);
+        assert_eq!(resarray[1], NfsResOp4::OpError { op: 15, status: NfsStat4::Nfs4errBadname });
+    }
+
+    #[tokio::test]
+    async fn test_name_open_path_past_unsearchable_dir_refused() {
+        let export = private_dir_export();
+        for openhow in [OpenFlag4::Open4Nocreate, unchecked()] {
+            let (status, resarray) = run_other(
+                export.path(),
+                vec![NfsArgOp::Opputrootfh(()), open_name_op("private/file", openhow)],
+            )
+            .await;
+            assert_eq!(status, NfsStat4::Nfs4errBadname);
+            assert_eq!(resarray[1], NfsResOp4::OpError { op: 18, status: NfsStat4::Nfs4errBadname });
+        }
+        let (status, _) = run_other(
+            export.path(),
+            vec![NfsArgOp::Opputrootfh(()), open_name_op("private/new", unchecked())],
+        )
+        .await;
+        assert_eq!(status, NfsStat4::Nfs4errBadname);
+        assert!(!export.path().join("private/new").exists());
+    }
+
+    #[tokio::test]
+    async fn test_name_mutations_with_paths_refused() {
+        let export = private_dir_export();
+        let private_file = export.path().join("private/file");
+        let remove = NfsArgOp::Opremove(Remove4args { target: "private/file".to_string() });
+        let rename = |old: &str, new: &str| {
+            NfsArgOp::Oprename(Rename4args { oldname: old.to_string(), newname: new.to_string() })
+        };
+        let cases: Vec<(Vec<NfsArgOp>, u32)> = vec![
+            (vec![NfsArgOp::Opputrootfh(()), remove], 28),
+            (vec![NfsArgOp::Opputrootfh(()), mkdir_op("private/planted")], 6),
+            (
+                vec![NfsArgOp::Opputrootfh(()), NfsArgOp::Opsavefh(()), rename("private/file", "stolen")],
+                29,
+            ),
+            (
+                vec![NfsArgOp::Opputrootfh(()), NfsArgOp::Opsavefh(()), rename("pub", "private/planted")],
+                29,
+            ),
+            (
+                vec![
+                    NfsArgOp::Opputrootfh(()),
+                    lookup_op("pub"),
+                    NfsArgOp::Opsavefh(()),
+                    NfsArgOp::Opputrootfh(()),
+                    NfsArgOp::Oplink(Link4args { newname: "private/planted".to_string() }),
+                ],
+                11,
+            ),
+        ];
+        for (ops, op) in cases {
+            let last = ops.len() - 1;
+            let (status, resarray) = run_other(export.path(), ops).await;
+            assert_eq!(status, NfsStat4::Nfs4errBadname, "op {}", op);
+            assert_eq!(resarray[last], NfsResOp4::OpError { op, status: NfsStat4::Nfs4errBadname });
+        }
+        assert_eq!(std::fs::read(&private_file).unwrap(), b"private");
+        assert!(export.path().join("pub").exists());
+        assert!(!export.path().join("stolen").exists());
+        assert!(!export.path().join("private/planted").exists());
+    }
+
+    /// The ops check the name themselves too, not only the dispatcher: each
+    /// called directly (as a test or a future caller would) refuses a path.
+    #[tokio::test]
+    async fn test_name_ops_refuse_paths_without_dispatcher() {
+        let request = create_nfs40_server_with_root_fh(None).await;
+        let root = request.current_filehandle().unwrap().file.clone();
+        root.join("sub").unwrap().create_dir().unwrap();
+        root.join("sub/f").unwrap().create_file().unwrap();
+
+        let mut request = request;
+        for (name, want) in [
+            ("sub/f", NfsStat4::Nfs4errBadname),
+            ("..", NfsStat4::Nfs4errBadname),
+            (".", NfsStat4::Nfs4errBadname),
+            ("a\0b", NfsStat4::Nfs4errBadname),
+            ("", NfsStat4::Nfs4errInval),
+        ] {
+            let root_fh = request.file_manager().get_root_filehandle().await.unwrap();
+            request.set_filehandle(root_fh);
+            let response = Lookup4args { objname: name.to_string() }.execute(request).await;
+            assert_eq!(response.status, want, "LOOKUP {:?}", name);
+            request = response.request;
+        }
+
+        let ops = vec![
+            ("OPEN", open_name_op("sub/f", OpenFlag4::Open4Nocreate)),
+            ("OPEN create", open_name_op("sub/g", unchecked())),
+            ("CREATE", mkdir_op("sub/d")),
+            ("REMOVE", NfsArgOp::Opremove(Remove4args { target: "sub/f".to_string() })),
+            (
+                "RENAME",
+                NfsArgOp::Oprename(Rename4args { oldname: "sub/f".to_string(), newname: "g".to_string() }),
+            ),
+            ("LINK", NfsArgOp::Oplink(Link4args { newname: "sub/g".to_string() })),
+        ];
+        for (what, op) in ops {
+            let root_fh = request.file_manager().get_root_filehandle().await.unwrap();
+            request.set_filehandle(root_fh.clone());
+            request.set_saved_filehandle(root_fh);
+            let response = match op {
+                NfsArgOp::Opopen(a) => a.execute(request).await,
+                NfsArgOp::Opcreate(a) => a.execute(request).await,
+                NfsArgOp::Opremove(a) => a.execute(request).await,
+                NfsArgOp::Oprename(a) => a.execute(request).await,
+                NfsArgOp::Oplink(a) => a.execute(request).await,
+                _ => unreachable!(),
+            };
+            assert_eq!(response.status, NfsStat4::Nfs4errBadname, "{}", what);
+            request = response.request;
+        }
+        assert!(root.join("sub/f").unwrap().exists().unwrap());
+        assert!(!root.join("sub/g").unwrap().exists().unwrap());
+        assert!(!root.join("sub/d").unwrap().exists().unwrap());
+        assert!(!root.join("g").unwrap().exists().unwrap());
+    }
 }

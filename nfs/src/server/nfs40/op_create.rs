@@ -4,6 +4,7 @@ use tracing::{debug, error};
 use crate::server::{
     createattrs::{self, CreateAttrs, DEFAULT_DIR_MODE},
     operation::NfsOperation,
+    perm,
     request::NfsRequest,
     response::NfsOpResponse,
 };
@@ -53,14 +54,14 @@ impl NfsOperation for Create4args {
             }
         };
 
-        if self.objname.is_empty() {
-            // If the objname is of zero length, NFS4ERR_INVAL will be returned.
-            // The objname is also subject to the normal UTF-8, character support,
-            // and name checks.  See Section 12.7 for further discussion.
+        // A zero-length objname is NFS4ERR_INVAL; `.`, `..`, `/` and NUL are
+        // NFS4ERR_BADNAME (RFC 7530 §12.7): the new object's parent is the
+        // current directory, the one whose permissions were checked (#129).
+        if let Err(status) = perm::check_name(&self.objname) {
             return NfsOpResponse {
                 request,
                 result: None,
-                status: NfsStat4::Nfs4errInval,
+                status,
             };
         }
 

@@ -269,7 +269,9 @@ fn escapes_root(root: &ExportRoot, path: &str) -> bool {
 /// (NFS4ERR_INVAL), not `.` or `..` and without `/` or NUL
 /// (NFS4ERR_BADNAME). A name with a `/` would be walked as several
 /// components, through symlinks and past the search check of each (#122).
-fn check_name(name: &str) -> Result<(), NfsStat4> {
+/// The dispatcher checks it before the permission checks; the ops that take
+/// a name check it again (`component_path`, #129).
+pub(crate) fn check_name(name: &str) -> Result<(), NfsStat4> {
     if name.is_empty() {
         return Err(NfsStat4::Nfs4errInval);
     }
@@ -277,6 +279,14 @@ fn check_name(name: &str) -> Result<(), NfsStat4> {
         return Err(NfsStat4::Nfs4errBadname);
     }
     Ok(())
+}
+
+/// Export path of the entry `name` in directory `dir`: `name` must be a
+/// single component (`check_name`), so the entry's parent is `dir`, the
+/// directory whose permissions were checked (#129).
+pub(crate) fn component_path(dir: &str, name: &str) -> Result<String, NfsStat4> {
+    check_name(name)?;
+    Ok(join(dir, name))
 }
 
 /// Keep `arg` inside its export (#122), whoever the caller is (root too):

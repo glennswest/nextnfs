@@ -4,6 +4,7 @@ use tracing::{debug, error};
 use crate::server::{
     nfs40::{op_pseudo, Lookup4res, NfsResOp4},
     operation::NfsOperation,
+    perm,
     request::NfsRequest,
     response::NfsOpResponse,
 };
@@ -82,13 +83,18 @@ impl NfsOperation for Lookup4args {
             }
         };
 
-        let mut path = filehandle.path.clone();
-        if path == "/" {
-            path.push_str(self.objname.as_str());
-        } else {
-            path.push('/');
-            path.push_str(self.objname.as_str());
-        }
+        // A single component only (#129): "dir/file" would be resolved
+        // past the search permission of `dir`.
+        let path = match perm::component_path(&filehandle.path, &self.objname) {
+            Ok(path) => path,
+            Err(status) => {
+                return NfsOpResponse {
+                    request,
+                    result: Some(NfsResOp4::Oplookup(Lookup4res { status: status.clone() })),
+                    status,
+                };
+            }
+        };
 
         debug!("lookup {:?}", path);
 

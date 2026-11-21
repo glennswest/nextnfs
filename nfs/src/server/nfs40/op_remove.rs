@@ -4,6 +4,7 @@ use tracing::{debug, error};
 use crate::server::{
     nfs40::{ChangeInfo4, NfsStat4},
     operation::NfsOperation,
+    perm,
     request::NfsRequest,
     response::NfsOpResponse,
 };
@@ -17,6 +18,22 @@ impl NfsOperation for Remove4args {
             "Operation 28: REMOVE - Remove File System Object {:?}, with request {:?}",
             self, request
         );
+        // A single component (#129): the entry removed is in the current
+        // directory, the one whose permissions were checked.
+        if let Err(status) = perm::check_name(&self.target) {
+            return NfsOpResponse {
+                request,
+                result: Some(NfsResOp4::Opremove(Remove4res {
+                    status: status.clone(),
+                    cinfo: ChangeInfo4 {
+                        atomic: false,
+                        before: 0,
+                        after: 0,
+                    },
+                })),
+                status,
+            };
+        }
         let filehandle = request.current_filehandle();
         match filehandle {
             None => {

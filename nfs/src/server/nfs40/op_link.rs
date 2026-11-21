@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use tracing::debug;
 
-use crate::server::{operation::NfsOperation, request::NfsRequest, response::NfsOpResponse};
+use crate::server::{operation::NfsOperation, perm, request::NfsRequest, response::NfsOpResponse};
 
 use nextnfs_proto::nfs4_proto::{
     ChangeInfo4, Link4args, Link4res, Link4resok, NfsResOp4, NfsStat4,
@@ -11,6 +11,16 @@ use nextnfs_proto::nfs4_proto::{
 impl NfsOperation for Link4args {
     async fn execute<'a>(&self, request: NfsRequest<'a>) -> NfsOpResponse<'a> {
         debug!("Operation 11: LINK {:?}", self);
+
+        // A single component (#129): the link goes in the current
+        // directory, the one whose permissions were checked.
+        if let Err(status) = perm::check_name(&self.newname) {
+            return NfsOpResponse {
+                request,
+                result: None,
+                status,
+            };
+        }
 
         // SAVED_FH is the source object, CURRENT_FH is the target directory
         let saved_fh = match request.saved_filehandle() {

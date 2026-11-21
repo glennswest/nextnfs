@@ -5,6 +5,7 @@
 use async_trait::async_trait;
 
 use crate::server::operation::NfsOperation;
+use crate::server::perm;
 use crate::server::request::NfsRequest;
 use crate::server::response::NfsOpResponse;
 use nextnfs_proto::nfs4_proto::*;
@@ -14,6 +15,19 @@ use tracing::{debug, error};
 impl NfsOperation for Rename4args {
     async fn execute<'a>(&self, request: NfsRequest<'a>) -> NfsOpResponse<'a> {
         debug!("RENAME: {} -> {}", self.oldname, self.newname);
+
+        // Single components (#129): the source is in the saved directory and
+        // the target in the current one, the directories whose permissions
+        // were checked.
+        for name in [&self.oldname, &self.newname] {
+            if let Err(status) = perm::check_name(name) {
+                return NfsOpResponse {
+                    request,
+                    result: None,
+                    status,
+                };
+            }
+        }
 
         // Get saved filehandle (source directory)
         let saved_fh = match request.saved_filehandle() {
