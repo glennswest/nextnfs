@@ -4037,6 +4037,72 @@ mod tests {
         }
     }
 
+    /// Finding 4bb3de8fbdd6: a stable WRITE at EOF used O_APPEND when the
+    /// offset equalled a stat of the length, so another writer extending the
+    /// file in between moved the bytes to a later offset. Each round, a
+    /// second writer (another connection) and a FILE_SYNC WRITE both write
+    /// one block at the current end, released together: the file grows by
+    /// exactly one block and that block is one of the two, never both.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_stable_write_at_eof_keeps_offset_under_concurrency() {
+        use crate::server::operation::NfsOperation;
+        use std::os::unix::fs::FileExt;
+        use std::sync::{Arc, Barrier};
+
+        const B: usize = 512;
+        const ROUNDS: usize = 300;
+        let export = tempfile::tempdir().unwrap();
+        let path = export.path().join("f");
+        std::fs::write(&path, b"").unwrap();
+        let mut request = request_on_export_squash(false, export.path(), SquashMode::None).await;
+        let fh = request
+            .file_manager()
+            .get_filehandle_for_path("/f".to_string())
+            .await
+            .unwrap();
+
+        let barrier = Arc::new(Barrier::new(2));
+        let other = {
+            let (barrier, path) = (barrier.clone(), path.clone());
+            std::thread::spawn(move || {
+                let f = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+                for k in 0..ROUNDS {
+                    barrier.wait();
+                    f.write_all_at(&[b'o'; B], (k * B) as u64).unwrap();
+                    barrier.wait();
+                }
+            })
+        };
+
+        for k in 0..ROUNDS {
+            request.set_filehandle(fh.clone());
+            let args = Write4args {
+                stateid: Stateid4 { seqid: 0, other: [0; 12] },
+                offset: (k * B) as u64,
+                stable: StableHow4::FileSync4,
+                data: vec![b'n'; B],
+            };
+            barrier.wait();
+            let resp = args.execute(request).await;
+            barrier.wait();
+            assert_eq!(resp.status, NfsStat4::Nfs4Ok);
+            request = resp.request;
+            let len = std::fs::metadata(&path).unwrap().len();
+            assert_eq!(len, ((k + 1) * B) as u64, "round {}: WRITE moved past its offset", k);
+            let mut block = vec![0u8; B];
+            std::fs::File::open(&path)
+                .unwrap()
+                .read_exact_at(&mut block, (k * B) as u64)
+                .unwrap();
+            assert!(
+                block.iter().all(|&b| b == b'n') || block.iter().all(|&b| b == b'o'),
+                "round {}: block torn",
+                k
+            );
+        }
+        other.join().unwrap();
+    }
+
     #[tokio::test]
     async fn test_create_existing_name_is_exist() {
         let dir = tempfile::tempdir().unwrap();

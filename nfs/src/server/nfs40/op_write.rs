@@ -78,53 +78,32 @@ impl NfsOperation for Write4args {
                 .write_bytes(self.offset, self.data.clone())
                 .await;
         } else {
-            // Synchronous write — use pwrite (write_all_at) for positional writes.
-            // For writes exactly at EOF, use O_APPEND to handle concurrent
-            // appenders atomically (the kernel positions the write at the true
-            // end of file). Writes past EOF (sparse/seek) still use pwrite to
-            // preserve the requested offset and create holes.
+            // Synchronous write: always a positional write (pwrite) at the
+            // offset the client sent, at EOF too. NFS WRITE has no append
+            // mode; inferring one from a stat of the length let another
+            // writer extend the file in between and moved these bytes to a
+            // later offset (finding 4bb3de8fbdd6).
             //
             // The file is opened beneath the export root (#123): no symlink
             // on the way or as the file, at the moment of the open.
             let path = filehandle.file.as_str().to_string();
             let fm = request.file_manager();
-            let beneath = fm.beneath();
-            let on_disk = match beneath.symlink_metadata(&path) {
-                Ok(meta) => Ok(meta.len()),
+            let opened = match fm.beneath().open_file(&path, libc::O_WRONLY, 0) {
+                Ok(file) => Ok(file),
                 // Only a vfs-only tree (unit tests) is written through the
                 // vfs. On a real export the file is gone, or a directory on
                 // its path is mid-swap: the WRITE fails, it is never
-                // appended through a second lookup.
+                // written through a second lookup.
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound && fm.vfs_only() => Err(None),
-                Err(e) => Err(Some(e)),
-            };
-            let write_result = if let Ok(file_len) = on_disk {
-                if self.offset == file_len {
-                    // Append at exact EOF: use O_APPEND so the kernel atomically
-                    // positions the write at the true end of file, preventing
-                    // concurrent appenders from overwriting each other.
-                    match beneath.open_file(&path, libc::O_WRONLY | libc::O_APPEND, 0) {
-                        Ok(mut file) => {
-                            file.write_all(&self.data)
-                                .and_then(|_| file.sync_all())
-                                .map(|_| self.data.len() as u32)
-                        }
-                        Err(e) => Err(e),
-                    }
-                } else {
-                    // Positional write (mid-file or sparse/past-EOF): use pwrite
-                    match beneath.open_file(&path, libc::O_WRONLY, 0) {
-                        Ok(file) => {
-                            file.write_all_at(&self.data, self.offset)
-                                .and_then(|_| file.sync_all())
-                                .map(|_| self.data.len() as u32)
-                        }
-                        Err(e) => Err(e),
-                    }
-                }
-            } else if let Err(Some(e)) = on_disk {
                 // A symlink on the way (ELOOP) or a path out of the export
                 // (EXDEV): refused, never written.
+                Err(e) => Err(Some(e)),
+            };
+            let write_result = if let Ok(file) = opened {
+                file.write_all_at(&self.data, self.offset)
+                    .and_then(|_| file.sync_all())
+                    .map(|_| self.data.len() as u32)
+            } else if let Err(Some(e)) = opened {
                 Err(e)
             } else {
                 // VFS fallback (MemoryFS in tests): seek + write
