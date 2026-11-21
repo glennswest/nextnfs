@@ -351,7 +351,7 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       (669 tests, 0 warnings, job afafaef97a); #129, #142 closed (#143,
       #144 closed by the build); golden-nextnfs-93bf37f484bd, release
       request stormcos#1506.
-- [ ] 2026-11-21 — #130 (P1, 2 major review findings on op_readdir.rs at
+- [x] 2026-11-21 — #130 (P1, 2 major review findings on op_readdir.rs at
       8a66330). 33b440b1f96e: cookieverf sampled from names, compared
       unpadded (7-byte name → 7 bytes vs 8 on the wire) → NOT_SAME on every
       continuation; now `listing_verifier` (FNV-1a 64 over the names in
@@ -363,5 +363,7 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       every export). Tests: 7-byte-name continuation, name lengths 1–20 one
       entry per page, verifier changes with the directory, dircount 0 +
       200 files within 1024, 11 attrs × 5 budgets every page ≤ maxcount,
-      TOOSMALL, pseudo-root paging/NOT_SAME/TOOSMALL. Next: sc-build test +
-      clippy, then close #130.
+      TOOSMALL, pseudo-root paging/NOT_SAME/TOOSMALL. Done: b7f828f;
+      `sc-build 'cargo test --workspace --locked && cargo clippy --workspace
+      --all-targets --locked -- -D warnings'` green (676 tests, 0 warnings,
+      job 350ff983b5); #130 closed; image requested.
