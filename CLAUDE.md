@@ -278,7 +278,7 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       0 warnings; #126 closed by it). Released v0.18.0 (carries #123's code
       too); #125 closed; image requested. #123 itself: its code is verified
       by the same build — close it when it is handed back.
-- [ ] 2026-11-20 — #127 (P1, review finding 0d36258c216e): OPEN/CREATE
+- [x] 2026-11-20 — #127 (P1, review finding 0d36258c216e): OPEN/CREATE
       createattrs. Plan: new `nfs/src/server/createattrs.rs` — parse and
       validate createattrs (size, mode, owner, owner_group applied; ACL,
       time_*_set, archive, hidden, mimetype, system, time_backup,
@@ -299,7 +299,7 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       (the first attempt sat ~3h in the build queue and was stopped locally
       for low memory before it got a VM), then close #127 and #141, request
       the image. EXCLUSIVE4 verifier gap filed as #140.
-- [ ] 2026-11-20 — #128 (P1, review finding 124a859a1973): NFSv4.1 session
+- [x] 2026-11-20 — #128 (P1, review finding 124a859a1973): NFSv4.1 session
       IDs came from `sessions.len()` (reused after a DESTROY_SESSION,
       racy between CREATE_SESSIONs) and could overwrite a live session.
       Plan: session id = per-boot random 8 bytes ‖ atomic counter, inserted
@@ -309,8 +309,7 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       record; CREATE_SESSION checks `csa_sequence` against it (last+1 → new,
       == last → the cached reply again, else SEQ_MISORDERED, unknown client
       → STALE_CLIENTID). DESTROY_CLIENTID drops the record.
-      Status 2026-11-21: code, tests, README, CHANGELOG pushed (37be878).
-      Next: `sc-build 'cargo test --workspace --locked && cargo clippy
-      --workspace --all-targets --locked -- -D warnings'` on 37be878 (also
-      covers #127/#141, ed1f56e is its ancestor); queued behind ~145 builds.
-      Then close #128 (and #127, #141), request the image.
+      Done 2026-11-21: 37be878; `sc-build 'cargo test --workspace --locked
+      && cargo clippy --workspace --all-targets --locked -- -D warnings'` on
+      it green (660 tests, 0 warnings; also verifies #127). #128 and #127
+      closed (#141 closed by the build); image requested.
