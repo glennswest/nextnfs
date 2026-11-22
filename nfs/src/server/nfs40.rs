@@ -143,6 +143,15 @@ pub(crate) fn xdr_len<T: serde::Serialize + ?Sized>(value: &T) -> usize {
     }
 }
 
+/// XDR length of one COMPOUND result as the reply's result array encodes
+/// it (`write_argarray`): an `OpError` is its opcode and status.
+pub(crate) fn result_len(res: &NfsResOp4) -> usize {
+    match res {
+        NfsResOp4::OpError { op, status } => xdr_len(&(op, status)),
+        other => xdr_len(other),
+    }
+}
+
 /// The NFSv4.1 COMPOUND reply budget (#149, finding 584f6c79c1f1): the
 /// session's `ca_maxresponsesize` less [`RPC_REPLY_OVERHEAD`], with the
 /// COMPOUND header (status, tag, result count) and every result so far
@@ -168,9 +177,14 @@ impl ReplyBudget {
         self.limit.saturating_sub(self.used)
     }
 
+    /// Count `res` whether it fits or not (SEQUENCE's own result).
+    pub(crate) fn add(&mut self, res: &NfsResOp4) {
+        self.used += result_len(res);
+    }
+
     /// Count `res`; false (nothing counted) when it does not fit.
     pub(crate) fn take(&mut self, res: &NfsResOp4) -> bool {
-        let size = xdr_len(res);
+        let size = result_len(res);
         if self.used + size > self.limit {
             return false;
         }
@@ -1123,7 +1137,7 @@ impl NFS40Server {
                             if let Some(attrs) = sessions.fore_channel_attrs(id).await {
                                 let mut b = ReplyBudget::new(attrs.max_response_size, &reply_tag);
                                 // SEQUENCE's own result is counted, never refused.
-                                let _ = b.take(&res);
+                                b.add(&res);
                                 budget = Some(b);
                             }
                         }
@@ -1535,7 +1549,7 @@ mod tests {
         // status + tag (4 + 8 padded) + count = 20.
         assert_eq!(b.room(), 80);
         let putfh = NfsResOp4::OpError { op: 22, status: NfsStat4::Nfs4Ok };
-        assert_eq!(xdr_len(&putfh), 8);
+        assert_eq!(result_len(&putfh), 8);
         assert!(b.take(&putfh));
         assert_eq!(b.room(), 72);
         let big = NfsResOp4::Opread(Read4res::Resok4(Read4resok { eof: false, data: vec![0; 64] }));

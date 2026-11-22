@@ -510,7 +510,6 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       tests, 0 warnings, job 13f9ed5b1f); #148 closed;
       golden-nextnfs-93076b3c9cc5, release request stormcos#1506.
       (#133 still waits on the owner.)
-
 - [ ] 2026-11-21 — #149 (P1, review finding 584f6c79c1f1 on op_read.rs):
       each READ capped at ca_maxresponsesize − 1 KiB on its own, so two
       READs (or a long tag) overflowed the session's reply size. Fix:
@@ -520,4 +519,8 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       data to room − 16 (multiple of 4); a result that does not fit →
       REP_TOO_BIG, COMPOUND stops. Tests: two READs in 16 KiB, 3000-byte
       tag in 8 KiB, READs past the budget, LOOKUP past it, budget unit.
-      No cargo on dev; first compile is the sc-build.
+      No cargo on dev; first compile is the sc-build. Build on c748b05
+      (job 8ef08dfb35): 2 new tests failed (#151) — an `OpError` result
+      does not serialize alone (the result array writes it as (op,
+      status)), so it measured usize::MAX/2 and every op after SEQUENCE
+      got REP_TOO_BIG; now `result_len` measures as the array encodes.
