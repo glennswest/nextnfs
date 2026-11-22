@@ -1,4 +1,6 @@
+use std::os::fd::OwnedFd;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use axum::{
     extract::{Path, Request, State},
@@ -9,6 +11,7 @@ use axum::{
     Router,
 };
 use nextnfs_server::export_manager::{ExportManagerHandle, ExportStatsSnapshot, QosConfig};
+use nextnfs_server::server::beneath::{self, ExportRoot};
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
 use tracing::{error, info, warn};
@@ -21,9 +24,34 @@ use crate::web;
 pub struct AdminAuth {
     /// Bearer token the write routes require (`[server] api_token_file`).
     pub token: Option<String>,
-    /// Canonical directories an API-added export must be inside
-    /// (`[server] api_export_roots`); empty: the API adds no export (#125).
-    pub export_roots: Vec<PathBuf>,
+    /// Directories an API-added export must be inside (`[server]
+    /// api_export_roots`); empty: the API adds no export (#125).
+    pub export_roots: Vec<ApiRoot>,
+}
+
+/// One `api_export_roots` entry: its canonical path and a directory fd
+/// opened on it when the server started (#150).
+#[derive(Clone, Debug)]
+pub struct ApiRoot {
+    pub path: PathBuf,
+    fd: Arc<OwnedFd>,
+}
+
+impl ApiRoot {
+    pub fn open(path: &std::path::Path) -> std::io::Result<Self> {
+        let path = path.canonicalize()?;
+        let fd = beneath::open_dir(&path)?;
+        Ok(ApiRoot { path, fd: Arc::new(fd) })
+    }
+}
+
+/// Why a path cannot be exported through the API.
+#[derive(Debug)]
+enum OpenRefused {
+    /// Not inside any root, or it left its root while being opened.
+    Outside,
+    /// Inside a root, but not an openable directory.
+    Bad(std::io::Error),
 }
 
 impl AdminAuth {
@@ -46,21 +74,41 @@ impl AdminAuth {
         let export_roots = roots
             .iter()
             .map(|r| {
-                std::path::Path::new(r)
-                    .canonicalize()
+                ApiRoot::open(std::path::Path::new(r))
                     .map_err(|e| format!("api_export_roots entry {}: {}", r, e))
             })
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Self { token, export_roots })
     }
 
-    /// Whether `path` may be exported through the API: only inside one of
-    /// the configured roots, and nowhere when none is configured (#125).
-    fn allows_path(&self, path: &std::path::Path) -> bool {
-        match path.canonicalize() {
-            Ok(p) => self.export_roots.iter().any(|r| p.starts_with(r)),
-            Err(_) => false,
-        }
+    /// The root `path` is inside and the path relative to it, found from
+    /// its canonical form (#125). This only finds where to open from: the
+    /// directory itself is opened beneath the root's fd by
+    /// [`AdminAuth::open_located`], so what `canonicalize` saw is never
+    /// trusted (#150, finding 68bd84f6fb12).
+    fn locate(&self, path: &std::path::Path) -> Option<(&ApiRoot, PathBuf)> {
+        let p = path.canonicalize().ok()?;
+        self.export_roots
+            .iter()
+            .find_map(|r| p.strip_prefix(&r.path).ok().map(|rel| (r, rel.to_path_buf())))
+    }
+
+    /// Open `rel` beneath `root` in one confined `openat2` (no `..` out,
+    /// no symlinks): a component renamed or replaced since `locate` makes
+    /// it fail instead of opening something outside the root. The export
+    /// is made on that descriptor.
+    fn open_located(root: &ApiRoot, rel: &std::path::Path) -> Result<ExportRoot, OpenRefused> {
+        let (fd, path) = beneath::open_dir_beneath(&root.fd, rel).map_err(|e| {
+            if beneath::is_escape(&e) { OpenRefused::Outside } else { OpenRefused::Bad(e) }
+        })?;
+        ExportRoot::from_fd(fd, path).map_err(OpenRefused::Bad)
+    }
+
+    /// The directory `path` names, opened beneath one of the roots; nowhere
+    /// when none is configured.
+    fn open_allowed(&self, path: &std::path::Path) -> Result<ExportRoot, OpenRefused> {
+        let (root, rel) = self.locate(path).ok_or(OpenRefused::Outside)?;
+        Self::open_located(root, &rel)
     }
 }
 
@@ -210,15 +258,21 @@ async fn add_export(
             "adding exports through the API is off: the server has no api_export_roots",
         );
     }
-    if !state.admin.allows_path(std::path::Path::new(&req.path)) {
-        return json_error(
-            StatusCode::FORBIDDEN,
-            &format!("{} is not inside the api_export_roots", req.path),
-        );
-    }
+    let root = match state.admin.open_allowed(std::path::Path::new(&req.path)) {
+        Ok(root) => root,
+        Err(OpenRefused::Outside) => {
+            return json_error(
+                StatusCode::FORBIDDEN,
+                &format!("{} is not inside the api_export_roots", req.path),
+            )
+        }
+        Err(OpenRefused::Bad(e)) => {
+            return json_error(StatusCode::BAD_REQUEST, &format!("export path {}: {}", req.path, e))
+        }
+    };
     match state
         .export_manager
-        .add_export(req.name.clone(), PathBuf::from(&req.path), req.read_only)
+        .add_export_root(req.name.clone(), root, req.read_only)
         .await
     {
         Ok(info) => (
@@ -408,7 +462,7 @@ mod tests {
 
     /// A token, and `root` as the one directory the API may export under.
     fn admin(token: &str, root: &std::path::Path) -> AdminAuth {
-        AdminAuth { token: Some(token.to_string()), export_roots: vec![root.canonicalize().unwrap()] }
+        AdminAuth { token: Some(token.to_string()), export_roots: vec![ApiRoot::open(root).unwrap()] }
     }
 
     #[tokio::test]
@@ -514,6 +568,57 @@ mod tests {
         assert!(em.list_exports().await.is_empty());
         let r = app.oneshot(add_req(&root.0.join("inside"), Some("Bearer t"))).await.unwrap();
         assert_eq!(r.status(), StatusCode::CREATED);
+    }
+
+    /// #150, finding 68bd84f6fb12: the path is checked and then opened;
+    /// a component replaced by a symlink to outside the root in between
+    /// makes the open fail (it no longer resolves the path a second time
+    /// unconfined), and `..` cannot climb out of the root either.
+    #[test]
+    fn component_swapped_after_the_check_is_refused() {
+        let root = Scratch::new("swap");
+        std::fs::create_dir_all(root.0.join("a/sub")).unwrap();
+        let outside = Scratch::new("swap-out");
+        std::fs::create_dir_all(outside.0.join("sub")).unwrap();
+        let auth = admin("t", &root.0);
+        let (r, rel) = auth.locate(&root.0.join("a/sub")).unwrap();
+        assert_eq!(rel, PathBuf::from("a/sub"));
+        // Between the check and the open, `a` becomes a symlink outside.
+        std::fs::rename(root.0.join("a"), root.0.join("a-old")).unwrap();
+        std::os::unix::fs::symlink(&outside.0, root.0.join("a")).unwrap();
+        assert!(matches!(AdminAuth::open_located(r, &rel), Err(OpenRefused::Outside)));
+        assert!(matches!(
+            AdminAuth::open_located(r, std::path::Path::new("..")),
+            Err(OpenRefused::Outside)
+        ));
+        // And the whole check-and-open now refuses the path, which leads
+        // outside.
+        assert!(matches!(auth.open_allowed(&root.0.join("a/sub")), Err(OpenRefused::Outside)));
+        // The directory that is really inside opens, under its own path.
+        let er = AdminAuth::open_located(r, std::path::Path::new("a-old/sub")).unwrap();
+        assert_eq!(er.path(), root.0.canonicalize().unwrap().join("a-old/sub"));
+        // A file is not an export.
+        std::fs::write(root.0.join("f"), b"x").unwrap();
+        assert!(matches!(auth.open_allowed(&root.0.join("f")), Err(OpenRefused::Bad(_))));
+    }
+
+    /// An API-added export is the directory the API opened: once added,
+    /// replacing its path with a symlink to outside changes nothing.
+    #[tokio::test]
+    async fn api_export_is_the_directory_it_opened() {
+        let root = Scratch::new("fdexport");
+        std::fs::create_dir(root.0.join("d")).unwrap();
+        std::fs::write(root.0.join("d/mine"), b"in").unwrap();
+        let outside = Scratch::new("fdexport-out");
+        std::fs::write(outside.0.join("theirs"), b"out").unwrap();
+        let (app, em) = app(admin("t", &root.0));
+        let r = app.oneshot(add_req(&root.0.join("d"), Some("Bearer t"))).await.unwrap();
+        assert_eq!(r.status(), StatusCode::CREATED);
+        std::fs::rename(root.0.join("d"), root.0.join("d2")).unwrap();
+        std::os::unix::fs::symlink(&outside.0, root.0.join("d")).unwrap();
+        let (_info, fm) = em.get_export_by_name("x").await.unwrap();
+        assert!(fm.meta("/mine").is_some());
+        assert!(fm.meta("/theirs").is_none());
     }
 
     #[test]

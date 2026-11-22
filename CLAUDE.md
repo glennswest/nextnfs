@@ -533,3 +533,14 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       tests, 0 warnings, job 8e94217d77); #149 closed (#151, #152 closed by
       the build); golden-nextnfs-d5b967a5f668, release request stormcos#1506.
       (#133 still waits on the owner.)
+- [ ] 2026-11-21 — #150 (P1, review finding 68bd84f6fb12 on src/api.rs):
+      `allows_path` canonicalized and checked, then ExportManager
+      canonicalized the request path again (swap in between → export
+      outside api_export_roots). Fix: `ApiRoot` (canonical path + O_PATH
+      fd opened at load); `locate` (canonicalize → root + rel, lookup
+      only); `open_located` = `beneath::open_dir_beneath` (one openat2
+      RESOLVE_BENEATH|NO_SYMLINKS|NO_MAGICLINKS from the root fd) →
+      `ExportRoot::from_fd` → `ExportManagerHandle::add_export_root`
+      (ExportSource::Root, no path lookup). Swap → 403, not a dir → 400.
+      Tests: component swapped after locate → Outside, `..` → Outside,
+      file → Bad; API export unchanged after its path is swapped.

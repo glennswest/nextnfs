@@ -528,9 +528,17 @@ struct GetAccessRequest {
     respond_to: oneshot::Sender<Option<AccessConfig>>,
 }
 
+/// What a new export is made from: a path the export manager opens
+/// (config file, CLI), or a directory the caller already opened and
+/// checked (the API's `api_export_roots`, #150).
+enum ExportSource {
+    Path(PathBuf),
+    Root(ExportRoot),
+}
+
 struct AddExportRequest {
     name: String,
-    path: PathBuf,
+    source: ExportSource,
     read_only: bool,
     respond_to: oneshot::Sender<Result<ExportInfo, String>>,
 }
@@ -574,7 +582,7 @@ impl ExportManager {
     fn handle_message(&mut self, msg: ExportManagerMessage) {
         match msg {
             ExportManagerMessage::AddExport(req) => {
-                let result = self.add_export(req.name, req.path, req.read_only);
+                let result = self.add_export(req.name, req.source, req.read_only);
                 let _ = req.respond_to.send(result);
             }
             ExportManagerMessage::RemoveExport(req) => {
@@ -648,7 +656,7 @@ impl ExportManager {
     fn add_export(
         &mut self,
         name: String,
-        path: PathBuf,
+        source: ExportSource,
         read_only: bool,
     ) -> Result<ExportInfo, String> {
         if self.exports.contains_key(&name) {
@@ -658,17 +666,24 @@ impl ExportManager {
             return Err("maximum number of exports reached".to_string());
         }
 
-        let canonical = path.canonicalize().map_err(|e| {
-            format!("export path {} does not exist: {}", path.display(), e)
-        })?;
-        if !canonical.is_dir() {
-            return Err(format!("{} is not a directory", canonical.display()));
-        }
-
-        // Every path of the export is resolved beneath this fd (#123).
-        let beneath = Arc::new(ExportRoot::open(&canonical).map_err(|e| {
-            format!("export path {}: {}", canonical.display(), e)
-        })?);
+        // Every path of the export is resolved beneath this fd (#123). A
+        // root opened by the caller is used as it is: its path is never
+        // looked up again (#150).
+        let beneath = match source {
+            ExportSource::Root(root) => Arc::new(root),
+            ExportSource::Path(path) => {
+                let canonical = path.canonicalize().map_err(|e| {
+                    format!("export path {} does not exist: {}", path.display(), e)
+                })?;
+                if !canonical.is_dir() {
+                    return Err(format!("{} is not a directory", canonical.display()));
+                }
+                Arc::new(ExportRoot::open(&canonical).map_err(|e| {
+                    format!("export path {}: {}", canonical.display(), e)
+                })?)
+            }
+        };
+        let canonical = beneath.path().to_path_buf();
 
         let export_id = self.next_export_id;
         self.next_export_id += 1;
@@ -746,11 +761,32 @@ impl ExportManagerHandle {
         path: PathBuf,
         read_only: bool,
     ) -> Result<ExportInfo, String> {
+        self.add_export_from(name, ExportSource::Path(path), read_only).await
+    }
+
+    /// Add an export on a directory the caller has already opened and
+    /// checked (#150): the export is exactly that directory; nothing
+    /// resolves a path for it again.
+    pub async fn add_export_root(
+        &self,
+        name: String,
+        root: ExportRoot,
+        read_only: bool,
+    ) -> Result<ExportInfo, String> {
+        self.add_export_from(name, ExportSource::Root(root), read_only).await
+    }
+
+    async fn add_export_from(
+        &self,
+        name: String,
+        source: ExportSource,
+        read_only: bool,
+    ) -> Result<ExportInfo, String> {
         let (tx, rx) = oneshot::channel();
         self.sender
             .send(ExportManagerMessage::AddExport(AddExportRequest {
                 name,
-                path,
+                source,
                 read_only,
                 respond_to: tx,
             }))

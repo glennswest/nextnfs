@@ -77,6 +77,59 @@ fn split(path: &str) -> io::Result<(&str, &str)> {
     Ok((if parent.is_empty() { "." } else { parent }, name))
 }
 
+/// An O_PATH fd on the directory `path` (followed like `open(2)` does).
+pub fn open_dir(path: &Path) -> io::Result<OwnedFd> {
+    let c = cstr(path.as_os_str().as_bytes())?;
+    let fd = unsafe { libc::open(c.as_ptr(), libc::O_PATH | libc::O_DIRECTORY | libc::O_CLOEXEC) };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+}
+
+/// Open the directory `rel` beneath the directory fd `root` in one
+/// `openat2(RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS)`
+/// (#150): `..` above `root`, an absolute path or any symlink on the way
+/// fails (EXDEV / ELOOP), so a component renamed or replaced between a
+/// caller's check and this open cannot take it outside `root`. An empty
+/// `rel` is `root` itself. Returns an O_PATH fd and the path the kernel
+/// reports for it (`/proc/self/fd`), for messages.
+pub fn open_dir_beneath(root: &OwnedFd, rel: &Path) -> io::Result<(OwnedFd, PathBuf)> {
+    let r = rel.as_os_str().as_bytes();
+    let c = cstr(if r.is_empty() { b"." } else { r })?;
+    let how = OpenHow {
+        flags: (libc::O_PATH | libc::O_DIRECTORY | libc::O_CLOEXEC) as u64,
+        mode: 0,
+        resolve: RESOLVE,
+    };
+    let fd = loop {
+        let ret = unsafe {
+            libc::syscall(
+                libc::SYS_openat2,
+                root.as_raw_fd(),
+                c.as_ptr(),
+                &how as *const OpenHow,
+                std::mem::size_of::<OpenHow>(),
+            )
+        };
+        if ret >= 0 {
+            break unsafe { OwnedFd::from_raw_fd(ret as RawFd) };
+        }
+        let e = io::Error::last_os_error();
+        if !matches!(e.raw_os_error(), Some(libc::EAGAIN) | Some(libc::EINTR)) {
+            return Err(e);
+        }
+    };
+    let path = std::fs::read_link(format!("/proc/self/fd/{}", fd.as_raw_fd()))?;
+    Ok((fd, path))
+}
+
+/// Whether `e` from [`open_dir_beneath`] means the path left the root or
+/// went through a symlink (EXDEV / ELOOP), not that it is missing or bad.
+pub fn is_escape(e: &io::Error) -> bool {
+    matches!(e.raw_os_error(), Some(libc::EXDEV) | Some(libc::ELOOP))
+}
+
 /// What `ExportRoot::statvfs` reports.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct FsSpace {
@@ -103,17 +156,15 @@ impl ExportRoot {
     /// paths beneath it (openat2, Linux >= 5.6). An export is refused
     /// without it: there is no other race-free way to keep ops inside it.
     pub fn open(path: &Path) -> io::Result<Self> {
-        let c = cstr(path.as_os_str().as_bytes())?;
-        let fd = unsafe {
-            libc::open(c.as_ptr(), libc::O_PATH | libc::O_DIRECTORY | libc::O_CLOEXEC)
-        };
-        if fd < 0 {
-            return Err(io::Error::last_os_error());
-        }
-        let root = ExportRoot {
-            path: path.to_path_buf(),
-            fd: Ok(unsafe { OwnedFd::from_raw_fd(fd) }),
-        };
+        Self::from_fd(open_dir(path)?, path.to_path_buf())
+    }
+
+    /// An export root on a directory fd already opened (and checked) by
+    /// the caller, e.g. by [`open_dir_beneath`] for an API-added export
+    /// (#150): the export is that directory, whatever `path` names by the
+    /// time it is used. `path` is for messages and the API only.
+    pub fn from_fd(fd: OwnedFd, path: PathBuf) -> io::Result<Self> {
+        let root = ExportRoot { path, fd: Ok(fd) };
         match root.open_fd(".", libc::O_PATH | libc::O_DIRECTORY, 0) {
             Ok(_) => Ok(root),
             Err(e) if e.raw_os_error() == Some(libc::ENOSYS) => Err(io::Error::new(
