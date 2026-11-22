@@ -494,6 +494,7 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       → 7 KiB; 1 KiB session → REP_TOO_BIG. Done: 7b21518, d973ac5;
       `sc-build 'cargo test --workspace --locked && cargo clippy --workspace
       --all-targets --locked -- -D warnings'` green (707 tests, 0 warnings,
-      job 512b598d6e); #139 closed; image requested.
+      job 512b598d6e); #139 closed; golden-nextnfs-ccc00d9eccb0, release
+      request stormcos#1506.
       (#133 still waits on the owner's handle-design choice.)
 
