@@ -507,6 +507,7 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       under CARGO_MANIFEST_DIR, xattrs asserted), times keep every bit.
       Done: 45c0927; `sc-build 'cargo test --workspace --locked && cargo
       clippy --workspace --all-targets --locked -- -D warnings'` green (710
-      tests, 0 warnings, job 13f9ed5b1f); #148 closed; image requested.
+      tests, 0 warnings, job 13f9ed5b1f); #148 closed;
+      golden-nextnfs-93076b3c9cc5, release request stormcos#1506.
       (#133 still waits on the owner.)
 
