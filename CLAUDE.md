@@ -483,7 +483,7 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       clippy --workspace --all-targets --locked -- -D warnings'` green (704
       tests, 0 warnings, job 9157ae9252); #138, #147 closed;
       golden-nextnfs-de25839a5d3c, release request stormcos#1506.
-- [ ] 2026-11-21 — #139 (P1, review finding b6821b2ae0be on op_read.rs):
+- [x] 2026-11-21 — #139 (P1, review finding b6821b2ae0be on op_read.rs):
       READ buffer sized from the client's u32 count. Fix: `server::MAX_READ`
       (1 MiB, also the maxread attr everywhere), `op_read::read_limit` =
       min(MAX_READ, session ca_maxresponsesize − READ_REPLY_OVERHEAD 1 KiB)
@@ -491,6 +491,9 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       charge for READ capped at MAX_READ. New
       `SessionManager::fore_channel_attrs`. Tests: count u32::MAX on a
       2 MiB+100 file → 1 MiB, 1 MiB, 100 (eof), data checked; 8 KiB session
-      → 7 KiB; 1 KiB session → REP_TOO_BIG. Next: sc-build, close, image.
+      → 7 KiB; 1 KiB session → REP_TOO_BIG. Done: 7b21518, d973ac5;
+      `sc-build 'cargo test --workspace --locked && cargo clippy --workspace
+      --all-targets --locked -- -D warnings'` green (707 tests, 0 warnings,
+      job 512b598d6e); #139 closed; image requested.
       (#133 still waits on the owner's handle-design choice.)
 
