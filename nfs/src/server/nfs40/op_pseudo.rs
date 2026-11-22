@@ -156,7 +156,7 @@ pub fn pseudo_root_getattr(
             }
             FileAttr::Maxread => {
                 answer_attrs.push(FileAttr::Maxread);
-                attrs.push(FileAttrValue::Maxread(1048576));
+                attrs.push(FileAttrValue::Maxread(crate::server::MAX_READ as u64));
             }
             FileAttr::Maxwrite => {
                 answer_attrs.push(FileAttr::Maxwrite);
@@ -356,7 +356,7 @@ fn pseudo_export_entry_attrs(
             }
             FileAttr::Maxread => {
                 answer_attrs.push(FileAttr::Maxread);
-                attrs.push(FileAttrValue::Maxread(1048576));
+                attrs.push(FileAttrValue::Maxread(crate::server::MAX_READ as u64));
             }
             FileAttr::Maxwrite => {
                 answer_attrs.push(FileAttr::Maxwrite);

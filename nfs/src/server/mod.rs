@@ -1,4 +1,8 @@
 pub mod clientmanager;
+
+/// Largest READ the server answers, in data bytes: advertised as the
+/// `maxread` attribute; a READ asking for more gets a short read (#139).
+pub const MAX_READ: u32 = 1_048_576;
 pub mod createattrs;
 pub mod export_manager;
 pub mod filemanager;

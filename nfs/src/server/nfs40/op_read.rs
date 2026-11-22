@@ -7,6 +7,28 @@ use tracing::{debug, error};
 use crate::server::{operation::NfsOperation, request::NfsRequest, response::NfsOpResponse};
 use nextnfs_proto::nfs4_proto::{NfsResOp4, NfsStat4, Read4args, Read4res, Read4resok};
 
+/// Reply bytes a READ's data leaves for everything else in an NFSv4.1
+/// reply: the RPC reply header and verifier (a krb5 MIC included), the
+/// COMPOUND header and tag, SEQUENCE's and PUTFH's results and READ's own
+/// header come to a few hundred bytes. Linux sizes its rsize the same way
+/// (max response size minus its overhead, rounded down to a page).
+pub const READ_REPLY_OVERHEAD: u32 = 1024;
+
+/// The most data bytes this READ may return (#139, finding b6821b2ae0be):
+/// the advertised `maxread`, and in an NFSv4.1 session the negotiated
+/// `ca_maxresponsesize` less [`READ_REPLY_OVERHEAD`]. A READ asking for
+/// more gets a (legal) short read, so its buffer never comes from the
+/// client's 32-bit count alone.
+pub async fn read_limit(request: &NfsRequest<'_>) -> u32 {
+    let mut limit = crate::server::MAX_READ;
+    if let (Some(sessions), Some(id)) = (request.session_manager(), request.session_id.as_ref()) {
+        if let Some(attrs) = sessions.fore_channel_attrs(id).await {
+            limit = limit.min(attrs.max_response_size.saturating_sub(READ_REPLY_OVERHEAD));
+        }
+    }
+    limit
+}
+
 #[async_trait]
 impl NfsOperation for Read4args {
     async fn execute<'a>(&self, request: NfsRequest<'a>) -> NfsOpResponse<'a> {
@@ -27,6 +49,16 @@ impl NfsOperation for Read4args {
             }
         };
 
+        let limit = read_limit(&request).await;
+        if limit == 0 && self.count > 0 {
+            // The session's response size leaves no room for any data.
+            return NfsOpResponse {
+                request,
+                result: None,
+                status: NfsStat4::Nfs4errRepTooBig,
+            };
+        }
+
         // Use VFS open_file
         match filehandle.file.open_file() {
             Ok(mut rfile) => {
@@ -46,9 +78,10 @@ impl NfsOperation for Read4args {
                     };
                 }
 
-                // Allocate buffer — cap at remaining bytes to avoid oversized alloc
+                // Allocate the buffer: at most the read limit (#139) and the
+                // bytes left in the file.
                 let remaining = file_size.saturating_sub(self.offset);
-                let read_size = (self.count as u64).min(remaining) as usize;
+                let read_size = (self.count.min(limit) as u64).min(remaining) as usize;
                 let mut buffer = vec![0u8; read_size];
 
                 let bytes_read = match rfile.read(&mut buffer) {
@@ -347,5 +380,120 @@ mod tests {
         } else {
             panic!("Expected Read4res::Resok4");
         }
+    }
+
+    /// A request whose current filehandle is `name`, holding `len` bytes
+    /// (a repeating pattern, so offsets can be checked).
+    async fn request_with_file(name: &str, len: usize) -> crate::server::request::NfsRequest<'static> {
+        use std::io::Write;
+        let mut request = create_nfs40_server_with_root_fh(None).await;
+        let root = request.current_filehandle().unwrap().file.clone();
+        root.join(name).unwrap().create_file().unwrap();
+        {
+            let mut f = root.join(name).unwrap().append_file().unwrap();
+            let data: Vec<u8> = (0..len).map(|i| (i % 251) as u8).collect();
+            f.write_all(&data).unwrap();
+        }
+        let fh = request
+            .file_manager()
+            .get_filehandle_for_path(name.to_string())
+            .await
+            .unwrap();
+        request.set_filehandle(fh);
+        request
+    }
+
+    /// The data and eof of a successful READ result.
+    fn read_data(
+        status: NfsStat4,
+        result: Option<crate::server::nfs40::NfsResOp4>,
+    ) -> (Vec<u8>, bool) {
+        use crate::server::nfs40::{NfsResOp4, Read4res};
+        assert_eq!(status, NfsStat4::Nfs4Ok);
+        match result {
+            Some(NfsResOp4::Opread(Read4res::Resok4(r))) => (r.data, r.eof),
+            other => panic!("expected READ resok, got {:?}", other),
+        }
+    }
+
+    /// #139, finding b6821b2ae0be: a READ with count 0xffffffff on a file
+    /// bigger than maxread returns a short read of MAX_READ bytes (not a
+    /// 4 GiB buffer), eof false; the next READ continues where it stopped
+    /// and the last one has eof.
+    #[tokio::test]
+    async fn test_read_huge_count_is_capped_at_maxread() {
+        use crate::server::MAX_READ;
+        let len = 2 * MAX_READ as usize + 100;
+        let mut request = request_with_file("big.bin", len).await;
+        let mut offset = 0u64;
+        let mut chunks = Vec::new();
+        loop {
+            let args = Read4args {
+                stateid: Stateid4 { seqid: 0, other: [0u8; 12] },
+                offset,
+                count: u32::MAX,
+            };
+            let response = args.execute(request).await;
+            let (data, eof) = read_data(response.status, response.result);
+            request = response.request;
+            assert!(data.len() <= MAX_READ as usize);
+            assert!(data.iter().enumerate().all(|(i, b)| *b == ((offset as usize + i) % 251) as u8));
+            offset += data.len() as u64;
+            chunks.push(data.len());
+            if eof {
+                break;
+            }
+        }
+        assert_eq!(chunks, vec![MAX_READ as usize, MAX_READ as usize, 100]);
+    }
+
+    /// In an NFSv4.1 session the READ also fits the negotiated
+    /// `ca_maxresponsesize` (less READ_REPLY_OVERHEAD); a session whose
+    /// response size leaves no room for data answers REP_TOO_BIG.
+    #[tokio::test]
+    async fn test_read_fits_session_response_size() {
+        use super::READ_REPLY_OVERHEAD;
+        use crate::server::nfs41::ChannelAttrs;
+        let mut request = request_with_file("s.bin", 100_000).await;
+        let sessions = request.session_manager().unwrap().clone();
+        let small = sessions
+            .create_session_with(
+                1,
+                1,
+                ChannelAttrs { max_response_size: 8192, ..ChannelAttrs::default() },
+            )
+            .await;
+        request.session_id = Some(small.id);
+        let args = Read4args {
+            stateid: Stateid4 { seqid: 0, other: [0u8; 12] },
+            offset: 0,
+            count: 65536,
+        };
+        let response = args.execute(request).await;
+        let mut request = response.request;
+        let (data, eof) = read_data(response.status, response.result);
+        assert_eq!(data.len(), (8192 - READ_REPLY_OVERHEAD) as usize);
+        assert!(!eof);
+
+        let tiny = sessions
+            .create_session_with(
+                1,
+                1,
+                ChannelAttrs { max_response_size: READ_REPLY_OVERHEAD, ..ChannelAttrs::default() },
+            )
+            .await;
+        request.session_id = Some(tiny.id);
+        let response = args.execute(request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4errRepTooBig);
+        // count 0 is still a legal empty read.
+        let zero = Read4args { count: 0, ..args };
+        let response = zero.execute(response.request).await;
+        assert_eq!(response.status, NfsStat4::Nfs4Ok);
+    }
+
+    /// The advertised maxread is MAX_READ.
+    #[test]
+    fn test_max_read_is_one_mib() {
+        assert_eq!(crate::server::MAX_READ, 1 << 20);
     }
 }

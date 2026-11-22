@@ -334,6 +334,13 @@ impl SessionManager {
         Ok(res)
     }
 
+    /// The fore-channel attributes negotiated for a session (no copy of
+    /// its slots), or None for an unknown session.
+    pub async fn fore_channel_attrs(&self, id: &SessionId) -> Option<ChannelAttrs> {
+        let sessions = self.sessions.read().await;
+        sessions.get(id).map(|s| s.fore_channel_attrs.clone())
+    }
+
     /// Look up a session by ID (SEQUENCE).
     pub async fn get_session(&self, id: &SessionId) -> Option<Session> {
         let sessions = self.sessions.read().await;

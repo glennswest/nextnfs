@@ -677,10 +677,11 @@ impl NFS40Server {
                     }
 
                     // QoS rate limit check — if rate exceeded, return NFS4ERR_DELAY.
-                    // READ (requested count) and WRITE (data length) are also
-                    // charged against max_bytes_per_sec (#90).
+                    // READ (requested count, at most what one READ can return,
+                    // #139) and WRITE (data length) are also charged against
+                    // max_bytes_per_sec (#90).
                     let op_bytes = match &arg {
-                        NfsArgOp::Opread(a) => a.count as u64,
+                        NfsArgOp::Opread(a) => a.count.min(crate::server::MAX_READ) as u64,
                         NfsArgOp::Opwrite(a) => a.data.len() as u64,
                         _ => 0,
                     };

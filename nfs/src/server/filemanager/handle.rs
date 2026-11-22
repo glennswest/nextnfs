@@ -1018,7 +1018,7 @@ impl FileManagerHandle {
                     answer_attrs.push(FileAttr::Maxfilesize);
                 }
                 FileAttr::Maxread => {
-                    attrs.push(FileAttrValue::Maxread(1048576));
+                    attrs.push(FileAttrValue::Maxread(crate::server::MAX_READ as u64));
                     answer_attrs.push(FileAttr::Maxread);
                 }
                 FileAttr::Maxwrite => {
