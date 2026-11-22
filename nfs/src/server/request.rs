@@ -52,6 +52,10 @@ pub struct NfsRequest<'a> {
     pub slot_claim: Option<SlotClaim>,
     // Set by SEQUENCE when the COMPOUND is a retry of the slot's last request
     pub sequence_replay: Option<SequenceReplay>,
+    /// Bytes the COMPOUND reply still has for this op's result in an
+    /// NFSv4.1 session (set by the COMPOUND loop from
+    /// `ca_maxresponsesize`, #149); None outside a session.
+    pub reply_room: Option<usize>,
     // RPC auth credentials from the calling client
     auth_cred: Option<OpaqueAuth>,
     // Security flavour of the call (AUTH_SYS/AUTH_NONE = sys, or krb5*)
@@ -94,6 +98,7 @@ impl<'a> NfsRequest<'a> {
             sequence_slotid: None,
             slot_claim: None,
             sequence_replay: None,
+            reply_room: None,
             auth_cred: None,
             sec_flavor: super::export_manager::SecFlavor::Sys,
         }

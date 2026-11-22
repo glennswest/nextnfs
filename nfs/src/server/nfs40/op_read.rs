@@ -8,20 +8,32 @@ use crate::server::{operation::NfsOperation, request::NfsRequest, response::NfsO
 use nextnfs_proto::nfs4_proto::{NfsResOp4, NfsStat4, Read4args, Read4res, Read4resok};
 
 /// Reply bytes a READ's data leaves for everything else in an NFSv4.1
-/// reply: the RPC reply header and verifier (a krb5 MIC included), the
-/// COMPOUND header and tag, SEQUENCE's and PUTFH's results and READ's own
-/// header come to a few hundred bytes. Linux sizes its rsize the same way
-/// (max response size minus its overhead, rounded down to a page).
+/// reply when the COMPOUND's own budget is not known (a READ run outside
+/// the COMPOUND loop): the RPC reply header and verifier (a krb5 MIC
+/// included), the COMPOUND header and tag, SEQUENCE's and PUTFH's results
+/// and READ's own header come to a few hundred bytes. Linux sizes its
+/// rsize the same way (max response size minus its overhead, rounded down
+/// to a page).
 pub const READ_REPLY_OVERHEAD: u32 = 1024;
 
-/// The most data bytes this READ may return (#139, finding b6821b2ae0be):
-/// the advertised `maxread`, and in an NFSv4.1 session the negotiated
-/// `ca_maxresponsesize` less [`READ_REPLY_OVERHEAD`]. A READ asking for
-/// more gets a (legal) short read, so its buffer never comes from the
-/// client's 32-bit count alone.
+/// XDR bytes of a READ result around its data: opcode, status, eof and
+/// the data length.
+pub const READ_RESULT_HEADER: usize = 16;
+
+/// The most data bytes this READ may return: the advertised `maxread`
+/// (#139, finding b6821b2ae0be), and in an NFSv4.1 session what is left
+/// of the COMPOUND reply's `ca_maxresponsesize` after the results before
+/// it (`NfsRequest::reply_room`, #149, finding 584f6c79c1f1) less READ's
+/// own header, rounded down to a multiple of 4 (XDR padding). A READ
+/// asking for more gets a (legal) short read, so its buffer never comes
+/// from the client's 32-bit count alone and a COMPOUND of several READs
+/// never adds up to more than the session allows.
 pub async fn read_limit(request: &NfsRequest<'_>) -> u32 {
     let mut limit = crate::server::MAX_READ;
-    if let (Some(sessions), Some(id)) = (request.session_manager(), request.session_id.as_ref()) {
+    if let Some(room) = request.reply_room {
+        let data = room.saturating_sub(READ_RESULT_HEADER) & !3;
+        limit = limit.min(data.min(u32::MAX as usize) as u32);
+    } else if let (Some(sessions), Some(id)) = (request.session_manager(), request.session_id.as_ref()) {
         if let Some(attrs) = sessions.fore_channel_attrs(id).await {
             limit = limit.min(attrs.max_response_size.saturating_sub(READ_REPLY_OVERHEAD));
         }

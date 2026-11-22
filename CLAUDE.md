@@ -511,3 +511,13 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       golden-nextnfs-93076b3c9cc5, release request stormcos#1506.
       (#133 still waits on the owner.)
 
+- [ ] 2026-11-21 — #149 (P1, review finding 584f6c79c1f1 on op_read.rs):
+      each READ capped at ca_maxresponsesize − 1 KiB on its own, so two
+      READs (or a long tag) overflowed the session's reply size. Fix:
+      `nfs40::ReplyBudget` in the COMPOUND loop once SEQUENCE ran
+      (session size − RPC_REPLY_OVERHEAD 256 − COMPOUND header − every
+      result's XDR length); ops see `NfsRequest::reply_room`; READ caps
+      data to room − 16 (multiple of 4); a result that does not fit →
+      REP_TOO_BIG, COMPOUND stops. Tests: two READs in 16 KiB, 3000-byte
+      tag in 8 KiB, READs past the budget, LOOKUP past it, budget unit.
+      No cargo on dev; first compile is the sc-build.

@@ -43,6 +43,7 @@ const OP_RESTOREFH: u32 = 31;
 const OP_SECINFO: u32 = 33;
 const OP_SETATTR: u32 = 34;
 const OP_SECINFO_NO_NAME: u32 = 52;
+const OP_SEQUENCE: u32 = 53;
 
 /// The result a failed op puts in the COMPOUND reply (#131, finding
 /// 45e86120ffb7). Every op that runs contributes one, failed or not, and
@@ -112,6 +113,69 @@ pub(crate) fn failed_result(op: u32, status: NfsStat4, result: Option<NfsResOp4>
             attrsset: Attrlist4(vec![]),
         }),
         _ => NfsResOp4::OpError { op, status },
+    }
+}
+
+/// Reply bytes kept back from `ca_maxresponsesize` for what is around the
+/// COMPOUND (#149): the RPC record mark and reply header (28 bytes), the
+/// reply verifier (an RPCSEC_GSS MIC is at most 40), krb5i/krb5p framing
+/// of the body (length, sequence number, MIC or Wrap token: under 100),
+/// and the 8 bytes an NFS4ERR_REP_TOO_BIG result may need when the op
+/// that does not fit is replaced by it.
+pub const RPC_REPLY_OVERHEAD: usize = 256;
+
+/// XDR length of `value` (counted, not buffered).
+pub(crate) fn xdr_len<T: serde::Serialize + ?Sized>(value: &T) -> usize {
+    struct Count(usize);
+    impl std::io::Write for Count {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0 += buf.len();
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut count = Count(0);
+    match nextnfs_proto::xdr::to_writer(&mut count, value) {
+        Ok(()) => count.0,
+        Err(_) => usize::MAX / 2,
+    }
+}
+
+/// The NFSv4.1 COMPOUND reply budget (#149, finding 584f6c79c1f1): the
+/// session's `ca_maxresponsesize` less [`RPC_REPLY_OVERHEAD`], with the
+/// COMPOUND header (status, tag, result count) and every result so far
+/// counted against it. Ops see what is left as `NfsRequest::reply_room`
+/// (READ caps its data to it); a result that does not fit is replaced by
+/// NFS4ERR_REP_TOO_BIG (RFC 8881 §2.10.6.4) and the COMPOUND stops.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ReplyBudget {
+    limit: usize,
+    used: usize,
+}
+
+impl ReplyBudget {
+    pub(crate) fn new(max_response_size: u32, tag: &str) -> Self {
+        ReplyBudget {
+            limit: (max_response_size as usize).saturating_sub(RPC_REPLY_OVERHEAD),
+            used: 4 + 4 + tag.len().div_ceil(4) * 4 + 4,
+        }
+    }
+
+    /// Bytes left for the next result.
+    pub(crate) fn room(&self) -> usize {
+        self.limit.saturating_sub(self.used)
+    }
+
+    /// Count `res`; false (nothing counted) when it does not fit.
+    pub(crate) fn take(&mut self, res: &NfsResOp4) -> bool {
+        let size = xdr_len(res);
+        if self.used + size > self.limit {
+            return false;
+        }
+        self.used += size;
+        true
     }
 }
 
@@ -648,6 +712,8 @@ impl NFS40Server {
                 let op_count = args.argarray.len();
                 let opcodes: Vec<u32> = args.argarray.iter().map(op_code).collect();
                 let placement = sequence_placement_error(args.minor_version, &opcodes);
+                // Known once this COMPOUND's SEQUENCE has run (#149).
+                let mut budget: Option<ReplyBudget> = None;
                 for (op_idx, arg) in args.argarray.into_iter().enumerate() {
                     let operation = op_name(&arg);
                     debug!(op = operation, idx = op_idx, total = op_count, "compound: dispatching op");
@@ -826,6 +892,7 @@ impl NFS40Server {
 
                     let opnum = op_code(&arg);
                     let export_before = request.current_export_id();
+                    request.reply_room = budget.map(|b| b.room());
                     let mut response = match arg {
                         // undefined ops
                         NfsArgOp::OpUndef0 | NfsArgOp::OpUndef1 | NfsArgOp::OpUndef2 => {
@@ -1036,14 +1103,42 @@ impl NFS40Server {
                     // op's result is made by `failed_result`, also when the
                     // handler returned none; a success without a result is
                     // a server bug, answered NFS4ERR_SERVERFAULT.
-                    match (last_status.clone(), res) {
-                        (NfsStat4::Nfs4Ok, Some(res)) => resarray.push(res),
+                    let res = match (last_status.clone(), res) {
+                        (NfsStat4::Nfs4Ok, Some(res)) => res,
                         (NfsStat4::Nfs4Ok, None) => {
                             info!(op = operation, "nfs_audit: op succeeded without a result");
                             last_status = NfsStat4::Nfs4errServerfault;
-                            resarray.push(failed_result(opnum, NfsStat4::Nfs4errServerfault, None));
+                            failed_result(opnum, NfsStat4::Nfs4errServerfault, None)
                         }
-                        (status, res) => resarray.push(failed_result(opnum, status, res)),
+                        (status, res) => failed_result(opnum, status, res),
+                    };
+                    // The whole reply stays within the session's
+                    // ca_maxresponsesize (#149): the budget starts with the
+                    // SEQUENCE that opened it, and a result that would
+                    // overflow it is replaced by NFS4ERR_REP_TOO_BIG.
+                    if op_idx == 0 && opnum == OP_SEQUENCE && last_status == NfsStat4::Nfs4Ok {
+                        if let (Some(sessions), Some(id)) =
+                            (response.request.session_manager(), response.request.session_id.as_ref())
+                        {
+                            if let Some(attrs) = sessions.fore_channel_attrs(id).await {
+                                let mut b = ReplyBudget::new(attrs.max_response_size, &reply_tag);
+                                // SEQUENCE's own result is counted, never refused.
+                                let _ = b.take(&res);
+                                budget = Some(b);
+                            }
+                        }
+                        resarray.push(res);
+                    } else if budget.as_mut().is_some_and(|b| !b.take(&res)) {
+                        info!(
+                            client = %response.request.client_addr(),
+                            op = operation,
+                            status = "Nfs4errRepTooBig",
+                            "nfs_audit: result does not fit the session's ca_maxresponsesize"
+                        );
+                        last_status = NfsStat4::Nfs4errRepTooBig;
+                        resarray.push(failed_result(opnum, NfsStat4::Nfs4errRepTooBig, None));
+                    } else {
+                        resarray.push(res);
                     }
                     match last_status {
                         NfsStat4::Nfs4Ok => {}
@@ -1293,6 +1388,164 @@ mod tests {
         assert_eq!(retry.status, NfsStat4::Nfs4errSequencePos);
         assert_eq!(retry.resarray, res.resarray);
         assert!(dir.path().join("f").exists(), "the retry ran REMOVE again");
+    }
+
+    /// Writable export with a 100 000-byte file `big`, its root as the
+    /// current filehandle, and an NFSv4.1 session whose
+    /// ca_maxresponsesize is `max`.
+    async fn v41_request_max(dir: &std::path::Path, max: u32) -> (NfsRequest<'static>, [u8; 16]) {
+        use crate::server::nfs41::ChannelAttrs;
+        let data: Vec<u8> = (0..100_000u32).map(|i| (i % 251) as u8).collect();
+        std::fs::write(dir.join("big"), &data).unwrap();
+        let mut request = request_on_export(false, dir).await;
+        let root = request.file_manager().get_root_filehandle().await.unwrap();
+        request.set_filehandle(root);
+        let session = request
+            .session_manager()
+            .unwrap()
+            .create_session_with(
+                1,
+                4,
+                ChannelAttrs { max_response_size: max, ..ChannelAttrs::default() },
+            )
+            .await;
+        (request, session.id)
+    }
+
+    fn lookup_big() -> NfsArgOp {
+        NfsArgOp::Oplookup(Lookup4args { objname: "big".to_string() })
+    }
+
+    fn read_op(offset: u64, count: u32) -> NfsArgOp {
+        NfsArgOp::Opread(Read4args {
+            stateid: Stateid4 { seqid: 0, other: [0u8; 12] },
+            offset,
+            count,
+        })
+    }
+
+    /// Bytes of the whole RPC reply carrying `res` with an AUTH_NONE
+    /// verifier: record mark, xid, msg type, reply stat, verifier
+    /// (flavour + length), accept stat, then the COMPOUND.
+    fn wire_len(res: &Compound4res) -> usize {
+        4 + 4 + 4 + 4 + 8 + 4 + xdr_len(res)
+    }
+
+    fn read_lens(res: &Compound4res) -> Vec<usize> {
+        res.resarray
+            .iter()
+            .filter_map(|r| match r {
+                NfsResOp4::Opread(Read4res::Resok4(ok)) => Some(ok.data.len()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// #149, finding 584f6c79c1f1: SEQUENCE + LOOKUP + two READs of 16 KiB
+    /// each in a 16 KiB session. Each READ used to get the session size
+    /// less a fixed 1 KiB, so the reply was ~30 KiB. Now the second READ
+    /// gets what the first left, and the whole reply fits.
+    #[tokio::test]
+    async fn test_two_reads_fit_session_response_size() {
+        let max = 16384u32;
+        let dir = tempfile::tempdir().unwrap();
+        let (request, sid) = v41_request_max(dir.path(), max).await;
+        let server = NFS40Server::new();
+        let msg = v41_compound("two", sid, 1, false, vec![lookup_big(), read_op(0, 16384), read_op(16384, 16384)]);
+        let (_request, reply) = server.compound(msg, request).await;
+        let res = compound_res(reply);
+        assert_eq!(res.status, NfsStat4::Nfs4Ok);
+        let lens = read_lens(&res);
+        assert_eq!(lens.len(), 2);
+        assert!(lens[0] > 0 && lens[1] > 0, "{:?}", lens);
+        assert!(lens[0] + lens[1] < max as usize);
+        assert!(wire_len(&res) <= max as usize, "reply {} > {}", wire_len(&res), max);
+        // The data is the file's, from each READ's offset.
+        for (r, off) in res.resarray.iter().filter_map(|r| match r {
+            NfsResOp4::Opread(Read4res::Resok4(ok)) => Some(ok),
+            _ => None,
+        }).zip([0usize, 16384]) {
+            assert!(r.data.iter().enumerate().all(|(i, b)| *b == ((off + i) % 251) as u8));
+        }
+    }
+
+    /// A long tag counts too: with a 3000-byte tag in an 8 KiB session one
+    /// READ of 8 KiB still leaves the reply within the session size.
+    #[tokio::test]
+    async fn test_long_tag_counts_against_session_response_size() {
+        let max = 8192u32;
+        let dir = tempfile::tempdir().unwrap();
+        let (request, sid) = v41_request_max(dir.path(), max).await;
+        let server = NFS40Server::new();
+        let tag = "t".repeat(3000);
+        let msg = v41_compound(&tag, sid, 1, false, vec![lookup_big(), read_op(0, 8192)]);
+        let (_request, reply) = server.compound(msg, request).await;
+        let res = compound_res(reply);
+        assert_eq!(res.status, NfsStat4::Nfs4Ok);
+        let lens = read_lens(&res);
+        assert_eq!(lens.len(), 1);
+        assert!(lens[0] > 0 && lens[0] < 8192 - 3000);
+        assert!(wire_len(&res) <= max as usize, "reply {} > {}", wire_len(&res), max);
+    }
+
+    /// Many READs: each later one gets less, the last ones get
+    /// REP_TOO_BIG once nothing is left, and the reply never overflows.
+    #[tokio::test]
+    async fn test_reads_past_the_budget_are_rep_too_big() {
+        let max = 4096u32;
+        let dir = tempfile::tempdir().unwrap();
+        let (request, sid) = v41_request_max(dir.path(), max).await;
+        let server = NFS40Server::new();
+        let ops = vec![lookup_big(), read_op(0, 4096), read_op(4096, 4096), read_op(8192, 4096)];
+        let msg = v41_compound("many", sid, 1, false, ops);
+        let (_request, reply) = server.compound(msg, request).await;
+        let res = compound_res(reply);
+        assert_eq!(res.status, NfsStat4::Nfs4errRepTooBig);
+        assert_eq!(
+            res.resarray.last(),
+            Some(&NfsResOp4::OpError { op: 25, status: NfsStat4::Nfs4errRepTooBig })
+        );
+        assert!(wire_len(&res) <= max as usize, "reply {} > {}", wire_len(&res), max);
+    }
+
+    /// A non-READ result that does not fit is replaced by REP_TOO_BIG: the
+    /// session size leaves room for the COMPOUND header, the tag and
+    /// SEQUENCE's result only, so LOOKUP (8 bytes) fails.
+    #[tokio::test]
+    async fn test_result_past_the_budget_is_rep_too_big() {
+        let dir = tempfile::tempdir().unwrap();
+        let tag = "x".repeat(100);
+        // SEQUENCE4resok: opcode, status, sessionid 16, 5 words.
+        let seq_len = 4 + 4 + 16 + 5 * 4;
+        let max = (RPC_REPLY_OVERHEAD + 12 + 100 + seq_len + 4) as u32;
+        let (request, sid) = v41_request_max(dir.path(), max).await;
+        let server = NFS40Server::new();
+        let msg = v41_compound(&tag, sid, 1, false, vec![lookup_big(), read_op(0, 10)]);
+        let (_request, reply) = server.compound(msg, request).await;
+        let res = compound_res(reply);
+        assert_eq!(res.status, NfsStat4::Nfs4errRepTooBig);
+        assert_eq!(res.resarray.len(), 2);
+        assert!(matches!(res.resarray[0], NfsResOp4::Opsequence(Sequence4res::Resok4(_))));
+        assert_eq!(res.resarray[1], NfsResOp4::OpError { op: 15, status: NfsStat4::Nfs4errRepTooBig });
+    }
+
+    #[test]
+    fn test_reply_budget_counts_header_and_results() {
+        let mut b = ReplyBudget::new(RPC_REPLY_OVERHEAD as u32 + 100, "abcde");
+        // status + tag (4 + 8 padded) + count = 20.
+        assert_eq!(b.room(), 80);
+        let putfh = NfsResOp4::OpError { op: 22, status: NfsStat4::Nfs4Ok };
+        assert_eq!(xdr_len(&putfh), 8);
+        assert!(b.take(&putfh));
+        assert_eq!(b.room(), 72);
+        let big = NfsResOp4::Opread(Read4res::Resok4(Read4resok { eof: false, data: vec![0; 64] }));
+        assert!(!b.take(&big), "16 + 64 > 72");
+        assert_eq!(b.room(), 72);
+        let fits = NfsResOp4::Opread(Read4res::Resok4(Read4resok { eof: false, data: vec![0; 56] }));
+        assert!(b.take(&fits));
+        assert_eq!(b.room(), 0);
+        // Below the overhead: no room at all.
+        assert_eq!(ReplyBudget::new(10, "").room(), 0);
     }
 
     fn remove_f() -> NfsArgOp {
