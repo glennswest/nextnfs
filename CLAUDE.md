@@ -524,3 +524,7 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       does not serialize alone (the result array writes it as (op,
       status)), so it measured usize::MAX/2 and every op after SEQUENCE
       got REP_TOO_BIG; now `result_len` measures as the array encodes.
+      Build on e0e7726 (jobs d7ef84c49a, 2fe80a3ec8): only
+      test_two_reads_fit_… failed (#152): its first READ asked 16 KiB in
+      a 16 KiB session, took all the room, second → REP_TOO_BIG as
+      designed. Test now reads 8 KiB + 8 KiB (old code: 16 KiB of data).

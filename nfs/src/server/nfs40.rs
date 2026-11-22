@@ -1455,30 +1455,31 @@ mod tests {
             .collect()
     }
 
-    /// #149, finding 584f6c79c1f1: SEQUENCE + LOOKUP + two READs of 16 KiB
-    /// each in a 16 KiB session. Each READ used to get the session size
-    /// less a fixed 1 KiB, so the reply was ~30 KiB. Now the second READ
-    /// gets what the first left, and the whole reply fits.
+    /// #149, finding 584f6c79c1f1: SEQUENCE + LOOKUP + two READs of 8 KiB
+    /// each in a 16 KiB session. Each READ used to be capped on its own at
+    /// the session size less 1 KiB, so both returned 8 KiB and the reply
+    /// passed 16 KiB. Now the first gets its 8 KiB, the second a short
+    /// read of what is left, and the whole reply fits.
     #[tokio::test]
     async fn test_two_reads_fit_session_response_size() {
         let max = 16384u32;
         let dir = tempfile::tempdir().unwrap();
         let (request, sid) = v41_request_max(dir.path(), max).await;
         let server = NFS40Server::new();
-        let msg = v41_compound("two", sid, 1, false, vec![lookup_big(), read_op(0, 16384), read_op(16384, 16384)]);
+        let msg = v41_compound("two", sid, 1, false, vec![lookup_big(), read_op(0, 8192), read_op(8192, 8192)]);
         let (_request, reply) = server.compound(msg, request).await;
         let res = compound_res(reply);
         assert_eq!(res.status, NfsStat4::Nfs4Ok);
         let lens = read_lens(&res);
         assert_eq!(lens.len(), 2);
-        assert!(lens[0] > 0 && lens[1] > 0, "{:?}", lens);
-        assert!(lens[0] + lens[1] < max as usize);
+        assert_eq!(lens[0], 8192);
+        assert!(lens[1] > 0 && lens[1] < 8192, "{:?}", lens);
         assert!(wire_len(&res) <= max as usize, "reply {} > {}", wire_len(&res), max);
         // The data is the file's, from each READ's offset.
         for (r, off) in res.resarray.iter().filter_map(|r| match r {
             NfsResOp4::Opread(Read4res::Resok4(ok)) => Some(ok),
             _ => None,
-        }).zip([0usize, 16384]) {
+        }).zip([0usize, 8192]) {
             assert!(r.data.iter().enumerate().all(|(i, b)| *b == ((off + i) % 251) as u8));
         }
     }
