@@ -4204,7 +4204,7 @@ mod tests {
         let m = std::fs::metadata(&path).unwrap();
         use std::os::unix::fs::MetadataExt;
         assert_eq!(m.atime() as u32, 0x1234_5678);
-        assert_eq!(m.mtime() as u32, 0x1abc_def0); // top bit cleared
+        assert_eq!(m.mtime() as u32, 0x9abc_def0); // all 32 bits (#148)
 
         // The client's data arrives; the times stay the verifier's (as if the
         // reply was lost before the client's SETATTR of them).
@@ -4235,6 +4235,97 @@ mod tests {
         }
         assert_eq!(std::fs::read(&path).unwrap(), b"data");
         assert_eq!(std::fs::read(export.path().join("old")).unwrap(), b"keep");
+    }
+
+    /// The xattr holding a file's EXCLUSIVE4 verifier, or None.
+    fn verifier_xattr(path: &std::path::Path) -> Option<Vec<u8>> {
+        use std::os::unix::ffi::OsStrExt;
+        let p = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+        let n = std::ffi::CString::new(super::op_open::VERIFIER_XATTR).unwrap();
+        let mut buf = [0u8; 16];
+        let r = unsafe { libc::getxattr(p.as_ptr(), n.as_ptr(), buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
+        (r >= 0).then(|| buf[..r as usize].to_vec())
+    }
+
+    /// An export directory on the build disk (not /tmp, which may be a
+    /// tmpfs without user xattrs), checked to keep user xattrs.
+    fn xattr_export() -> tempfile::TempDir {
+        let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+        let probe = dir.path().join(".probe");
+        std::fs::write(&probe, b"").unwrap();
+        use std::os::unix::ffi::OsStrExt;
+        let p = std::ffi::CString::new(probe.as_os_str().as_bytes()).unwrap();
+        let n = std::ffi::CString::new("user.nextnfs.probe").unwrap();
+        let r = unsafe { libc::setxattr(p.as_ptr(), n.as_ptr(), b"x".as_ptr() as *const libc::c_void, 1, 0) };
+        assert_eq!(r, 0, "user xattrs unsupported under {}: {}", env!("CARGO_MANIFEST_DIR"), std::io::Error::last_os_error());
+        std::fs::remove_file(probe).unwrap();
+        dir
+    }
+
+    async fn exclusive_status<'a>(
+        request: crate::server::request::NfsRequest<'a>,
+        name: &str,
+        v: [u8; 8],
+    ) -> (crate::server::request::NfsRequest<'a>, NfsStat4) {
+        let msg = make_compound(vec![NfsArgOp::Opputrootfh(()), exclusive_open(name, v)]);
+        let (r, reply) = NFS40Server::new().compound(msg, request).await;
+        (r, compound_result(reply).0)
+    }
+
+    /// #148, finding 49b9b67926c7: verifiers that differ only in the top
+    /// bit of each half (which the old times encoding cleared) are
+    /// different creates: the second is NFS4ERR_EXIST, the first still
+    /// retries. All eight bytes are in the xattr.
+    #[tokio::test]
+    async fn test_exclusive4_high_bit_verifiers_do_not_collide() {
+        let export = xattr_export();
+        let v1 = [0x12, 0x34, 0x56, 0x78, 0x1a, 0xbc, 0xde, 0xf0];
+        let mut v2 = v1;
+        v2[0] ^= 0x80;
+        v2[4] ^= 0x80;
+        let request = request_on_export_squash(false, export.path(), SquashMode::None).await;
+        let (request, st) = exclusive_status(request, "x", v1).await;
+        assert_eq!(st, NfsStat4::Nfs4Ok);
+        assert_eq!(verifier_xattr(&export.path().join("x")).as_deref(), Some(&v1[..]));
+        let (request, st) = exclusive_status(request, "x", v2).await;
+        assert_eq!(st, NfsStat4::Nfs4errExist);
+        let (_, st) = exclusive_status(request, "x", v1).await;
+        assert_eq!(st, NfsStat4::Nfs4Ok);
+    }
+
+    /// #148: a retry still matches after the file was read (its atime
+    /// moved, as relatime does on a read) and written, and after a server
+    /// restart (a new export manager and file manager on the same tree).
+    #[tokio::test]
+    async fn test_exclusive4_retry_after_read_and_restart() {
+        let export = xattr_export();
+        let path = export.path().join("y");
+        let v = [0xde, 0xad, 0xbe, 0xef, 0x80, 0x00, 0x00, 0x01];
+        let request = request_on_export_squash(false, export.path(), SquashMode::None).await;
+        let (request, st) = exclusive_status(request, "y", v).await;
+        assert_eq!(st, NfsStat4::Nfs4Ok);
+
+        // A read moves the atime; data is written (mtime moves too).
+        std::fs::write(&path, b"data").unwrap();
+        let _ = std::fs::read(&path).unwrap();
+        let f = std::fs::File::options().write(true).open(&path).unwrap();
+        f.set_times(std::fs::FileTimes::new().set_accessed(std::time::SystemTime::now())).unwrap();
+        drop(f);
+
+        let (request, st) = exclusive_status(request, "y", v).await;
+        assert_eq!(st, NfsStat4::Nfs4Ok);
+        assert_eq!(std::fs::read(&path).unwrap(), b"data");
+        drop(request);
+
+        // Restart: nothing in memory knows the create.
+        let request = request_on_export_squash(false, export.path(), SquashMode::None).await;
+        let (request, st) = exclusive_status(request, "y", v).await;
+        assert_eq!(st, NfsStat4::Nfs4Ok);
+        assert_eq!(std::fs::read(&path).unwrap(), b"data");
+        let mut w = v;
+        w[0] ^= 1;
+        let (_, st) = exclusive_status(request, "y", w).await;
+        assert_eq!(st, NfsStat4::Nfs4errExist);
     }
 
     /// Finding 9c0c932c5136: a handle names an object, not a path. After

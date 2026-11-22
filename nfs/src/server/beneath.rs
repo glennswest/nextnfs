@@ -381,6 +381,27 @@ impl ExportRoot {
         self.set_times(path, atime, mtime)
     }
 
+    /// getxattr(2) `name` of the object at `path` (not through a symlink:
+    /// a symlink is ELOOP) into a buffer of at most `max` bytes. The O_PATH
+    /// fd is read through its /proc entry (fgetxattr refuses O_PATH fds).
+    pub fn get_xattr(&self, path: &str, name: &str, max: usize) -> io::Result<Vec<u8>> {
+        let file = File::from(self.open_path(path)?);
+        if file.metadata()?.file_type().is_symlink() {
+            return Err(io::Error::from_raw_os_error(libc::ELOOP));
+        }
+        let proc = cstr(format!("/proc/self/fd/{}", file.as_raw_fd()).as_bytes())?;
+        let cname = cstr(name.as_bytes())?;
+        let mut buf = vec![0u8; max];
+        let n = unsafe {
+            libc::getxattr(proc.as_ptr(), cname.as_ptr(), buf.as_mut_ptr() as *mut libc::c_void, max)
+        };
+        if n < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        buf.truncate(n as usize);
+        Ok(buf)
+    }
+
     /// truncate(2) the regular file at `path` to `size`.
     pub fn set_len(&self, path: &str, size: u64) -> io::Result<()> {
         self.open_file(path, libc::O_WRONLY | libc::O_NONBLOCK, 0)?.set_len(size)

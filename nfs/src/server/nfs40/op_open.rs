@@ -196,7 +196,19 @@ async fn open_for_writing<'a>(
     } else {
         let flags = libc::O_RDONLY | libc::O_CREAT | libc::O_EXCL;
         match fm.beneath().open_file(&fh_path, flags, attrs.initial_mode(DEFAULT_FILE_MODE)) {
-            Ok(_) => true,
+            Ok(new) => {
+                // EXCLUSIVE4: the verifier goes on the new inode at once,
+                // while the server still owns it with its creation mode.
+                if let Some(v) = verifier {
+                    if let Err(e) = store_verifier_xattr(&new, &v) {
+                        error!("OPEN EXCLUSIVE4 {:?}: storing the verifier: {}", fh_path, e);
+                        drop(new);
+                        let _ = fm.beneath().remove_file(&fh_path);
+                        fail!(io_status(&e));
+                    }
+                }
+                true
+            }
             Err(e) if e.raw_os_error() == Some(libc::EEXIST) => false,
             Err(e) => {
                 debug!("OPEN create {:?}: {}", fh_path, e);
@@ -204,10 +216,12 @@ async fn open_for_writing<'a>(
             }
         }
     };
-    // EXCLUSIVE4 (finding 696ec94aaf26, #140): the verifier is kept in the
-    // new file's atime/mtime, as knfsd does. An existing name is this
-    // client's retry only when it carries the same verifier: then the OPEN
-    // succeeds again (the file is not touched); otherwise NFS4ERR_EXIST.
+    // EXCLUSIVE4 (findings 696ec94aaf26, 49b9b67926c7; #140, #148): the
+    // verifier's eight bytes are kept in the new file's VERIFIER_XATTR (and
+    // in its atime/mtime, which the client then sets with SETATTR). An
+    // existing name is this client's retry only when it carries the same
+    // verifier: then the OPEN succeeds again (the file is not touched);
+    // otherwise NFS4ERR_EXIST.
     let mut exclusive_retry = false;
     if let Some(v) = verifier {
         if fm.vfs_only() {
@@ -217,9 +231,9 @@ async fn open_for_writing<'a>(
                 fail!(NfsStat4::Nfs4errExist);
             }
         } else if !created {
-            match fm.beneath().symlink_metadata(&fh_path) {
-                Ok(m) if m.is_file() && verifier_matches(&m, &v) => exclusive_retry = true,
-                Ok(_) => fail!(NfsStat4::Nfs4errExist),
+            match exclusive_retry_of(fm.beneath(), &fh_path, &v) {
+                Ok(true) => exclusive_retry = true,
+                Ok(false) => fail!(NfsStat4::Nfs4errExist),
                 Err(e) => fail!(io_status(&e)),
             }
         }
@@ -324,19 +338,75 @@ async fn open_for_writing<'a>(
     }
 }
 
-/// The EXCLUSIVE4 verifier as file times: its first four bytes are the
-/// atime seconds, the last four the mtime seconds (top bit cleared, so the
-/// times stay positive), nanoseconds zero.
-fn verifier_times(v: &[u8; 8]) -> (std::time::SystemTime, std::time::SystemTime) {
-    let secs = |b: &[u8]| u64::from(u32::from_be_bytes([b[0], b[1], b[2], b[3]]) & 0x7fff_ffff);
-    let t = |s| std::time::UNIX_EPOCH + std::time::Duration::from_secs(s);
-    (t(secs(&v[0..4])), t(secs(&v[4..8])))
+/// Extended attribute holding an EXCLUSIVE4 create's verifier, all eight
+/// bytes (#148, finding 49b9b67926c7). Reads and writes of the file do not
+/// change it (atime does, under relatime) and it survives a restart.
+pub const VERIFIER_XATTR: &str = "user.nextnfs.verf";
+
+/// Whether `e` says the filesystem keeps no user extended attributes.
+fn xattrs_unsupported(e: &std::io::Error) -> bool {
+    e.raw_os_error() == Some(libc::EOPNOTSUPP)
 }
 
-/// Whether the file's times are the ones `verifier_times` stores for `v`.
-fn verifier_matches(m: &std::fs::Metadata, v: &[u8; 8]) -> bool {
-    let (atime, mtime) = verifier_times(v);
-    m.accessed().ok() == Some(atime) && m.modified().ok() == Some(mtime)
+/// Store `v` as the new file's VERIFIER_XATTR through the descriptor that
+/// created it. A filesystem without user xattrs is not an error: the
+/// verifier is then only in the file times (see `exclusive_retry_of`).
+fn store_verifier_xattr(file: &std::fs::File, v: &[u8; 8]) -> std::io::Result<()> {
+    use std::os::fd::AsRawFd;
+    let name = std::ffi::CString::new(VERIFIER_XATTR).expect("no NUL");
+    let ret = unsafe {
+        libc::fsetxattr(
+            file.as_raw_fd(),
+            name.as_ptr(),
+            v.as_ptr() as *const libc::c_void,
+            v.len(),
+            libc::XATTR_CREATE,
+        )
+    };
+    if ret == 0 {
+        return Ok(());
+    }
+    let e = std::io::Error::last_os_error();
+    if xattrs_unsupported(&e) {
+        tracing::warn!("OPEN EXCLUSIVE4: no user xattrs on this filesystem; the verifier is kept only in the file times");
+        return Ok(());
+    }
+    Err(e)
+}
+
+/// Whether the existing regular file at `path` is an EXCLUSIVE4 create
+/// with verifier `v`: its VERIFIER_XATTR is exactly `v`. A file without
+/// the xattr was not made by an EXCLUSIVE4 create (or by another one) —
+/// unless the filesystem keeps no user xattrs, where the file times are
+/// compared instead (a read can move the atime there).
+fn exclusive_retry_of(
+    root: &crate::server::beneath::ExportRoot,
+    path: &str,
+    v: &[u8; 8],
+) -> std::io::Result<bool> {
+    let m = root.symlink_metadata(path)?;
+    if !m.is_file() {
+        return Ok(false);
+    }
+    match root.get_xattr(path, VERIFIER_XATTR, 16) {
+        Ok(stored) => Ok(stored.as_slice() == v),
+        Err(e) if e.raw_os_error() == Some(libc::ENODATA) => Ok(false),
+        Err(e) if xattrs_unsupported(&e) => {
+            let (atime, mtime) = verifier_times(v);
+            Ok(m.accessed().ok() == Some(atime) && m.modified().ok() == Some(mtime))
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// The EXCLUSIVE4 verifier as file times: its first four bytes are the
+/// atime seconds, the last four the mtime seconds (all 32 bits: a time_t
+/// holds them; clearing the top bit made verifiers collide, #148),
+/// nanoseconds zero.
+fn verifier_times(v: &[u8; 8]) -> (std::time::SystemTime, std::time::SystemTime) {
+    let secs = |b: &[u8]| u64::from(u32::from_be_bytes([b[0], b[1], b[2], b[3]]));
+    let t = |s| std::time::UNIX_EPOCH + std::time::Duration::from_secs(s);
+    (t(secs(&v[0..4])), t(secs(&v[4..8])))
 }
 
 #[async_trait]
@@ -916,5 +986,16 @@ mod tests {
         assert_eq!(status, NfsStat4::Nfs4errInval);
         let (_request, status, _) = open_at_root(request, &root, share_open(b"a", 1, 4, unchecked())).await;
         assert_eq!(status, NfsStat4::Nfs4errInval);
+    }
+
+    /// #148: the times fallback keeps all 32 bits of each half.
+    #[test]
+    fn test_verifier_times_keep_every_bit() {
+        let (a, m) = super::verifier_times(&[0xff, 0xff, 0xff, 0xff, 0x80, 0, 0, 0]);
+        let secs = |t: std::time::SystemTime| t.duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        assert_eq!(secs(a), 0xffff_ffff);
+        assert_eq!(secs(m), 0x8000_0000);
+        let (a2, _) = super::verifier_times(&[0x7f, 0xff, 0xff, 0xff, 0, 0, 0, 0]);
+        assert_ne!(a, a2);
     }
 }
