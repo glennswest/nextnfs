@@ -497,7 +497,7 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       job 512b598d6e); #139 closed; golden-nextnfs-ccc00d9eccb0, release
       request stormcos#1506.
       (#133 still waits on the owner's handle-design choice.)
-- [ ] 2026-11-21 — #148 (P1, review finding 49b9b67926c7 on op_open.rs):
+- [x] 2026-11-21 — #148 (P1, review finding 49b9b67926c7 on op_open.rs):
       EXCLUSIVE4 verifier in atime/mtime with top bits cleared (collisions)
       and atime moved by reads. Fix: 8 bytes in xattr `user.nextnfs.verf`
       (fsetxattr on the O_EXCL fd, XATTR_CREATE), retry = xattr equal;
@@ -505,5 +505,8 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       no user xattrs (EOPNOTSUPP). `ExportRoot::get_xattr` (/proc fd).
       Tests: high-bit verifiers, retry after read/write + restart (export
       under CARGO_MANIFEST_DIR, xattrs asserted), times keep every bit.
-      Next: sc-build, close #148, image. (#133 still waits on the owner.)
+      Done: 45c0927; `sc-build 'cargo test --workspace --locked && cargo
+      clippy --workspace --all-targets --locked -- -D warnings'` green (710
+      tests, 0 warnings, job 13f9ed5b1f); #148 closed; image requested.
+      (#133 still waits on the owner.)
 
