@@ -510,7 +510,7 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       tests, 0 warnings, job 13f9ed5b1f); #148 closed;
       golden-nextnfs-93076b3c9cc5, release request stormcos#1506.
       (#133 still waits on the owner.)
-- [ ] 2026-11-21 — #149 (P1, review finding 584f6c79c1f1 on op_read.rs):
+- [x] 2026-11-21 — #149 (P1, review finding 584f6c79c1f1 on op_read.rs):
       each READ capped at ca_maxresponsesize − 1 KiB on its own, so two
       READs (or a long tag) overflowed the session's reply size. Fix:
       `nfs40::ReplyBudget` in the COMPOUND loop once SEQUENCE ran
@@ -528,3 +528,8 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       test_two_reads_fit_… failed (#152): its first READ asked 16 KiB in
       a 16 KiB session, took all the room, second → REP_TOO_BIG as
       designed. Test now reads 8 KiB + 8 KiB (old code: 16 KiB of data).
+      Done: 9290684; `sc-build 'cargo test --workspace --locked && cargo
+      clippy --workspace --all-targets --locked -- -D warnings'` green (715
+      tests, 0 warnings, job 8e94217d77); #149 closed (#151, #152 closed by
+      the build); golden-nextnfs-d5b967a5f668, release request stormcos#1506.
+      (#133 still waits on the owner.)
