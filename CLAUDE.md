@@ -431,7 +431,10 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       tests, 0 warnings, job 6abf1b71f1). The build VM is unprivileged, so
       the restart tests took their no-CAP_DAC_READ_SEARCH branch (STALE,
       FH4_VOLATILE_ANY); the privileged resolve path is a pve test-machine
-      test (per the owner). Released v0.19.0.
+      test (per the owner). Released v0.19.0 (34af1ce, --locked build green,
+      job d6d9e267d1); golden-nextnfs-238b1f4020e1, release request
+      stormcos#1506. #133 stays open until `sudo cargo test -p
+      nextnfs-server kernel_handle` passes on a pve test machine as root.
 - [x] 2026-11-21 — #134 (P1, review finding 739140171b7d on 8a66330):
       SEQUENCE validation + replay were done by #118 (`begin_slot`,
       SlotCheck); what was left is placement. `sequence_placement_error`
