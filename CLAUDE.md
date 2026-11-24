@@ -5,7 +5,7 @@ live in `../CLAUDE.md`; this file is the project context and work plan.
 
 ## Version
 
-**0.18.0** (tag `v0.18.0`). Version locations — all must match:
+**0.19.0** (tag `v0.19.0`). Version locations — all must match:
 
 - `Cargo.toml` → `[workspace.package] version` (every crate inherits it)
 - `build.sh` → `VERSION=`
@@ -426,6 +426,12 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       warning, FH4_VOLATILE_ANY). Tests: restart (new export manager on the
       same dir; resolves when privileged, STALE on the unprivileged VM),
       recreated file, outside-export/removed handles. Breaking → 0.19.0.
+      Built 1bf1790: `sc-build 'cargo test --workspace --locked && cargo
+      clippy --workspace --all-targets --locked -- -D warnings'` green (722
+      tests, 0 warnings, job 6abf1b71f1). The build VM is unprivileged, so
+      the restart tests took their no-CAP_DAC_READ_SEARCH branch (STALE,
+      FH4_VOLATILE_ANY); the privileged resolve path is a pve test-machine
+      test (per the owner). Released v0.19.0.
 - [x] 2026-11-21 — #134 (P1, review finding 739140171b7d on 8a66330):
       SEQUENCE validation + replay were done by #118 (`begin_slot`,
       SlotCheck); what was left is placement. `sequence_placement_error`
