@@ -4638,6 +4638,107 @@ mod tests {
         assert_ne!(fresh.id, fh.id);
     }
 
+    /// #133 (finding fdfec7e60065): handles are the filesystem's kernel
+    /// file handles, so a server that never saw them (a restart: a new
+    /// export manager and file manager on the same directory) resolves
+    /// them with open_by_handle_at, also for an object renamed since.
+    /// Without CAP_DAC_READ_SEARCH (the unprivileged build VM) the server
+    /// cannot open handles: then the handle is STALE and FH_EXPIRE_TYPE
+    /// says FH4_VOLATILE_ANY instead of FH4_PERSISTENT.
+    #[tokio::test]
+    async fn test_kernel_handle_resolves_after_restart() {
+        use crate::server::filemanager::{FH_INODE, FH_KERNEL};
+        let export = tempfile::tempdir().unwrap();
+        std::fs::create_dir(export.path().join("d")).unwrap();
+        std::fs::write(export.path().join("d/f"), b"data").unwrap();
+        let before = request_on_export_squash(false, export.path(), SquashMode::None).await;
+        let export_id = before.current_export_id().unwrap();
+        let fm = before.file_manager();
+        let has_handles = fm.beneath().kernel_handle("/d/f").unwrap().is_some();
+        let persistent = fm.beneath().persistent_handles();
+        let file = fm.get_filehandle_for_path("/d/f".to_string()).await.unwrap();
+        let dir = fm.get_filehandle_for_path("/d".to_string()).await.unwrap();
+        if !has_handles {
+            eprintln!("filesystem of {:?} has no kernel handles: inode ids", export.path());
+            assert_eq!(file.id[0], FH_INODE);
+            return;
+        }
+        assert_eq!(file.id[0], FH_KERNEL);
+        assert_eq!(dir.id[0], FH_KERNEL);
+        assert_ne!(file.id, dir.id);
+        // Stable while the object is the same.
+        assert_eq!(fm.get_filehandle_for_path("/d/f".to_string()).await.unwrap().id, file.id);
+        let attrs = fm
+            .get_filehandle_attrs(file.id, vec![FileAttr::FhExpireType])
+            .await
+            .unwrap();
+        let want = if persistent { FH4_PERSISTENT } else { FH4_VOLATILE_ANY };
+        assert!(matches!(attrs.1[0], FileAttrValue::FhExpireType(t) if t == want));
+        let mut fid = file.id;
+        op_pseudo::stamp_export_id(&mut fid, export_id);
+        let mut did = dir.id;
+        op_pseudo::stamp_export_id(&mut did, export_id);
+        drop(before);
+
+        // A new server on the same export: nothing in its handle table.
+        let after = request_on_export_squash(false, export.path(), SquashMode::None).await;
+        assert_eq!(after.current_export_id().unwrap(), export_id);
+        let server = NFS40Server::new();
+        let msg = make_compound(vec![NfsArgOp::Opputfh(PutFh4args { object: fid }), write_op()]);
+        let (after, reply) = server.compound(msg, after).await;
+        if !persistent {
+            eprintln!("open_by_handle_at not permitted here: STALE after a restart");
+            assert_eq!(compound_result(reply).0, NfsStat4::Nfs4errStale);
+            assert_eq!(std::fs::read(export.path().join("d/f")).unwrap(), b"data");
+            return;
+        }
+        assert_eq!(compound_result(reply).0, NfsStat4::Nfs4Ok);
+        assert_eq!(std::fs::read(export.path().join("d/f")).unwrap(), b"xata");
+        let fm = after.file_manager();
+        assert_eq!(fm.get_filehandle_for_id(fid).await.unwrap().path, "/d/f");
+        assert_eq!(fm.get_filehandle_for_id(did).await.unwrap().path, "/d");
+
+        // Renamed to another directory outside NFS, then another restart.
+        std::fs::create_dir(export.path().join("e")).unwrap();
+        std::fs::rename(export.path().join("d/f"), export.path().join("e/g")).unwrap();
+        drop(after);
+        let again = request_on_export_squash(false, export.path(), SquashMode::None).await;
+        let fm = again.file_manager();
+        let moved = fm.get_filehandle_for_id(fid).await.unwrap();
+        assert_eq!(moved.path, "/e/g");
+        assert_eq!(fm.get_filehandle_for_path("/e/g".to_string()).await.unwrap().id, moved.id);
+    }
+
+    /// #133: a kernel handle also names the inode generation, so a file
+    /// removed and created again at the same path (which may reuse the
+    /// inode number) has another handle, and the old one is STALE, in the
+    /// same server and in a new one.
+    #[tokio::test]
+    async fn test_kernel_handle_of_recreated_file_is_stale() {
+        use crate::server::filemanager::FH_KERNEL;
+        let export = tempfile::tempdir().unwrap();
+        let f = export.path().join("f");
+        std::fs::write(&f, b"old").unwrap();
+        let request = request_on_export_squash(false, export.path(), SquashMode::None).await;
+        let export_id = request.current_export_id().unwrap();
+        let fm = request.file_manager();
+        let old = fm.get_filehandle_for_path("/f".to_string()).await.unwrap();
+        if old.id[0] != FH_KERNEL {
+            eprintln!("no kernel handles on {:?}", export.path());
+            return;
+        }
+        std::fs::remove_file(&f).unwrap();
+        std::fs::write(&f, b"new").unwrap();
+        let new = fm.get_filehandle_for_path("/f".to_string()).await.unwrap();
+        assert_ne!(new.id, old.id);
+        assert!(fm.get_filehandle_for_id(old.id).await.is_err());
+        let mut id = old.id;
+        op_pseudo::stamp_export_id(&mut id, export_id);
+        drop(request);
+        let again = request_on_export_squash(false, export.path(), SquashMode::None).await;
+        assert!(again.file_manager().get_filehandle_for_id(id).await.is_err());
+    }
+
     /// #135: a stable WRITE's failure carries the errno's status (it was
     /// NFS4ERR_IO for everything but a missing file), so the filesystem's
     /// ENOSPC / EDQUOT reach the client as NOSPC / DQUOT. A directory shows

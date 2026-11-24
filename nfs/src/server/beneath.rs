@@ -20,7 +20,7 @@ use std::io::{self, ErrorKind};
 use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd, RawFd};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::SystemTime;
 
 use vfs::error::VfsErrorKind;
@@ -130,6 +130,42 @@ pub fn is_escape(e: &io::Error) -> bool {
     matches!(e.raw_os_error(), Some(libc::EXDEV) | Some(libc::ELOOP))
 }
 
+/// The longest kernel file handle that fits in an NFS handle: 26 bytes
+/// less version, export id, handle type and length (#133).
+pub const KERNEL_HANDLE_MAX: usize = 22;
+
+/// `struct file_handle` (fcntl.h) with room for `KERNEL_HANDLE_MAX` bytes.
+#[repr(C)]
+struct RawFileHandle {
+    handle_bytes: u32,
+    handle_type: i32,
+    f_handle: [u8; KERNEL_HANDLE_MAX],
+}
+
+/// A filesystem's own handle for an object, from `name_to_handle_at(2)`
+/// (#133, finding fdfec7e60065): it names the object for as long as it
+/// exists, across restarts of the server, and carries the inode generation,
+/// so a new object that reuses the inode number has another handle.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KernelHandle {
+    /// The filesystem's handle type (`FILEID_*`); at most 255.
+    pub handle_type: u8,
+    /// At most `KERNEL_HANDLE_MAX` bytes.
+    pub bytes: Vec<u8>,
+}
+
+/// What an export root's filesystem gives for kernel handles (probed once).
+#[derive(Debug, Clone, Copy)]
+struct HandleSupport {
+    /// The root's mount id: objects on another mount (a filesystem mounted
+    /// inside the export) get no kernel handle. `None`: no kernel handles.
+    mount_id: Option<i32>,
+    /// Whether `open_by_handle_at(2)` works here (it needs
+    /// CAP_DAC_READ_SEARCH): without it, a handle not in memory cannot be
+    /// resolved, so handles do not survive a restart.
+    resolvable: bool,
+}
+
 /// What `ExportRoot::statvfs` reports.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct FsSpace {
@@ -149,6 +185,8 @@ pub struct ExportRoot {
     /// The root fd, or the errno that opening it failed with: then every op
     /// fails with that error (closed, never unconfined).
     fd: Result<OwnedFd, i32>,
+    /// Kernel handle support, probed on first use (#133).
+    handles: OnceLock<HandleSupport>,
 }
 
 impl ExportRoot {
@@ -164,7 +202,7 @@ impl ExportRoot {
     /// (#150): the export is that directory, whatever `path` names by the
     /// time it is used. `path` is for messages and the API only.
     pub fn from_fd(fd: OwnedFd, path: PathBuf) -> io::Result<Self> {
-        let root = ExportRoot { path, fd: Ok(fd) };
+        let root = ExportRoot { path, fd: Ok(fd), handles: OnceLock::new() };
         match root.open_fd(".", libc::O_PATH | libc::O_DIRECTORY, 0) {
             Ok(_) => Ok(root),
             Err(e) if e.raw_os_error() == Some(libc::ENOSYS) => Err(io::Error::new(
@@ -184,6 +222,7 @@ impl ExportRoot {
                 ExportRoot {
                     path: path.to_path_buf(),
                     fd: Err(e.raw_os_error().unwrap_or(libc::EIO)),
+                    handles: OnceLock::new(),
                 }
             }
         }
@@ -453,10 +492,163 @@ impl ExportRoot {
         Ok(buf)
     }
 
+    /// `name_to_handle_at(2)` on an fd: the handle and the mount id, or
+    /// `None` when the filesystem has none or it is longer than
+    /// `KERNEL_HANDLE_MAX` (or its type above 255).
+    fn handle_of_fd(fd: RawFd) -> io::Result<Option<(KernelHandle, i32)>> {
+        let mut fh = RawFileHandle {
+            handle_bytes: KERNEL_HANDLE_MAX as u32,
+            handle_type: 0,
+            f_handle: [0; KERNEL_HANDLE_MAX],
+        };
+        let mut mount_id: libc::c_int = 0;
+        let ret = unsafe {
+            libc::syscall(
+                libc::SYS_name_to_handle_at,
+                fd,
+                EMPTY.as_ptr() as *const libc::c_char,
+                &mut fh as *mut RawFileHandle,
+                &mut mount_id as *mut libc::c_int,
+                libc::AT_EMPTY_PATH,
+            )
+        };
+        if ret != 0 {
+            let e = io::Error::last_os_error();
+            return match e.raw_os_error() {
+                // Too long, or the filesystem cannot make handles.
+                Some(libc::EOVERFLOW) | Some(libc::EOPNOTSUPP) | Some(libc::ENOSYS) => Ok(None),
+                _ => Err(e),
+            };
+        }
+        let len = fh.handle_bytes as usize;
+        if len > KERNEL_HANDLE_MAX || !(0..=255).contains(&fh.handle_type) {
+            return Ok(None);
+        }
+        Ok(Some((
+            KernelHandle { handle_type: fh.handle_type as u8, bytes: fh.f_handle[..len].to_vec() },
+            mount_id,
+        )))
+    }
+
+    fn handle_support(&self) -> HandleSupport {
+        *self.handles.get_or_init(|| {
+            let none = HandleSupport { mount_id: None, resolvable: false };
+            let Ok(fd) = self.open_path(".") else { return none };
+            let Ok(Some((h, mount_id))) = Self::handle_of_fd(fd.as_raw_fd()) else {
+                tracing::warn!(
+                    path = %self.path.display(),
+                    "export filesystem has no kernel file handles that fit an NFS handle: \
+                     handles are inode numbers and do not survive a restart"
+                );
+                return none;
+            };
+            let resolvable = match self.open_by_kernel_handle(&h) {
+                Ok(_) => true,
+                Err(e) => {
+                    tracing::warn!(
+                        path = %self.path.display(),
+                        "open_by_handle_at: {e} (it needs CAP_DAC_READ_SEARCH): \
+                         handles do not survive a restart"
+                    );
+                    false
+                }
+            };
+            HandleSupport { mount_id: Some(mount_id), resolvable }
+        })
+    }
+
+    /// Whether handles of this export resolve after a restart: the
+    /// filesystem has kernel handles and the server may open them (#133).
+    pub fn persistent_handles(&self) -> bool {
+        let s = self.handle_support();
+        s.mount_id.is_some() && s.resolvable
+    }
+
+    /// The kernel handle of the object at `path` itself (a symlink too).
+    /// `Ok(None)`: the object has none that fits, or it is on another
+    /// mount than the export root (a filesystem mounted inside the export:
+    /// a handle is decoded on the root's mount only).
+    pub fn kernel_handle(&self, path: &str) -> io::Result<Option<KernelHandle>> {
+        let Some(root_mount) = self.handle_support().mount_id else { return Ok(None) };
+        let fd = self.open_path(path)?;
+        Ok(match Self::handle_of_fd(fd.as_raw_fd())? {
+            Some((h, mount_id)) if mount_id == root_mount => Some(h),
+            _ => None,
+        })
+    }
+
+    /// `open_by_handle_at(2)` on the root's filesystem: an O_PATH fd on the
+    /// object, wherever it is on that filesystem (not checked here).
+    fn open_by_kernel_handle(&self, h: &KernelHandle) -> io::Result<OwnedFd> {
+        if h.bytes.len() > KERNEL_HANDLE_MAX {
+            return Err(io::Error::from_raw_os_error(libc::ESTALE));
+        }
+        let mut fh = RawFileHandle {
+            handle_bytes: h.bytes.len() as u32,
+            handle_type: i32::from(h.handle_type),
+            f_handle: [0; KERNEL_HANDLE_MAX],
+        };
+        fh.f_handle[..h.bytes.len()].copy_from_slice(&h.bytes);
+        // The mount fd may not be an O_PATH fd (EBADF).
+        let mount = self.open_fd(".", libc::O_RDONLY | libc::O_DIRECTORY, 0)?;
+        let ret = unsafe {
+            libc::syscall(
+                libc::SYS_open_by_handle_at,
+                mount.as_raw_fd(),
+                &mut fh as *mut RawFileHandle,
+                libc::O_PATH | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        };
+        if ret < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(unsafe { OwnedFd::from_raw_fd(ret as RawFd) })
+    }
+
+    /// The export path ("/" or "/a/b") of the object a kernel handle names,
+    /// after a restart or whenever the handle is not in memory (#133).
+    /// The object must be inside this export: its path, as the kernel
+    /// reports it, must be beneath the root's, and opening that path
+    /// beneath the root (no `..`, no symlinks) must reach the same object
+    /// (dev:ino). Anything else is ESTALE: an object outside the export,
+    /// one removed, or one whose path the kernel cannot report (a
+    /// non-directory decoded without a cached name). EPERM without
+    /// CAP_DAC_READ_SEARCH.
+    pub fn resolve_kernel_handle(&self, h: &KernelHandle) -> io::Result<String> {
+        let stale = || io::Error::from_raw_os_error(libc::ESTALE);
+        let obj = File::from(self.open_by_kernel_handle(h)?);
+        let root_path = std::fs::read_link(format!("/proc/self/fd/{}", self.root_fd()?))?;
+        let obj_path = std::fs::read_link(format!("/proc/self/fd/{}", obj.as_raw_fd()))?;
+        let rel = beneath_path(&root_path, &obj_path).ok_or_else(stale)?;
+        let found = obj.metadata()?;
+        let at = self.symlink_metadata(&rel).map_err(|_| stale())?;
+        use std::os::unix::fs::MetadataExt;
+        if (found.dev(), found.ino()) != (at.dev(), at.ino()) {
+            return Err(stale());
+        }
+        Ok(rel)
+    }
+
     /// truncate(2) the regular file at `path` to `size`.
     pub fn set_len(&self, path: &str, size: u64) -> io::Result<()> {
         self.open_file(path, libc::O_WRONLY | libc::O_NONBLOCK, 0)?.set_len(size)
     }
+}
+
+/// The export path ("/" or "/a/b") of `obj` when it is `root` or beneath
+/// it, both as `/proc/self/fd` reports them. `None` outside it, for a
+/// deleted object (" (deleted)" is not a name the export has) and for a
+/// path that is not UTF-8 (export paths are strings).
+fn beneath_path(root: &Path, obj: &Path) -> Option<String> {
+    let rest = obj.strip_prefix(root).ok()?;
+    let rest = rest.to_str()?;
+    if rest.is_empty() {
+        return Some("/".to_string());
+    }
+    if rest.split('/').any(|c| c.is_empty() || c == "." || c == "..") {
+        return None;
+    }
+    Some(format!("/{rest}"))
 }
 
 /// The `vfs` crate's view of an export, every path resolved beneath its
@@ -580,6 +772,86 @@ mod tests {
         std::fs::write(outside.path().join("secret"), b"outside").unwrap();
         let root = Arc::new(ExportRoot::open(export.path()).unwrap());
         (export, outside, root)
+    }
+
+    #[test]
+    fn test_beneath_path() {
+        let p = |r: &str, o: &str| beneath_path(Path::new(r), Path::new(o));
+        assert_eq!(p("/e", "/e").as_deref(), Some("/"));
+        assert_eq!(p("/e", "/e/a/b").as_deref(), Some("/a/b"));
+        assert_eq!(p("/", "/a").as_deref(), Some("/a"));
+        assert_eq!(p("/e", "/ex/a"), None);
+        assert_eq!(p("/e/a", "/e"), None);
+        assert_eq!(p("/e", "/other/e"), None);
+    }
+
+    /// #133: the kernel handle of an object is the same for each lookup,
+    /// differs between objects (a symlink is its own object), and differs
+    /// for a file removed and created again at the same path.
+    #[test]
+    fn test_kernel_handle_names_the_object() {
+        let (export, _outside, root) = setup();
+        std::fs::write(export.path().join("a"), b"a").unwrap();
+        std::fs::write(export.path().join("b"), b"b").unwrap();
+        std::os::unix::fs::symlink("a", export.path().join("l")).unwrap();
+        let Some(a) = root.kernel_handle("/a").unwrap() else {
+            eprintln!("no kernel handles on {:?}", export.path());
+            return;
+        };
+        assert!(a.bytes.len() <= KERNEL_HANDLE_MAX);
+        assert_eq!(root.kernel_handle("/a").unwrap(), Some(a.clone()));
+        assert_ne!(root.kernel_handle("/b").unwrap(), Some(a.clone()));
+        assert_ne!(root.kernel_handle("/l").unwrap(), Some(a.clone()));
+        assert!(root.kernel_handle("/").unwrap().is_some());
+        std::fs::remove_file(export.path().join("a")).unwrap();
+        assert_eq!(root.kernel_handle("/a").unwrap_err().kind(), ErrorKind::NotFound);
+        std::fs::write(export.path().join("a"), b"again").unwrap();
+        assert_ne!(root.kernel_handle("/a").unwrap(), Some(a));
+    }
+
+    /// #133: a kernel handle resolves only to an object inside the export.
+    /// A handle of an object on the same filesystem outside the export,
+    /// and one of a removed file, are ESTALE. Without CAP_DAC_READ_SEARCH
+    /// nothing resolves (EPERM) and `persistent_handles` is false.
+    #[test]
+    fn test_resolve_kernel_handle_stays_inside() {
+        let base = tempfile::tempdir().unwrap();
+        let export = base.path().join("export");
+        std::fs::create_dir_all(export.join("d")).unwrap();
+        std::fs::create_dir(base.path().join("outside")).unwrap();
+        std::fs::write(export.join("d/f"), b"in").unwrap();
+        std::fs::write(export.join("gone"), b"x").unwrap();
+        std::fs::write(base.path().join("outside/secret"), b"out").unwrap();
+        let wide = ExportRoot::open(base.path()).unwrap();
+        let root = ExportRoot::open(&export).unwrap();
+        let (Some(inside), Some(secret), Some(gone)) = (
+            root.kernel_handle("/d/f").unwrap(),
+            wide.kernel_handle("/outside/secret").unwrap(),
+            root.kernel_handle("/gone").unwrap(),
+        ) else {
+            eprintln!("no kernel handles on {:?}", base.path());
+            return;
+        };
+        std::fs::remove_file(export.join("gone")).unwrap();
+        if !root.persistent_handles() {
+            let e = root.resolve_kernel_handle(&inside).unwrap_err();
+            eprintln!("open_by_handle_at: {e}");
+            assert!(root.resolve_kernel_handle(&secret).is_err());
+            return;
+        }
+        assert_eq!(root.resolve_kernel_handle(&inside).unwrap(), "/d/f");
+        assert_eq!(root.resolve_kernel_handle(&root.kernel_handle("/").unwrap().unwrap()).unwrap(), "/");
+        let stale = |r: io::Result<String>| r.unwrap_err().raw_os_error() == Some(libc::ESTALE);
+        assert!(stale(root.resolve_kernel_handle(&secret)));
+        assert!(stale(root.resolve_kernel_handle(&gone)));
+        // The wider export sees the same object at its own path.
+        assert_eq!(wide.resolve_kernel_handle(&inside).unwrap(), "/export/d/f");
+        // Moved within the export: found at the new path.
+        std::fs::rename(export.join("d/f"), export.join("f2")).unwrap();
+        assert_eq!(root.resolve_kernel_handle(&inside).unwrap(), "/f2");
+        // Moved out of it: no longer this export's.
+        std::fs::rename(export.join("f2"), base.path().join("outside/f2")).unwrap();
+        assert!(stale(root.resolve_kernel_handle(&inside)));
     }
 
     #[test]

@@ -412,9 +412,20 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       owner's choice of design — not done; README claim corrected.
       Build on 5bbd1ab: `sc-build 'cargo test --workspace --locked && cargo
       clippy --workspace --all-targets --locked -- -D warnings'` green (690
-      tests, 0 warnings, job c2665f720a); #140 closed. #133 stays open for
-      fdfec7e60065 — waiting on the owner's choice (options posted on the
-      issue 2026-11-21; asked again, no answer yet).
+      tests, 0 warnings, job c2665f720a); #140 closed.
+      fdfec7e60065 decided 2026-11-24 (owner: option 1, kernel file
+      handles; root has CAP_DAC_READ_SEARCH; check objects are inside the
+      export; minor bump). Plan: handle version 0x03 = export id, kernel
+      handle type, length, `name_to_handle_at` bytes (≤ 22; 0x02 is the
+      pseudo-root's); dev:ino (0x01) only when the fs has none / too long /
+      another mount. `ExportRoot::kernel_handle`, `resolve_kernel_handle`
+      (open_by_handle_at on a non-O_PATH root fd — O_PATH is EBADF —,
+      /proc path beneath the root's, re-opened beneath the root, same
+      dev:ino, else ESTALE). FileManager: identity by kernel handle, table
+      miss → resolve. `persistent_handles` (EPERM without the capability →
+      warning, FH4_VOLATILE_ANY). Tests: restart (new export manager on the
+      same dir; resolves when privileged, STALE on the unprivileged VM),
+      recreated file, outside-export/removed handles. Breaking → 0.19.0.
 - [x] 2026-11-21 — #134 (P1, review finding 739140171b7d on 8a66330):
       SEQUENCE validation + replay were done by #118 (`begin_slot`,
       SlotCheck); what was left is placement. `sequence_placement_error`

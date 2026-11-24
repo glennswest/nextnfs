@@ -333,16 +333,16 @@ impl<'a> NfsRequest<'a> {
                         }
                         // Validate the cached path still holds the object
                         // the handle names: an inode-based handle by its
-                        // dev:ino (finding 9c0c932c5136; a file put in its
+                        // dev:ino, a kernel handle by the kernel handle at
+                        // the path (#133) (finding 9c0c932c5136; a file put in its
                         // place is another object), a volatile one by the
                         // path existing. Anything else goes to the file
                         // manager, which knows about opens and renames.
-                        let alive = if filehandle.id[0] == 0x01 {
+                        use crate::server::filemanager::{FH_INODE, FH_KERNEL};
+                        let alive = if matches!(filehandle.id[0], FH_INODE | FH_KERNEL) {
                             self.cached_fmanager
                                 .as_ref()
-                                .and_then(|fm| fm.meta(filehandle.file.as_str()))
-                                .map(|m| crate::server::filemanager::id_names(&filehandle.id, &m))
-                                .unwrap_or(false)
+                                .is_some_and(|fm| fm.names(&filehandle.id, filehandle.file.as_str()))
                         } else {
                             filehandle.file.exists().unwrap_or(false)
                         };

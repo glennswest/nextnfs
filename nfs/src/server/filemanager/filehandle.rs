@@ -9,6 +9,7 @@ use vfs::VfsPath;
 use nextnfs_proto::nfs4_proto::{Fsid4, NfsFh4, NfsFtype4, Nfstime4};
 
 use super::{handle::WriteCacheHandle, locking::LockingState};
+use crate::server::beneath::{KernelHandle, KERNEL_HANDLE_MAX};
 
 pub type FilehandleDb = MultiIndexFilehandleMap;
 
@@ -39,18 +40,69 @@ pub struct Filehandle {
     pub version: u64,
 }
 
-/// Whether the handle id names the object `meta` describes (finding
-/// 9c0c932c5136). An inode-based id (version byte 0x01) carries the
-/// object's dev:ino; a path that now holds another object (replaced by a
-/// rename over it, or removed and created again) no longer matches, so the
-/// handle is not resolved to it. A volatile id carries no identity: true.
-pub fn id_names(id: &NfsFh4, meta: &RealMeta) -> bool {
-    if id[0] != 0x01 {
-        return true;
+/// Handle id version byte (byte 0); byte 1 is the export id (#97).
+/// Inode-based: dev (2..10) and ino (10..18). Resolved only through the
+/// in-memory handle table, so not after a restart; used when the
+/// filesystem has no kernel handle that fits.
+pub const FH_INODE: u8 = 0x01;
+/// Kernel file handle (#133): handle type (2), length (3), the
+/// filesystem's handle (4..4+length, at most 22 bytes), zero padding.
+/// Resolved with open_by_handle_at after a restart. (0x02 is the
+/// pseudo-root's, `op_pseudo::pseudo_root_fh`.)
+pub const FH_KERNEL: u8 = 0x03;
+/// Volatile: boot time and a counter.
+pub const FH_VOLATILE: u8 = 0x80;
+
+/// The handle id for a kernel handle in export `export_id`.
+pub fn kernel_id(export_id: u8, h: &KernelHandle) -> NfsFh4 {
+    let mut id = [0u8; 26];
+    id[0] = FH_KERNEL;
+    id[1] = export_id;
+    id[2] = h.handle_type;
+    id[3] = h.bytes.len() as u8;
+    id[4..4 + h.bytes.len()].copy_from_slice(&h.bytes);
+    id
+}
+
+/// The kernel handle a `FH_KERNEL` id carries; `None` for another kind
+/// or a malformed one (length too long, padding not zero).
+pub fn kernel_handle_of(id: &NfsFh4) -> Option<KernelHandle> {
+    if id[0] != FH_KERNEL {
+        return None;
     }
-    let dev = u64::from_be_bytes(id[2..10].try_into().expect("8 bytes"));
-    let ino = u64::from_be_bytes(id[10..18].try_into().expect("8 bytes"));
-    meta.dev == dev && meta.ino == ino
+    let len = id[3] as usize;
+    if len == 0 || len > KERNEL_HANDLE_MAX || id[4 + len..].iter().any(|&b| b != 0) {
+        return None;
+    }
+    Some(KernelHandle { handle_type: id[2], bytes: id[4..4 + len].to_vec() })
+}
+
+/// The handle id for an inode-based handle (`FH_INODE`).
+pub fn inode_id(export_id: u8, meta: &RealMeta) -> NfsFh4 {
+    let mut id = [0u8; 26];
+    id[0] = FH_INODE;
+    id[1] = export_id;
+    id[2..10].copy_from_slice(&meta.dev.to_be_bytes());
+    id[10..18].copy_from_slice(&meta.ino.to_be_bytes());
+    id
+}
+
+/// Whether an inode-based handle id names the object `meta` describes
+/// (finding 9c0c932c5136): a path that now holds another object (replaced
+/// by a rename over it, or removed and created again) no longer matches,
+/// so the handle is not resolved to it. A volatile id carries no identity:
+/// true. A kernel handle id is compared by `ExportRoot::kernel_handle`,
+/// not by metadata: false here.
+pub fn id_names(id: &NfsFh4, meta: &RealMeta) -> bool {
+    match id[0] {
+        FH_INODE => {
+            let dev = u64::from_be_bytes(id[2..10].try_into().expect("8 bytes"));
+            let ino = u64::from_be_bytes(id[10..18].try_into().expect("8 bytes"));
+            meta.dev == dev && meta.ino == ino
+        }
+        FH_KERNEL => false,
+        _ => true,
+    }
 }
 
 /// Metadata from a real stat() call

@@ -13,7 +13,7 @@ use nextnfs_proto::nfs4_proto::{
     Stateid4, ACE4_ACCESS_ALLOWED_ACE_TYPE, ACE4_APPEND_DATA, ACE4_DELETE, ACE4_DELETE_CHILD,
     ACE4_EXECUTE, ACE4_IDENTIFIER_GROUP, ACE4_READ_ACL, ACE4_READ_ATTRIBUTES, ACE4_READ_DATA,
     ACE4_SYNCHRONIZE, ACE4_WRITE_ACL, ACE4_WRITE_ATTRIBUTES, ACE4_WRITE_DATA,
-    ACE4_WRITE_OWNER, ACL4_SUPPORT_ALLOW_ACL, FH4_PERSISTENT, FsLocations4,
+    ACE4_WRITE_OWNER, ACL4_SUPPORT_ALLOW_ACL, FH4_PERSISTENT, FH4_VOLATILE_ANY, FsLocations4,
 };
 
 use super::{
@@ -361,6 +361,22 @@ impl FileManagerHandle {
     /// lstat of the export path `path` ("/a/b"), resolved beneath the root.
     pub fn meta(&self, path: &str) -> Option<RealMeta> {
         self.beneath.symlink_metadata(path).ok().map(|m| RealMeta::from_metadata(&m))
+    }
+
+    /// Whether the object at export path `path` is the one handle `id`
+    /// names: by dev:ino for an inode-based id (finding 9c0c932c5136), by
+    /// its kernel handle for a kernel handle id (#133, which also tells a
+    /// new object reusing the inode number apart). False for a volatile id
+    /// (it carries no identity; callers go to the file manager).
+    pub fn names(&self, id: &NfsFh4, path: &str) -> bool {
+        match id[0] {
+            super::FH_INODE => self.meta(path).is_some_and(|m| super::id_names(id, &m)),
+            super::FH_KERNEL => match self.beneath.kernel_handle(path) {
+                Ok(Some(h)) => super::kernel_handle_of(id).as_ref() == Some(&h),
+                _ => false,
+            },
+            _ => false,
+        }
     }
 
     /// The server path of an export path, for messages only: ops never open
@@ -949,7 +965,11 @@ impl FileManagerHandle {
                     answer_attrs.push(FileAttr::UniqueHandles);
                 }
                 FileAttr::FhExpireType => {
-                    attrs.push(FileAttrValue::FhExpireType(FH4_PERSISTENT));
+                    attrs.push(FileAttrValue::FhExpireType(if self.beneath.persistent_handles() {
+                        FH4_PERSISTENT
+                    } else {
+                        FH4_VOLATILE_ANY
+                    }));
                     answer_attrs.push(FileAttr::FhExpireType);
                 }
                 FileAttr::RdattrError => {

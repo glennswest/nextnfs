@@ -1,17 +1,16 @@
 use std::collections::{HashMap, HashSet};
-use std::os::unix::fs::MetadataExt;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use nextnfs_proto::nfs4_proto::{
     Attrlist4, FileAttr, FileAttrValue, FsLocations4, NfsFh4, NfsStat4, Stateid4,
-    ACL4_SUPPORT_ALLOW_ACL, FH4_PERSISTENT,
+    ACL4_SUPPORT_ALLOW_ACL, FH4_PERSISTENT, FH4_VOLATILE_ANY,
 };
 
 mod filehandle;
 pub use filehandle::Filehandle;
 pub use filehandle::RealMeta;
-pub use filehandle::id_names;
+pub use filehandle::{id_names, inode_id, kernel_handle_of, kernel_id, FH_INODE, FH_KERNEL, FH_VOLATILE};
 pub use handle::FileManagerHandle;
 pub use handle::{LockResult, TestLockResult, UnlockResult, WriteCacheError};
 mod caching;
@@ -392,22 +391,18 @@ impl FileManager {
         self.beneath.exists(path.as_str())
     }
 
-    /// For an inode-based filehandle whose stored path is stale, try to locate
-    /// the file by scanning the parent directory for a matching inode. This
-    /// handles client-side silly-renames where the kernel renamed the file to
-    /// `.nfsXXXX` within the same directory.
-    fn find_by_inode_in_parent(&self, fh: &Filehandle, target_ino: u64) -> Option<VfsPath> {
+    /// For a handle whose stored path is stale, try to locate the object
+    /// in the same directory under another name (client-side silly-renames
+    /// to `.nfsXXXX`): the entry whose id is the handle's (dev:ino, or the
+    /// kernel handle, #133).
+    fn find_in_parent(&self, fh: &Filehandle) -> Option<VfsPath> {
         let parent_vfs = fh.file.parent();
         let names = self.beneath.read_dir(parent_vfs.as_str()).ok()?;
         for name in names {
             let name = name.to_string_lossy().to_string();
             let Ok(candidate) = parent_vfs.join(&name) else { continue };
-            if let Ok(meta) = self.beneath.symlink_metadata(candidate.as_str()) {
-                // dev too: the same object, not one with the same inode
-                // number on another filesystem mounted below.
-                if meta.ino() == target_ino && Some(meta.dev()) == fh.id[2..10].try_into().ok().map(u64::from_be_bytes) {
-                    return Some(candidate);
-                }
+            if self.stable_id(&candidate) == Some(fh.id) {
+                return Some(candidate);
             }
         }
         None
@@ -495,15 +490,10 @@ impl FileManager {
         // find the entry by NfsFh4 ID (inode-based). The rename has already
         // completed, so the new path's inode matches the old fhdb entry's ID.
         if old_fh.is_none() {
-            if let Some(meta) = self.meta(&new_vfs_path) {
-                let mut id = [0u8; 26];
-                id[0] = 0x01; // inode-based persistent handle
-                id[1] = self.export_id;
-                id[2..10].copy_from_slice(&meta.dev.to_be_bytes());
-                id[10..18].copy_from_slice(&meta.ino.to_be_bytes());
+            if let Some(id) = self.stable_id(&new_vfs_path) {
                 old_fh = self.fhdb.get_by_id(&id).cloned();
                 if old_fh.is_some() {
-                    debug!("RENAME: path lookup failed for {:?}, found entry by inode dev={} ino={}", old_path, meta.dev, meta.ino);
+                    debug!("RENAME: path lookup failed for {:?}, found entry by object id", old_path);
                 }
             }
         }
@@ -755,21 +745,13 @@ impl FileManager {
             return exists.id;
         }
 
-        // NfsFh4 is [u8; 26] — pack dev:ino into 26 bytes
-        if let Some(meta) = self.meta(file) {
-            let mut id = [0u8; 26];
-            id[0] = 0x01; // version: inode-based persistent handle
-            id[1] = self.export_id;
-            id[2..10].copy_from_slice(&meta.dev.to_be_bytes());
-            id[10..18].copy_from_slice(&meta.ino.to_be_bytes());
-            // bytes 18..26 are zero padding
-            debug!("created inode-based filehandle: dev={} ino={}", meta.dev, meta.ino);
+        if let Some(id) = self.stable_id(file) {
             return id;
         }
 
         // Fallback: volatile handle using boot_time + sequence
         let mut id = [0u8; 26];
-        id[0] = 0x80; // version: volatile
+        id[0] = FH_VOLATILE;
         id[1] = self.export_id;
         id[2..10].copy_from_slice(&self.boot_time.to_be_bytes());
         let seq_bytes = self.next_fh_id.to_be_bytes();
@@ -782,7 +764,16 @@ impl FileManager {
     /// What is at `file` now, for the handle `id`: the object it names, some
     /// other object (the path was replaced), or nothing.
     fn identity_at(&self, id: &NfsFh4, file: &VfsPath) -> Identity {
-        if id[0] == 0x01 {
+        if id[0] == FH_KERNEL {
+            // The kernel handle at the path: another object (or one
+            // reusing the inode number, another generation) has another.
+            return match self.beneath.kernel_handle(file.as_str()) {
+                Ok(Some(h)) if kernel_handle_of(id).as_ref() == Some(&h) => Identity::Same,
+                Ok(_) => Identity::Other,
+                Err(_) => Identity::Missing,
+            };
+        }
+        if id[0] == FH_INODE {
             return match self.meta(file) {
                 Some(m) if id_names(id, &m) => Identity::Same,
                 Some(_) => Identity::Other,
@@ -796,7 +787,15 @@ impl FileManager {
         }
     }
 
+    /// The handle `id` names: from the handle table, or for a kernel
+    /// handle not (or no longer) there, from the filesystem (#133).
     fn get_filehandle_by_id(&mut self, id: &NfsFh4) -> Option<Filehandle> {
+        self.known_filehandle_by_id(id).or_else(|| self.resolve_kernel_id(id))
+    }
+
+    /// The handle `id` names, from the handle table only (checked against
+    /// what its path holds now).
+    fn known_filehandle_by_id(&mut self, id: &NfsFh4) -> Option<Filehandle> {
         let fh = self.fhdb.get_by_id(id);
         if let Some(fh) = fh {
             // Keep the entry if:
@@ -824,10 +823,9 @@ impl FileManager {
             // at a new path by scanning the parent directory for a matching
             // inode. This recovers from client-side silly-renames and any
             // other rename that handle_rename_path missed.
-            if id[0] == 0x01 {
-                let target_ino = u64::from_be_bytes(id[10..18].try_into().unwrap());
+            if id[0] == FH_INODE || id[0] == FH_KERNEL {
                 let fh_clone = fh.clone();
-                if let Some(new_vfs_path) = self.find_by_inode_in_parent(&fh_clone, target_ino) {
+                if let Some(new_vfs_path) = self.find_in_parent(&fh_clone) {
                     debug!(
                         "get_filehandle_by_id: recovered stale handle via inode scan: {} -> {}",
                         fh_clone.path,
@@ -862,6 +860,58 @@ impl FileManager {
         None
     }
 
+    /// The object a kernel handle id names, looked up on the filesystem
+    /// (open_by_handle_at), checked to be inside this export
+    /// (`ExportRoot::resolve_kernel_handle`), and entered in the handle
+    /// table under that id. `None` (STALE) for another kind of id, another
+    /// export's id, an object removed or outside the export, or when the
+    /// server may not open handles (no CAP_DAC_READ_SEARCH).
+    fn resolve_kernel_id(&mut self, id: &NfsFh4) -> Option<Filehandle> {
+        let h = kernel_handle_of(id)?;
+        if id[1] != self.export_id {
+            return None;
+        }
+        let path = match self.beneath.resolve_kernel_handle(&h) {
+            Ok(p) => p,
+            Err(e) => {
+                debug!("kernel handle not resolved: {e}");
+                return None;
+            }
+        };
+        let file = if path == "/" {
+            self.root.clone()
+        } else {
+            self.root.join(path.trim_start_matches('/')).ok()?
+        };
+        // The id the object gets at that path must be this one (it is,
+        // unless the object was replaced in between).
+        if self.stable_id(&file) != Some(*id) {
+            return None;
+        }
+        // Whatever entry the path had is another object's.
+        if let Some(old) = self.fhdb.get_by_path(&file.as_str().to_string()).cloned() {
+            if old.id != *id {
+                self.fhdb.remove_by_id(&old.id);
+            }
+        }
+        let meta = self.meta(&file)?;
+        let fh = Filehandle::new_real(file, *id, self.fsid, self.fsid, 0, &meta);
+        debug!("kernel handle resolved to {:?}", fh.path);
+        self.fhdb_replace(fh.clone());
+        Some(fh)
+    }
+
+    /// The id of the object at `file` that names it across restarts: its
+    /// kernel handle, or else its dev:ino. `None` when it does not exist.
+    fn stable_id(&self, file: &VfsPath) -> Option<NfsFh4> {
+        if let Ok(Some(h)) = self.beneath.kernel_handle(file.as_str()) {
+            return Some(kernel_id(self.export_id, &h));
+        }
+        let meta = self.meta(file)?;
+        debug!("inode-based filehandle: dev={} ino={}", meta.dev, meta.ino);
+        Some(inode_id(self.export_id, &meta))
+    }
+
     pub fn get_filehandle_by_path(&mut self, path: &String) -> Option<Filehandle> {
         if let Some(fh) = self.fhdb.get_by_path(path).cloned() {
             match self.identity_at(&fh.id, &fh.file) {
@@ -892,7 +942,8 @@ impl FileManager {
             expected_path = "/".to_string();
         }
 
-        if let Some(fh) = self.get_filehandle_by_id(&id) {
+        // The object is at `file`: no need to look for it by kernel handle.
+        if let Some(fh) = self.known_filehandle_by_id(&id) {
             // Verify the stored path matches the requested path.
             // Inode reuse after deletion can cause a new file to get the same
             // inode-based ID as a previously deleted file. If paths differ,
@@ -946,7 +997,7 @@ impl FileManager {
         if self.cachedb.contains_key(filehandle_id) {
             self.cachedb.remove(filehandle_id);
         }
-        let filehandle = self.get_filehandle_by_id(filehandle_id);
+        let filehandle = self.known_filehandle_by_id(filehandle_id);
         if let Some(mut filehandle) = filehandle {
             filehandle.write_cache = None;
             self.update_filehandle(filehandle);
@@ -1085,7 +1136,11 @@ impl FileManager {
                     answer_attrs.push(FileAttr::UniqueHandles);
                 }
                 FileAttr::FhExpireType => {
-                    attrs.push(FileAttrValue::FhExpireType(FH4_PERSISTENT));
+                    attrs.push(FileAttrValue::FhExpireType(if self.beneath.persistent_handles() {
+                        FH4_PERSISTENT
+                    } else {
+                        FH4_VOLATILE_ANY
+                    }));
                     answer_attrs.push(FileAttr::FhExpireType);
                 }
                 FileAttr::RdattrError => {
