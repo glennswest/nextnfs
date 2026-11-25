@@ -40,6 +40,10 @@ read_only = false
 # anon_uid = 65534               # identity of squashed callers (and AUTH_NONE)
 # anon_gid = 65534
 # sec = ["sys"]                  # default; e.g. ["krb5p", "krb5i"] needs krb5_keytab
+# quota_hard_bytes = 107374182400   # 100 GiB, the filesystem's project quota (XFS/ext4
+#                                   # with prjquota, nextnfs as root); 0 removes the limit
+# quota_soft_bytes = 85899345920    # grace period applies past it
+# quota_project_id = 4242           # unset: the export directory's inode number
 #
 # [[exports]]
 # name = "backup"

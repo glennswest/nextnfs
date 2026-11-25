@@ -148,7 +148,7 @@ impl NfsOperation for Copy4args {
                 return NfsOpResponse {
                     request,
                     result: None,
-                    status: NfsStat4::Nfs4errIo,
+                    status: crate::server::createattrs::io_status(&e),
                 };
             }
 
@@ -161,7 +161,7 @@ impl NfsOperation for Copy4args {
             return NfsOpResponse {
                 request,
                 result: None,
-                status: NfsStat4::Nfs4errIo,
+                status: crate::server::createattrs::io_status(&e),
             };
         }
 

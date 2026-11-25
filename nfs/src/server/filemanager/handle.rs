@@ -352,6 +352,11 @@ impl FileManagerHandle {
         &self.beneath
     }
 
+    /// The same, shared (for work off the file manager, e.g. quota setup).
+    pub fn beneath_arc(&self) -> Arc<ExportRoot> {
+        self.beneath.clone()
+    }
+
     /// Whether an object missing beneath the root may be served from the
     /// vfs tree instead: only when that tree is not the disk (unit tests).
     pub fn vfs_only(&self) -> bool {
@@ -870,7 +875,8 @@ impl FileManagerHandle {
                     | FileAttr::FilesFree
                     | FileAttr::FilesTotal
             )
-        }) {
+        }) || crate::server::quota::wants_quota(attr_request)
+        {
             match self.beneath.statvfs() {
                 Ok(space) => Some(space),
                 Err(e) => {
@@ -882,6 +888,8 @@ impl FileManagerHandle {
             None
         };
         let space = space.unwrap_or_default();
+        // The export's project quota (#146), only when a quota_* is asked for.
+        let quota = crate::server::quota::usage_for(&self.beneath, attr_request);
         // Refresh from real filesystem to pick up current size/mtime/etc.
         let real_path = self.real_path(filehandle.file.as_str());
         let input_fileid = filehandle.attr_fileid;
@@ -1001,6 +1009,13 @@ impl FileManagerHandle {
                         filehandle.attr_owner_group.clone(),
                     ));
                     answer_attrs.push(FileAttr::OwnerGroup);
+                }
+                FileAttr::QuotaAvailHard | FileAttr::QuotaAvailSoft | FileAttr::QuotaUsed => {
+                    // The export's project quota (#146); left out without one.
+                    if let Some(v) = crate::server::quota::attr_value(fileattr, quota.as_ref(), space.bytes_avail) {
+                        attrs.push(v);
+                        answer_attrs.push(fileattr.clone());
+                    }
                 }
                 FileAttr::SpaceAvail => {
                     let val = space.bytes_avail;
@@ -1280,7 +1295,7 @@ impl FileManagerHandle {
         // The bit vector that would retrieve all REQUIRED and RECOMMENDED
         // attributes that are supported for this object.  The scope of this
         //attribute applies to all objects with a matching fsid.
-        Attrlist4::<FileAttr>::new(Some(vec![
+        let mut supported = vec![
             FileAttr::SupportedAttrs,
             FileAttr::Type,
             FileAttr::FhExpireType,
@@ -1327,7 +1342,10 @@ impl FileManagerHandle {
             FileAttr::TimeMetadata,
             FileAttr::TimeModify,
             FileAttr::MountedOnFileid,
-        ]))
+        ];
+        // quota_* only for an export with a project quota (#146).
+        crate::server::quota::add_supported(&self.beneath, &mut supported);
+        Attrlist4::<FileAttr>::new(Some(supported))
     }
 
 }

@@ -20,7 +20,7 @@ use std::io::{self, ErrorKind};
 use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd, RawFd};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, OnceLock, RwLock};
 use std::time::SystemTime;
 
 use vfs::error::VfsErrorKind;
@@ -187,6 +187,9 @@ pub struct ExportRoot {
     fd: Result<OwnedFd, i32>,
     /// Kernel handle support, probed on first use (#133).
     handles: OnceLock<HandleSupport>,
+    /// The filesystem project the export is, when it has a project quota
+    /// (#146, `quota::setup` / `quota::probe`).
+    quota_project: RwLock<Option<u32>>,
 }
 
 impl ExportRoot {
@@ -202,7 +205,7 @@ impl ExportRoot {
     /// (#150): the export is that directory, whatever `path` names by the
     /// time it is used. `path` is for messages and the API only.
     pub fn from_fd(fd: OwnedFd, path: PathBuf) -> io::Result<Self> {
-        let root = ExportRoot { path, fd: Ok(fd), handles: OnceLock::new() };
+        let root = ExportRoot { path, fd: Ok(fd), handles: OnceLock::new(), quota_project: RwLock::new(None) };
         match root.open_fd(".", libc::O_PATH | libc::O_DIRECTORY, 0) {
             Ok(_) => Ok(root),
             Err(e) if e.raw_os_error() == Some(libc::ENOSYS) => Err(io::Error::new(
@@ -223,6 +226,7 @@ impl ExportRoot {
                     path: path.to_path_buf(),
                     fd: Err(e.raw_os_error().unwrap_or(libc::EIO)),
                     handles: OnceLock::new(),
+                    quota_project: RwLock::new(None),
                 }
             }
         }
@@ -244,6 +248,21 @@ impl ExportRoot {
             files_free: st.f_ffree as u64,
             files_avail: st.f_favail as u64,
         })
+    }
+
+    /// A readable directory fd on the root itself (O_RDONLY, not O_PATH:
+    /// ioctl and quotactl_fd refuse O_PATH fds), for the quota calls (#146).
+    pub fn open_root_dir(&self) -> io::Result<OwnedFd> {
+        self.open_fd(".", libc::O_RDONLY | libc::O_DIRECTORY, 0)
+    }
+
+    /// The project id of the export's quota, if it has one (#146).
+    pub fn quota_project(&self) -> Option<u32> {
+        *self.quota_project.read().unwrap_or_else(|e| e.into_inner())
+    }
+
+    pub fn set_quota_project(&self, id: Option<u32>) {
+        *self.quota_project.write().unwrap_or_else(|e| e.into_inner()) = id;
     }
 
     /// The export root's path (for messages and the API; never opened by it).

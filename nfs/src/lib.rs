@@ -26,6 +26,7 @@ use crate::server::{NFSService, NfsProtoImpl};
 /// Re-export for the binary crate.
 pub use server::export_manager;
 pub use server::state_recovery;
+pub use server::quota;
 
 pub struct NFSServer {
     bind: String,

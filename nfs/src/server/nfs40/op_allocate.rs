@@ -70,12 +70,12 @@ impl NfsOperation for Allocate4args {
                 let zeros = vec![0u8; write_size];
                 if let Err(e) = wfile.write_all(&zeros) {
                     error!("ALLOCATE: write failed: {:?}", e);
+                    // EDQUOT / ENOSPC reach the client as DQUOT / NOSPC (#146).
+                    let status = crate::server::createattrs::io_status(&e);
                     return NfsOpResponse {
                         request,
-                        result: Some(NfsResOp4::Opallocate(Allocate4res {
-                            ar_status: NfsStat4::Nfs4errIo,
-                        })),
-                        status: NfsStat4::Nfs4errIo,
+                        result: Some(NfsResOp4::Opallocate(Allocate4res { ar_status: status.clone() })),
+                        status,
                     };
                 }
                 remaining -= write_size;

@@ -243,6 +243,9 @@ async fn run_server(
                             anon_uid: 65534,
                             anon_gid: 65534,
                             sec: vec![],
+                            quota_hard_bytes: None,
+                            quota_soft_bytes: None,
+                            quota_project_id: None,
                         }],
                         listen,
                         api,
@@ -277,6 +280,9 @@ async fn run_server(
                 anon_uid: 65534,
                 anon_gid: 65534,
                 sec: vec![],
+                quota_hard_bytes: None,
+                quota_soft_bytes: None,
+                quota_project_id: None,
             }],
             listen_addr,
             api_listen_addr,
@@ -390,6 +396,25 @@ async fn run_server(
                     sec = ?sec,
                     "access control configured"
                 );
+                // Quota on the filesystem's project quotas (#146). One that
+                // cannot be enforced stops the server: never ignored.
+                let limits = entry.quota();
+                if limits.is_set() {
+                    match export_manager.set_quota(&entry.name, limits).await {
+                        Ok(u) => info!(
+                            name = %entry.name,
+                            project = u.project_id,
+                            hard_bytes = u.hard_bytes,
+                            soft_bytes = u.soft_bytes,
+                            used_bytes = u.used_bytes,
+                            "quota configured"
+                        ),
+                        Err(e) => {
+                            error!(name = %entry.name, "quota: {}", e);
+                            std::process::exit(1);
+                        }
+                    }
+                }
             }
             Err(e) => {
                 error!("Failed to add export '{}': {}", entry.name, e);

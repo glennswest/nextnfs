@@ -93,11 +93,8 @@ impl NfsOperation for Link4args {
             }
             Err(e) => {
                 debug!("LINK failed: {:?}", e);
-                let status = match e.kind() {
-                    std::io::ErrorKind::PermissionDenied => NfsStat4::Nfs4errAccess,
-                    std::io::ErrorKind::AlreadyExists => NfsStat4::Nfs4errExist,
-                    _ => NfsStat4::Nfs4errIo,
-                };
+                // errno mapped as for every create (EDQUOT → DQUOT, EXDEV → XDEV, #146).
+                let status = crate::server::createattrs::io_status(&e);
                 NfsOpResponse {
                     request,
                     result: None,
@@ -175,11 +172,20 @@ mod tests {
             newname: "linked_dir".to_string(),
         };
         let response = args.execute(request).await;
-        // MemoryFS paths don't map to real filesystem — hard_link will fail with Io error
+        // MemoryFS paths don't map to the real filesystem, and a directory
+        // cannot be hard-linked: linkat fails, its errno mapped by io_status
+        // (#146: ENOENT → NOENT, EPERM → PERM, no longer all IO).
         assert!(
-            response.status == NfsStat4::Nfs4errIo
-            || response.status == NfsStat4::Nfs4errAccess
-            || response.status == NfsStat4::Nfs4errExist
+            matches!(
+                response.status,
+                NfsStat4::Nfs4errIo
+                    | NfsStat4::Nfs4errAccess
+                    | NfsStat4::Nfs4errExist
+                    | NfsStat4::Nfs4errPerm
+                    | NfsStat4::Nfs4errNoent
+            ),
+            "{:?}",
+            response.status
         );
     }
 }

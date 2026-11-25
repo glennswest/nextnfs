@@ -3,6 +3,13 @@
 ## [Unreleased]
 <!-- New unreleased changes go here -->
 
+### Added
+- Per-export quotas on the filesystem's project quotas (#146). New `[[exports]]` keys `quota_hard_bytes`, `quota_soft_bytes`, `quota_project_id`, and `GET`/`PUT /api/v1/quota/{name}`. The export list (`GET /api/v1/exports`, `/api/v1/stats`) carries each export's `quota`, and the web UI has a Quota column. nextnfs makes the export directory a project (it tags the existing tree once, then the root with the inherit flag) and sets the project's block limits with `quotactl_fd`. The kernel then counts and enforces: stored data, not traffic; freed on remove and truncate; correct under concurrent writers and local processes; no startup walk to count usage. A configured quota that the filesystem or the process cannot enforce (no `prjquota`, enforcement off, no `CAP_SYS_ADMIN`, Linux < 5.14) stops the server with the reason, and the API answers 400; it is never silently ignored. GETATTR `quota_avail_hard`, `quota_avail_soft` and `quota_used` are back in `supported_attrs`, only for exports with a project quota. New `nextnfs-server` module `quota` (`QuotaLimits`, `QuotaUsage`, `setup`, `usage`, `probe`), `ExportManagerHandle::set_quota`/`get_quota`, `ExportInfo::root` and `quota_usage`, `ExportRoot::open_root_dir`/`quota_project`, `FileManagerHandle::beneath_arc`. `tests/quota.sh` (root) runs the enforcement test on a loopback XFS with `prjquota`
+
+### Changed
+- ALLOCATE and COPY write failures, LINK and CREATE (symlink) failures answer their errno's status through `io_status` (`NFS4ERR_DQUOT`, `NFS4ERR_NOSPC`, `NFS4ERR_XDEV`, `NFS4ERR_PERM`, `NFS4ERR_NOENT`, ...) instead of `NFS4ERR_IO` (or `NFS4ERR_ACCESS` for every permission error), so a quota hit in them reaches the client as a quota error (#146)
+- `ExportInfo` has a new public field `root` (library API: struct literals must set it)
+
 ## [v0.19.0] — 2026-11-24
 
 ### Breaking

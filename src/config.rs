@@ -97,6 +97,29 @@ pub struct ExportEntry {
     /// (exports(5) `sec=`), in order of preference. Empty: ["sys"] (#106).
     #[serde(default)]
     pub sec: Vec<String>,
+    /// Hard limit on the bytes stored in the export, enforced by the
+    /// filesystem's project quotas (#146). Unset: left as the filesystem
+    /// has it; 0: no limit.
+    #[serde(default)]
+    pub quota_hard_bytes: Option<u64>,
+    /// Soft limit (the filesystem's grace period applies past it).
+    #[serde(default)]
+    pub quota_soft_bytes: Option<u64>,
+    /// Project id for the export directory when it has none. Unset: its
+    /// inode number.
+    #[serde(default)]
+    pub quota_project_id: Option<u32>,
+}
+
+impl ExportEntry {
+    /// The export's quota settings (#146).
+    pub fn quota(&self) -> nextnfs_server::quota::QuotaLimits {
+        nextnfs_server::quota::QuotaLimits {
+            hard_bytes: self.quota_hard_bytes,
+            soft_bytes: self.quota_soft_bytes,
+            project_id: self.quota_project_id,
+        }
+    }
 }
 
 fn default_anon_uid() -> u32 { 65534 }
@@ -175,6 +198,9 @@ impl Config {
                         anon_uid: 65534,
                         anon_gid: 65534,
                         sec: vec![],
+                        quota_hard_bytes: None,
+                        quota_soft_bytes: None,
+                        quota_project_id: None,
                     },
                 );
             }
@@ -235,5 +261,30 @@ path = "/srv/plain"
         assert_eq!(ServerConfig::default().api_listen, DEFAULT_API_LISTEN);
         let cfg: Config = toml::from_str("[server]\napi_listen = \"0.0.0.0:8080\"\n").unwrap();
         assert_eq!(cfg.server.api_listen, "0.0.0.0:8080");
+    }
+
+    #[test]
+    fn quota_keys_parse() {
+        let cfg: Config = toml::from_str(
+            r#"
+[[exports]]
+name = "q"
+path = "/srv/q"
+quota_hard_bytes = 10737418240
+quota_soft_bytes = 8589934592
+quota_project_id = 4242
+
+[[exports]]
+name = "plain"
+path = "/srv/plain"
+"#,
+        )
+        .unwrap();
+        let q = cfg.exports[0].quota();
+        assert_eq!(q.hard_bytes, Some(10 << 30));
+        assert_eq!(q.soft_bytes, Some(8 << 30));
+        assert_eq!(q.project_id, Some(4242));
+        assert!(q.is_set());
+        assert!(!cfg.exports[1].quota().is_set());
     }
 }

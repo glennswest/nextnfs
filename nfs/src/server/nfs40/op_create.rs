@@ -130,11 +130,8 @@ impl NfsOperation for Create4args {
                     }
                     Err(e) => {
                         error!("CREATE symlink failed: {:?}", e);
-                        let status = match e.kind() {
-                            std::io::ErrorKind::PermissionDenied => NfsStat4::Nfs4errAccess,
-                            std::io::ErrorKind::AlreadyExists => NfsStat4::Nfs4errExist,
-                            _ => NfsStat4::Nfs4errIo,
-                        };
+                        // errno mapped as for every create (EDQUOT → DQUOT, EXDEV → XDEV, #146).
+                let status = crate::server::createattrs::io_status(&e);
                         return NfsOpResponse {
                             request,
                             result: None,

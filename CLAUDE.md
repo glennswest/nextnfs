@@ -65,6 +65,10 @@ before NFSService when `[server] krb5_keytab` is set); per-export `sec`
 is enforced in the COMPOUND loop (WRONGSEC). GETATTR owners are still
 numeric (#114).
 
+Quotas (#146): `nfs/src/server/quota.rs` — per-export quotas are the
+filesystem's project quotas (nextnfs tags the tree, sets limits with
+`quotactl_fd`, reads usage for GETATTR/API/UI); the kernel enforces.
+
 Permissions (#91): `nfs/src/server/perm.rs` checks every op for the
 squash-mapped caller in the COMPOUND dispatcher (after the read-only
 check) and chowns new objects; `squash` defaults to `root_squash`.
@@ -569,3 +573,20 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       tests, 0 warnings, job 7960ca2397); #150 closed;
       golden-nextnfs-fee2060924af, release request stormcos#1506.
       (#133 still waits on the owner.)
+- [ ] 2026-11-24 — #146 (per-export quotas). Owner-queue sent the design
+      question back as session work (#1680), so option C from the issue
+      comment: the filesystem's project quotas, set up by nextnfs.
+      `quota.rs`: `setup` (Q_XGETQSTAT accounting+enforcement check → else
+      refused with the reason; project id = the directory's, else
+      `quota_project_id`, else its inode number if unused; tag tree once
+      with FS_IOC_FSSETXATTR, root last; Q_SETQUOTA block limits), `usage`
+      (Q_GETQUOTA), `probe` (pre-existing enforced project with a limit);
+      config `quota_hard_bytes`/`quota_soft_bytes`/`quota_project_id`
+      (startup exits on failure), `GET/PUT /api/v1/quota/{name}`, `quota`
+      in the export list, web UI Quota column; GETATTR quota_* back,
+      supported only with a quota; ALLOCATE/COPY/LINK/CREATE symlink errors
+      via `io_status` (DQUOT, XDEV). Nested quota exports on one fs refused.
+      Build VM is unprivileged: enforcement test is gated on
+      `NEXTNFS_PRJQUOTA_DIR`; `sudo tests/quota.sh` (loopback XFS prjquota)
+      on a pve test machine is the privileged proof. nfsop keys to post on
+      nextnfs-operator. Next: sc-build test+clippy, minor bump 0.20.0.

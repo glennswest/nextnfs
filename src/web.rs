@@ -87,6 +87,16 @@ fn esc(s: &str) -> String {
 }
 
 /// An export's name and path, escaped for HTML.
+/// The Quota cell (#146): "used / hard" from the filesystem's project
+/// quota, "used / no limit" with only a soft limit or none, "-" without one.
+fn quota_cell(e: &ExportInfo) -> String {
+    match e.quota_usage() {
+        None => "-".to_string(),
+        Some(q) if q.hard_bytes == 0 => format!("{} / no limit", format_bytes(q.used_bytes)),
+        Some(q) => format!("{} / {}", format_bytes(q.used_bytes), format_bytes(q.hard_bytes)),
+    }
+}
+
 fn esc_export(e: &ExportInfo) -> (String, String) {
     (esc(&e.name), esc(&e.path.display().to_string()))
 }
@@ -153,7 +163,7 @@ pub fn render_dashboard(exports: &[ExportInfo]) -> String {
     if exports.is_empty() {
         html.push_str(r#"<div class="empty">No exports configured</div>"#);
     } else {
-        html.push_str("<table><tr><th>Name</th><th>Path</th><th>Mode</th><th>ID</th></tr>");
+        html.push_str("<table><tr><th>Name</th><th>Path</th><th>Mode</th><th>Quota</th><th>ID</th></tr>");
         for e in exports {
             let badge = if e.read_only {
                 r#"<span class="badge badge-ro">RO</span>"#
@@ -162,8 +172,8 @@ pub fn render_dashboard(exports: &[ExportInfo]) -> String {
             };
             let (name, path) = esc_export(e);
             html.push_str(&format!(
-                r#"<tr><td>{}</td><td class="mono">{}</td><td>{}</td><td>{}</td></tr>"#,
-                name, path, badge, e.export_id
+                r#"<tr><td>{}</td><td class="mono">{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                name, path, badge, quota_cell(e), e.export_id
             ));
         }
         html.push_str("</table>");
@@ -201,9 +211,9 @@ pub fn render_exports(exports: &[ExportInfo], writable: bool) -> String {
         html.push_str(r#"<div class="empty">No exports configured</div>"#);
     } else {
         html.push_str(if writable {
-            "<table><tr><th>Name</th><th>Path</th><th>Mode</th><th>ID</th><th></th></tr>"
+            "<table><tr><th>Name</th><th>Path</th><th>Mode</th><th>Quota</th><th>ID</th><th></th></tr>"
         } else {
-            "<table><tr><th>Name</th><th>Path</th><th>Mode</th><th>ID</th></tr>"
+            "<table><tr><th>Name</th><th>Path</th><th>Mode</th><th>Quota</th><th>ID</th></tr>"
         });
         for e in exports {
             let badge = if e.read_only {
@@ -223,10 +233,11 @@ pub fn render_exports(exports: &[ExportInfo], writable: bool) -> String {
                 String::new()
             };
             html.push_str(&format!(
-                r#"<tr><td>{name}</td><td class="mono">{path}</td><td>{badge}</td><td>{id}</td>{remove}</tr>"#,
+                r#"<tr><td>{name}</td><td class="mono">{path}</td><td>{badge}</td><td>{quota}</td><td>{id}</td>{remove}</tr>"#,
                 name = name,
                 path = path,
                 badge = badge,
+                quota = quota_cell(e),
                 id = e.export_id,
                 remove = remove
             ));
@@ -373,7 +384,20 @@ mod tests {
                 QosConfig::default(),
             ))),
             access_control: AccessControl::new(AccessConfig::default()),
+            root: std::sync::Arc::new(nextnfs_server::server::beneath::ExportRoot::open_or_closed(
+                std::path::Path::new(path),
+            )),
         }
+    }
+
+    /// #146: an export without a project quota shows "-" in the Quota column.
+    #[test]
+    fn quota_column_without_quota() {
+        let e = export("plain", "/nonexistent/nextnfs-web-quota");
+        assert_eq!(quota_cell(&e), "-");
+        let html = render_exports(std::slice::from_ref(&e), false);
+        assert!(html.contains("<th>Quota</th>"));
+        assert!(render_dashboard(&[e]).contains("<th>Quota</th>"));
     }
 
     const EVIL_NAME: &str = r#"x');alert(1);//"><script>alert(2)</script><img src=x onerror=alert(3)>"#;

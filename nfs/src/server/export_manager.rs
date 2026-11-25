@@ -12,6 +12,7 @@ use vfs::VfsPath;
 use super::beneath::{BeneathFS, ExportRoot};
 
 use super::filemanager::FileManagerHandle;
+use super::quota::{self, QuotaLimits, QuotaUsage};
 
 /// Per-export QoS configuration.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
@@ -484,6 +485,23 @@ pub struct ExportInfo {
     pub rate_limiter: Arc<Mutex<RateLimiter>>,
     /// Per-export access control (IP ACLs + squash)
     pub access_control: Arc<AccessControl>,
+    /// The export root every op is resolved beneath; also carries the
+    /// export's project quota (#146).
+    pub root: Arc<ExportRoot>,
+}
+
+impl ExportInfo {
+    /// The export's project quota as the filesystem reports it now (#146).
+    /// `None`: no quota, or it could not be read (logged).
+    pub fn quota_usage(&self) -> Option<QuotaUsage> {
+        match quota::usage(&self.root) {
+            Ok(u) => u,
+            Err(e) => {
+                tracing::error!(name = %self.name, "reading the export's project quota: {e}");
+                None
+            }
+        }
+    }
 }
 
 /// Full export state including the FileManagerHandle.
@@ -684,13 +702,15 @@ impl ExportManager {
             }
         };
         let canonical = beneath.path().to_path_buf();
+        // A directory that already is a project with a limit reports it (#146).
+        quota::probe(&beneath);
 
         let export_id = self.next_export_id;
         self.next_export_id += 1;
 
         let vfs_root = VfsPath::new(BeneathFS::new(beneath.clone()));
         let file_manager =
-            FileManagerHandle::with_root(vfs_root.clone(), Some(export_id as u64), beneath);
+            FileManagerHandle::with_root(vfs_root.clone(), Some(export_id as u64), beneath.clone());
 
         let stats = ExportStats::new();
         let rate_limiter = Arc::new(Mutex::new(RateLimiter::new(QosConfig::default())));
@@ -703,6 +723,7 @@ impl ExportManager {
             stats,
             rate_limiter,
             access_control,
+            root: beneath,
         };
 
         let state = ExportState {
@@ -726,6 +747,15 @@ impl ExportManager {
             }
             None => Err(format!("export '{}' not found", name)),
         }
+    }
+}
+
+/// Whether two export roots are on one filesystem (same st_dev).
+fn same_fs(a: &ExportRoot, b: &ExportRoot) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (a.symlink_metadata("/"), b.symlink_metadata("/")) {
+        (Ok(x), Ok(y)) => x.dev() == y.dev(),
+        _ => true,
     }
 }
 
@@ -862,6 +892,61 @@ impl ExportManagerHandle {
             .await
             .map_err(|_| "export manager gone".to_string())?;
         rx.await.map_err(|_| "export manager gone".to_string())?
+    }
+
+    /// Give export `name` a quota on its filesystem's project quotas
+    /// (#146, `quota::setup`): the first time, every object in the export
+    /// is made part of the project, which takes a walk of the tree (run off
+    /// the async workers). Refused, with the reason, when the filesystem
+    /// or the process cannot enforce it, or when the export is inside, or
+    /// contains, another export with a quota on the same filesystem (one
+    /// directory is one project).
+    pub async fn set_quota(&self, name: &str, limits: QuotaLimits) -> Result<QuotaUsage, String> {
+        limits.validate()?;
+        let exports = self.list_exports().await;
+        let info = exports
+            .iter()
+            .find(|e| e.name == name)
+            .ok_or_else(|| format!("export '{}' not found", name))?;
+        for other in &exports {
+            if other.name == info.name || other.root.quota_project().is_none() {
+                continue;
+            }
+            let nested = other.path.starts_with(&info.path) || info.path.starts_with(&other.path);
+            if nested && same_fs(&other.root, &info.root) {
+                return Err(format!(
+                    "export '{}' ({}) and export '{}' ({}) are nested on one filesystem, and '{}' already has a quota: a directory can be in one project only",
+                    info.name,
+                    info.path.display(),
+                    other.name,
+                    other.path.display(),
+                    other.name
+                ));
+            }
+        }
+        let root = info.root.clone();
+        tokio::task::spawn_blocking(move || {
+            quota::setup(&root, &limits)?;
+            quota::usage(&root)
+                .map_err(|e| format!("reading the quota back: {e}"))?
+                .ok_or_else(|| "quota set but not readable".to_string())
+        })
+        .await
+        .map_err(|e| format!("quota setup task: {e}"))?
+    }
+
+    /// Export `name`'s quota now: `Ok(None)` when it has none, `Err` when
+    /// there is no such export or the quota cannot be read.
+    pub async fn get_quota(&self, name: &str) -> Result<Option<QuotaUsage>, String> {
+        let exports = self.list_exports().await;
+        let info = exports
+            .iter()
+            .find(|e| e.name == name)
+            .ok_or_else(|| format!("export '{}' not found", name))?;
+        let root = info.root.clone();
+        tokio::task::spawn_blocking(move || quota::usage(&root).map_err(|e| e.to_string()))
+            .await
+            .map_err(|e| format!("quota task: {e}"))?
     }
 
     /// Get the current QoS config for an export.

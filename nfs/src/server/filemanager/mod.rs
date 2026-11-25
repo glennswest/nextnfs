@@ -1037,11 +1037,13 @@ impl FileManager {
         let space = if attr_request
             .iter()
             .any(|a| matches!(a, FileAttr::SpaceAvail | FileAttr::SpaceFree | FileAttr::SpaceTotal))
+            || crate::server::quota::wants_quota(attr_request)
         {
             self.beneath.statvfs().unwrap_or_default()
         } else {
             Default::default()
         };
+        let quota = crate::server::quota::usage_for(&self.beneath, attr_request);
 
         let fh = self.get_filehandle_by_id(filehandle_id);
         let fh = match fh {
@@ -1166,6 +1168,13 @@ impl FileManager {
                 FileAttr::OwnerGroup => {
                     attrs.push(FileAttrValue::OwnerGroup(fh.attr_owner_group.clone()));
                     answer_attrs.push(FileAttr::OwnerGroup);
+                }
+                FileAttr::QuotaAvailHard | FileAttr::QuotaAvailSoft | FileAttr::QuotaUsed => {
+                    // The export's project quota (#146); left out without one.
+                    if let Some(v) = crate::server::quota::attr_value(fileattr, quota.as_ref(), space.bytes_avail) {
+                        attrs.push(v);
+                        answer_attrs.push(fileattr.clone());
+                    }
                 }
                 FileAttr::SpaceAvail => {
                     attrs.push(FileAttrValue::SpaceAvail(space.bytes_avail));
@@ -1360,7 +1369,7 @@ impl FileManager {
     }
 
     pub fn attr_supported_attrs(&self) -> Attrlist4<FileAttr> {
-        Attrlist4::<FileAttr>::new(Some(vec![
+        let mut supported = vec![
             FileAttr::SupportedAttrs,
             FileAttr::Type,
             FileAttr::FhExpireType,
@@ -1398,7 +1407,10 @@ impl FileManager {
             FileAttr::TimeAccess,
             FileAttr::TimeMetadata,
             FileAttr::TimeModify,
-        ]))
+        ];
+        // quota_* only for an export with a project quota (#146).
+        crate::server::quota::add_supported(&self.beneath, &mut supported);
+        Attrlist4::<FileAttr>::new(Some(supported))
     }
 }
 

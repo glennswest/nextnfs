@@ -12,6 +12,7 @@ pub mod nfs41;
 pub mod operation;
 pub mod beneath;
 pub mod perm;
+pub mod quota;
 pub mod request;
 pub mod response;
 pub mod state_recovery;

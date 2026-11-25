@@ -11,6 +11,7 @@ use axum::{
     Router,
 };
 use nextnfs_server::export_manager::{ExportManagerHandle, ExportStatsSnapshot, QosConfig};
+use nextnfs_server::quota::{QuotaLimits, QuotaUsage};
 use nextnfs_server::server::beneath::{self, ExportRoot};
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
@@ -160,6 +161,8 @@ struct ExportResponse {
     read_only: bool,
     export_id: u8,
     stats: ExportStatsSnapshot,
+    /// The export's project quota (#146); null when it has none.
+    quota: Option<QuotaUsage>,
 }
 
 #[derive(Deserialize)]
@@ -192,6 +195,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v1/exports", post(add_export))
         .route("/api/v1/exports/{name}", delete(remove_export))
         .route("/api/v1/qos/{name}", put(set_qos))
+        .route("/api/v1/quota/{name}", put(set_quota))
         .route_layer(middleware::from_fn_with_state(state.clone(), require_admin));
     Router::new()
         // Web UI routes
@@ -204,6 +208,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v1/stats", get(server_stats))
         .route("/api/v1/stats/{name}", get(export_stats))
         .route("/api/v1/qos/{name}", get(get_qos))
+        .route("/api/v1/quota/{name}", get(get_quota))
         .merge(writes)
         .with_state(state)
 }
@@ -243,6 +248,7 @@ async fn list_exports(State(state): State<ApiState>) -> Json<Vec<ExportResponse>
             read_only: e.read_only,
             export_id: e.export_id,
             stats: e.stats.snapshot(),
+            quota: e.quota_usage(),
         })
         .collect();
     Json(resp)
@@ -330,6 +336,7 @@ async fn server_stats(State(state): State<ApiState>) -> Json<StatsResponse> {
                 read_only: e.read_only,
                 export_id: e.export_id,
                 stats: s,
+                quota: e.quota_usage(),
             }
         })
         .collect();
@@ -400,6 +407,38 @@ async fn set_qos(
             Json(serde_json::json!({ "error": e })),
         )
             .into_response(),
+    }
+}
+
+// --- Quota handlers (#146) ---
+
+async fn get_quota(
+    State(state): State<ApiState>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    if state.export_manager.get_export_by_name(&name).await.is_none() {
+        return json_error(StatusCode::NOT_FOUND, &format!("export '{}' not found", name));
+    }
+    match state.export_manager.get_quota(&name).await {
+        Ok(quota) => (StatusCode::OK, Json(serde_json::json!({ "quota": quota }))).into_response(),
+        Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &e),
+    }
+}
+
+/// Set an export's quota: `{"hard_bytes": n, "soft_bytes": n,
+/// "project_id": n}`, each optional (absent: unchanged, 0: no limit). 400
+/// with the reason when the filesystem cannot enforce it.
+async fn set_quota(
+    State(state): State<ApiState>,
+    Path(name): Path<String>,
+    Json(limits): Json<QuotaLimits>,
+) -> impl IntoResponse {
+    if state.export_manager.get_export_by_name(&name).await.is_none() {
+        return json_error(StatusCode::NOT_FOUND, &format!("export '{}' not found", name));
+    }
+    match state.export_manager.set_quota(&name, limits).await {
+        Ok(usage) => (StatusCode::OK, Json(serde_json::json!({ "quota": usage }))).into_response(),
+        Err(e) => json_error(StatusCode::BAD_REQUEST, &e),
     }
 }
 
@@ -523,6 +562,62 @@ mod tests {
         let r = app.oneshot(del("Bearer s3cret")).await.unwrap();
         assert_eq!(r.status(), StatusCode::NO_CONTENT);
         assert!(em.list_exports().await.is_empty());
+    }
+
+    fn quota_req(name: &str, auth: Option<&str>, body: &str) -> Request<Body> {
+        let mut b = Request::builder()
+            .method("PUT")
+            .uri(format!("/api/v1/quota/{name}"))
+            .header(header::CONTENT_TYPE, "application/json");
+        if let Some(a) = auth {
+            b = b.header(header::AUTHORIZATION, a);
+        }
+        b.body(Body::from(body.to_string())).unwrap()
+    }
+
+    async fn body_json(r: Response) -> serde_json::Value {
+        let bytes = axum::body::to_bytes(r.into_body(), 1 << 20).await.unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    /// #146: setting a quota needs the token; an unknown export is 404; a
+    /// filesystem without enforced project quotas (the build VM's scratch)
+    /// is a 400 with the reason, and the export still reports no quota.
+    #[tokio::test]
+    async fn quota_routes() {
+        let dir = Scratch::new("quota");
+        let (app, em) = app(admin("t", &dir.0));
+        em.add_export("q".to_string(), dir.0.clone(), false).await.unwrap();
+        let body = r#"{"hard_bytes": 1048576}"#;
+        let r = app.clone().oneshot(quota_req("q", None, body)).await.unwrap();
+        assert_eq!(r.status(), StatusCode::UNAUTHORIZED);
+        let r = app.clone().oneshot(quota_req("nosuch", Some("Bearer t"), body)).await.unwrap();
+        assert_eq!(r.status(), StatusCode::NOT_FOUND);
+        let r = app
+            .clone()
+            .oneshot(quota_req("q", Some("Bearer t"), r#"{"hard_bytes": 10, "soft_bytes": 20}"#))
+            .await
+            .unwrap();
+        assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+        let get = |name: &str| Request::builder().uri(format!("/api/v1/quota/{name}")).body(Body::empty()).unwrap();
+        let r = app.clone().oneshot(get("nosuch")).await.unwrap();
+        assert_eq!(r.status(), StatusCode::NOT_FOUND);
+        let r = app.clone().oneshot(get("q")).await.unwrap();
+        assert_eq!(r.status(), StatusCode::OK);
+        let before = body_json(r).await;
+        let r = app.clone().oneshot(quota_req("q", Some("Bearer t"), body)).await.unwrap();
+        if before["quota"].is_null() && r.status() == StatusCode::BAD_REQUEST {
+            let err = body_json(r).await;
+            assert!(err["error"].as_str().unwrap().contains("project quota"), "{err}");
+            let r = app.clone().oneshot(get("q")).await.unwrap();
+            assert!(body_json(r).await["quota"].is_null());
+            let r = app.oneshot(Request::builder().uri("/api/v1/exports").body(Body::empty()).unwrap()).await.unwrap();
+            assert!(body_json(r).await[0]["quota"].is_null());
+        } else {
+            // A privileged run on a prjquota filesystem: it is set.
+            assert_eq!(r.status(), StatusCode::OK);
+            assert_eq!(body_json(r).await["quota"]["hard_bytes"], 1048576);
+        }
     }
 
     /// #125: a valid token alone does not let the API export a directory;
