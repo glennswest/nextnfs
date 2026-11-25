@@ -608,5 +608,12 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       requires.toml privileged, runner `/test short|medium|long` running
       libtest one test at a time with JSON lines). `NEXTNFS_REQUIRE_PRIVILEGED`
       makes the tests' no-capability / no-kernel-handle early returns fail.
-      Next: sc-build test+clippy and `test/build.sh`; `stormcentral test run
-      nextnfs short`; close #133 on a pass.
+      Built aad264e: `sc-build 'cargo test --workspace --locked && cargo
+      clippy … -D warnings'` green (732 tests, job 20261125-074752-aad264e8);
+      `sc-build test/build.sh` green (both binaries staged, static; 4
+      kernel_handle tests listed; job 20261125-074753-aad264e8).
+      2026-11-25 `stormcentral test run nextnfs short` refused: no test
+      machine runs a known release (pvetest1–3, server1/7 last installs
+      failed, C2NR0Q2 cancelled; server8 blade off at night). Proposed
+      `--after-install nextnfs>=a3d625d@any:pve`. Next: run `short`, close
+      #133 on a pass.
