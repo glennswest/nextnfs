@@ -210,8 +210,9 @@ mod tests {
         }
     }
 
-    /// #135: there are no quotas, so the quota attributes are not supported:
-    /// asked for, they are left out of the reply (RFC 7530 §5.1), not made up.
+    /// #135/#146: an export without a project quota (the test root) does
+    /// not support the quota attributes: asked for, they are left out of
+    /// the reply (RFC 7530 §5.1), not made up.
     #[tokio::test]
     #[traced_test]
     async fn test_getattr_quota_attrs_not_supported() {
