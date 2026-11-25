@@ -598,7 +598,8 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       the first attempt on 5e2072d got no VM in the hour). Privileged test
       skipped there (no NEXTNFS_PRJQUOTA_DIR). Released v0.20.0 (7edfeac,
       --locked build green, job 20261125-072058-7edfeac3); #146 closed;
-      nfsop: nextnfs-operator#39; image requested. Open: `sudo
+      nfsop: nextnfs-operator#39; golden-nextnfs-ed88c17196ab, release
+      request stormcos#1506. Open: `sudo
       tests/quota.sh` on a pve test machine (kernel enforcement).
 - [ ] 2026-11-25 — #133 last part: the privileged proof of kernel handles
       (restart, rename outside NFS, outside-export/removed → ESTALE). Per the
