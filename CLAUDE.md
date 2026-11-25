@@ -5,7 +5,7 @@ live in `../CLAUDE.md`; this file is the project context and work plan.
 
 ## Version
 
-**0.19.0** (tag `v0.19.0`). Version locations — all must match:
+**0.20.0** (tag `v0.20.0`). Version locations — all must match:
 
 - `Cargo.toml` → `[workspace.package] version` (every crate inherits it)
 - `build.sh` → `VERSION=`
@@ -589,4 +589,8 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       Build VM is unprivileged: enforcement test is gated on
       `NEXTNFS_PRJQUOTA_DIR`; `sudo tests/quota.sh` (loopback XFS prjquota)
       on a pve test machine is the privileged proof. nfsop keys to post on
-      nextnfs-operator. Next: sc-build test+clippy, minor bump 0.20.0.
+      nextnfs-operator. Built eecadb3: `sc-build 'cargo test --workspace
+      --locked && cargo clippy --workspace --all-targets --locked -- -D
+      warnings'` green (732 tests, 0 warnings, job 20261125-064156-eecadb3b;
+      the first attempt on 5e2072d got no VM in the hour). Privileged test
+      skipped there (no NEXTNFS_PRJQUOTA_DIR). Released v0.20.0.
