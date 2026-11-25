@@ -573,7 +573,7 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       tests, 0 warnings, job 7960ca2397); #150 closed;
       golden-nextnfs-fee2060924af, release request stormcos#1506.
       (#133 still waits on the owner.)
-- [ ] 2026-11-24 — #146 (per-export quotas). Owner-queue sent the design
+- [x] 2026-11-24 — #146 (per-export quotas). Owner-queue sent the design
       question back as session work (#1680), so option C from the issue
       comment: the filesystem's project quotas, set up by nextnfs.
       `quota.rs`: `setup` (Q_XGETQSTAT accounting+enforcement check → else
@@ -593,4 +593,7 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       --locked && cargo clippy --workspace --all-targets --locked -- -D
       warnings'` green (732 tests, 0 warnings, job 20261125-064156-eecadb3b;
       the first attempt on 5e2072d got no VM in the hour). Privileged test
-      skipped there (no NEXTNFS_PRJQUOTA_DIR). Released v0.20.0.
+      skipped there (no NEXTNFS_PRJQUOTA_DIR). Released v0.20.0 (7edfeac,
+      --locked build green, job 20261125-072058-7edfeac3); #146 closed;
+      nfsop: nextnfs-operator#39; image requested. Open: `sudo
+      tests/quota.sh` on a pve test machine (kernel enforcement).
