@@ -52,7 +52,10 @@ RPM with `packaging/nextnfs-run-tests`), `packaging/` (RPM/DEB/systemd),
   edit nextnfs`, not a commit. After an issue's work is pushed and sc-build
   is green: `stormcentral component build nextnfs --url
   http://stormcentral.g8.lo`. First golden: golden-nextnfs-81fcd9ea25dc
-  (0.13.9, a3d625d). There is no `test/` test container yet.
+  (0.13.9, a3d625d). Test container: `test/` (#133; stormcentral
+  docs/test-standard.md) — `test/build.sh` stages the nextnfs-server test
+  binary + `test/runner/main.rs` as `/test`, privileged pod; run with
+  `stormcentral test run nextnfs short`.
 
 ## Known gaps (tracked as issues)
 
@@ -597,3 +600,12 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       --locked build green, job 20261125-072058-7edfeac3); #146 closed;
       nfsop: nextnfs-operator#39; image requested. Open: `sudo
       tests/quota.sh` on a pve test machine (kernel enforcement).
+- [ ] 2026-11-25 — #133 last part: the privileged proof of kernel handles
+      (restart, rename outside NFS, outside-export/removed → ESTALE). Per the
+      owner it is a pve test-machine test per the test standard, so nextnfs
+      gets its test image: `test/` (Containerfile FROM scratch, build.sh,
+      requires.toml privileged, runner `/test short|medium|long` running
+      libtest one test at a time with JSON lines). `NEXTNFS_REQUIRE_PRIVILEGED`
+      makes the tests' no-capability / no-kernel-handle early returns fail.
+      Next: sc-build test+clippy and `test/build.sh`; `stormcentral test run
+      nextnfs short`; close #133 on a pass.

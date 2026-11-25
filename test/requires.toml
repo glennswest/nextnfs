@@ -1,0 +1,22 @@
+# What nextnfs's suites need from stormcentral's runner beyond the run's
+# namespace (docs/test-standard.md).
+#
+# Every suite runs tests of the nextnfs-server library as root in the pod,
+# on files under /results (the pod's emptyDir, on the node's disk). The
+# kernel file handle tests (#133) resolve handles with open_by_handle_at(2),
+# which needs CAP_DAC_READ_SEARCH: hence privileged. /test exits 2 (could
+# not run) without it, and the tests fail rather than skip
+# (NEXTNFS_REQUIRE_PRIVILEGED), so no run passes without that path.
+# No host path, host network or cluster read.
+
+[project]
+required = ["short"]
+
+[short]
+privileged = true
+
+[medium]
+privileged = true
+
+[long]
+privileged = true

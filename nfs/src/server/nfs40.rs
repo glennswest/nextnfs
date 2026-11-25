@@ -4660,6 +4660,7 @@ mod tests {
         let dir = fm.get_filehandle_for_path("/d".to_string()).await.unwrap();
         if !has_handles {
             eprintln!("filesystem of {:?} has no kernel handles: inode ids", export.path());
+            crate::server::beneath::tests::require_privileged("the test filesystem has no kernel handles");
             assert_eq!(file.id[0], FH_INODE);
             return;
         }
@@ -4688,6 +4689,7 @@ mod tests {
         let (after, reply) = server.compound(msg, after).await;
         if !persistent {
             eprintln!("open_by_handle_at not permitted here: STALE after a restart");
+            crate::server::beneath::tests::require_privileged("open_by_handle_at is not permitted (no CAP_DAC_READ_SEARCH)");
             assert_eq!(compound_result(reply).0, NfsStat4::Nfs4errStale);
             assert_eq!(std::fs::read(export.path().join("d/f")).unwrap(), b"data");
             return;
@@ -4725,6 +4727,7 @@ mod tests {
         let old = fm.get_filehandle_for_path("/f".to_string()).await.unwrap();
         if old.id[0] != FH_KERNEL {
             eprintln!("no kernel handles on {:?}", export.path());
+            crate::server::beneath::tests::require_privileged("the test filesystem has no kernel handles");
             return;
         }
         std::fs::remove_file(&f).unwrap();

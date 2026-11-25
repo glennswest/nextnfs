@@ -1,0 +1,16 @@
+# nextnfs's test image, per stormcentral docs/test-standard.md (#133). One
+# image for all three suites: the Job runs `/test short|medium|long`.
+#
+# test/build.sh builds both binaries on the build box (static, musl) and
+# stages them; this packages them. /test runs tests of
+# /nextnfs-server-tests (the nextnfs-server library's own test binary at the
+# commit under test) one at a time, as root in a privileged pod: the kernel
+# file handle tests need CAP_DAC_READ_SEARCH, which the build VMs lack.
+# Scratch files go under /results (the image has no /tmp).
+#
+# The build context is the repo root (the standard's).
+FROM scratch
+LABEL storm.io/test-of="nextnfs"
+COPY test/.stage/test /test
+COPY test/.stage/nextnfs-server-tests /nextnfs-server-tests
+ENTRYPOINT ["/test"]

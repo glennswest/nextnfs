@@ -3,6 +3,9 @@
 ## [Unreleased]
 <!-- New unreleased changes go here -->
 
+### Added
+- Test image per stormcentral's test standard (#133): `test/Containerfile` (FROM scratch), `test/build.sh` (stages the nextnfs-server library's test binary and the runner, static musl), `test/requires.toml` (privileged pods), `test/runner/main.rs` (`/test short|medium|long`: JSON lines per test, exit 0/1/2). `short` runs the kernel file handle tests as root on a test machine (handles after a restart, a rename outside NFS, recreated files, outside-export and removed handles); `medium` adds the export confinement and quota tests; `long` repeats `medium` in waves. With `NEXTNFS_REQUIRE_PRIVILEGED` set (the image sets it) those tests fail instead of returning early when `open_by_handle_at` is not permitted or the filesystem has no kernel handles
+
 ## [v0.20.0] — 2026-11-25
 
 ### Added

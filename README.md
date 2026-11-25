@@ -166,6 +166,8 @@ From then on every allocation in the tree is charged to the project when it happ
 
 What the host needs: the export on XFS mounted with `prjquota`, or ext4 made with `-O project,quota` and mounted with `prjquota`; Linux >= 5.14; and nextnfs running as root (`CAP_SYS_ADMIN` in the initial user namespace). The RPM/DEB unit runs as root; a container needs `--cap-add SYS_ADMIN`. Two exports nested on one filesystem cannot both have quotas, because a directory is in one project only. Removing the `quota_*` keys leaves the filesystem's project and limits as they are; `quota_hard_bytes = 0` (and `quota_soft_bytes = 0`) removes the limits.
 
+The kernel file handle tests (#133) need `CAP_DAC_READ_SEARCH`, which the unprivileged build VMs lack; the test image in `test/` (stormcentral's test standard: `test/build.sh`, `test/Containerfile`, privileged per `test/requires.toml`) runs them as root on a test machine, `stormcentral test run nextnfs short`.
+
 `tests/quota.sh` (root) makes a loopback XFS with `prjquota` and runs the quota tests against it: enforcement (`EDQUOT` → `NFS4ERR_DQUOT`), pre-existing files charged, release on remove, restart, probe.
 
 ## CLI

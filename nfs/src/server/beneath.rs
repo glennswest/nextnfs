@@ -779,7 +779,16 @@ impl FileSystem for BeneathFS {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
+
+    /// Set by the privileged test image (test/, #133): the early returns
+    /// for "no kernel handles" / "open_by_handle_at not permitted" become
+    /// failures, so a run that lacks either cannot pass as the proof.
+    pub(crate) fn require_privileged(why: &str) {
+        if std::env::var_os("NEXTNFS_REQUIRE_PRIVILEGED").is_some() {
+            panic!("NEXTNFS_REQUIRE_PRIVILEGED is set, but {why}");
+        }
+    }
     use super::*;
     use std::io::{Read, Write};
     use std::os::unix::fs::{FileExt, MetadataExt, PermissionsExt};
@@ -815,6 +824,7 @@ mod tests {
         std::os::unix::fs::symlink("a", export.path().join("l")).unwrap();
         let Some(a) = root.kernel_handle("/a").unwrap() else {
             eprintln!("no kernel handles on {:?}", export.path());
+            require_privileged("the test filesystem has no kernel handles");
             return;
         };
         assert!(a.bytes.len() <= KERNEL_HANDLE_MAX);
@@ -849,12 +859,14 @@ mod tests {
             root.kernel_handle("/gone").unwrap(),
         ) else {
             eprintln!("no kernel handles on {:?}", base.path());
+            require_privileged("the test filesystem has no kernel handles");
             return;
         };
         std::fs::remove_file(export.join("gone")).unwrap();
         if !root.persistent_handles() {
             let e = root.resolve_kernel_handle(&inside).unwrap_err();
             eprintln!("open_by_handle_at: {e}");
+            require_privileged("open_by_handle_at is not permitted (no CAP_DAC_READ_SEARCH)");
             assert!(root.resolve_kernel_handle(&secret).is_err());
             return;
         }
