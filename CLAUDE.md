@@ -405,7 +405,7 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       clippy --workspace --all-targets --locked -- -D warnings'` green
       (684 tests, 0 warnings, job 63e70ec348); #132 closed; golden-nextnfs-52265f817560,
       release request stormcos#1506.
-- [ ] 2026-11-21 — #133 (P1, 4 major review findings on filemanager/mod.rs
+- [x] 2026-11-21 — #133 (P1, 4 major review findings on filemanager/mod.rs
       at 8a66330). 60ad262caa93: share reservations enforced in one
       file-manager step (`open_reservation`: SHARE_DENIED across
       open-owners, same owner merges into its stateid, seqid+1);
@@ -601,7 +601,7 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       nfsop: nextnfs-operator#39; golden-nextnfs-ed88c17196ab, release
       request stormcos#1506. Open: `sudo
       tests/quota.sh` on a pve test machine (kernel enforcement).
-- [ ] 2026-11-25 — #133 last part: the privileged proof of kernel handles
+- [x] 2026-11-25 — #133 last part: the privileged proof of kernel handles
       (restart, rename outside NFS, outside-export/removed → ESTALE). Per the
       owner it is a pve test-machine test per the test standard, so nextnfs
       gets its test image: `test/` (Containerfile FROM scratch, build.sh,
@@ -627,3 +627,8 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       suite. Re-queued as run f7bd663ae4 (`short`, 1e1ee81, pvetest3; the
       others are still skipped as above); item back in line `--after-run
       f7bd663ae4`. No code change.
+      Done 2026-11-26: run f7bd663ae4 (`short`, 1e1ee81 — same code as
+      aad264e, pvetest3, privileged pod, NEXTNFS_REQUIRE_PRIVILEGED=1)
+      passed 4/4: kernel handle names the object, resolve stays inside the
+      export, recreated file → STALE, handle resolves after restart. #133
+      closed.
