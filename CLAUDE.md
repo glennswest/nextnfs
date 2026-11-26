@@ -617,3 +617,8 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       failed, C2NR0Q2 cancelled; server8 blade off at night). Proposed
       `--after-install nextnfs>=a3d625d@any:pve`. Next: run `short`, close
       #133 on a pass.
+      2026-11-26: still refused — server1/7 failed installs, C2NR0Q2
+      cancelled, server8 on an old release, pvetest1/2 sbregistry down,
+      pvetest3 apiserver down. Run b4accd5062 (`short`, 6d655fa) is queued
+      on pvetest3; item 29b98eff5032 is back in line `--after-run
+      b4accd5062`. Next: read that run, close #133 on a pass.
