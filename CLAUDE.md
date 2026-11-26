@@ -622,3 +622,8 @@ check) and chowns new objects; `squash` defaults to `root_squash`.
       pvetest3 apiserver down. Run b4accd5062 (`short`, 6d655fa) is queued
       on pvetest3; item 29b98eff5032 is back in line `--after-run
       b4accd5062`. Next: read that run, close #133 on a pass.
+      2026-11-26: b4accd5062 ended `error` (infrastructure): pvetest3's
+      stormrdp API gateway 503 since 06:01Z, the run never started its
+      suite. Re-queued as run f7bd663ae4 (`short`, 1e1ee81, pvetest3; the
+      others are still skipped as above); item back in line `--after-run
+      f7bd663ae4`. No code change.
